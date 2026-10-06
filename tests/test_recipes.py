@@ -6,7 +6,7 @@ import endor
 from endor import EndorClient
 from endor.recipes import DistillConfig, SupervisedConfig, distill, supervised
 
-from .conftest import DEPT, rows, unique
+from .conftest import DEPT, rows, unique, wait_closed
 from .fake_api import FakeEndor
 
 
@@ -21,7 +21,7 @@ def test_supervised_train(client: EndorClient, fake: FakeEndor) -> None:
     evals = project.evaluations(run_id=r.run_id)
     assert len(evals) == len(r.history) + 1  # plus the base baseline
     run = project.runs.get(r.run_id)
-    assert run.info_.status == "closed" and run.info_.step == 9
+    assert wait_closed(run) == "closed" and run.info().step == 9
     assert run.info_.config["batch_size"] == 8 and "replay_rows" not in run.info_.config
     lrs = [r.body["adam_params"]["learning_rate"] for r in fake.requests if r.path.endswith("/optim_step")]
     assert len(lrs) == 9 and lrs[0] < lrs[1] and lrs[-1] < lrs[1]
@@ -33,6 +33,19 @@ def test_supervised_with_eval_rows_and_no_base(client: EndorClient) -> None:
     r = supervised.train(cfg, rows(8), eval_rows=rows(2), client=client)
     assert r.base_metrics is None and len(r.history) == 1 and r.history[0]["step"] == 8
     assert r.model.startswith(f"{cfg.project}/sft-")
+
+
+def test_supervised_closes_the_run_on_error(
+    client: EndorClient, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*a: object, **k: object) -> None:
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(endor.Run, "optim_step", broken)
+    cfg = SupervisedConfig(project=unique("sl"), batch_size=4, eval_base=False)
+    with pytest.raises(RuntimeError, match="network down"):
+        supervised.train(cfg, rows(8), eval_rows=rows(1), client=client)
+    assert [r["status"] for r in fake.runs.values()] == ["closed"]
 
 
 def test_supervised_needs_labels(client: EndorClient) -> None:

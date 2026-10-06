@@ -51,6 +51,7 @@ __all__ = [
     "Datum",
     "DecisionRow",
     "LoraConfig",
+    "LoraInfo",
     "AdamParams",
     "ForwardOutput",
     "OptimStepOutput",
@@ -297,13 +298,18 @@ class BaseModelInfo(BaseModel):
     id: str
     description: str | None = None
     release_date: str | None = None
-    max_options: int
+    max_options: int | None = None
     """The most options a Choice (or levels a Score) may have on this base."""
     trainable: bool = True
     default_rank: int = 16
     lora_targets: list[str] = Field(default_factory=list)
-    price_per_mtok_train: float | None = None
+    contract: str | None = None
+    hf_repo: str | None = None
+    trainer_gpu: str | None = None
     price_per_mtok_decide: float | None = None
+    """USD per 1M decision input tokens on this base (None while unpriced)."""
+    price_per_gpu_hour: float | None = None
+    """USD per training GPU-hour, from when a run's GPU is requested until it is released (None while unpriced)."""
 
 
 class ModelMetadata(BaseModel):
@@ -317,10 +323,11 @@ class ModelMetadata(BaseModel):
     release_date: str | None = None
     endor: dict[str, Any] = Field(default_factory=dict)
     """Endor's metadata: ``kind`` (``base`` or ``model``), and for saved models ``project``, ``base_model``,
-    ``training_run_id`` and ``step``."""
+    ``training_run_id``, ``step`` and ``parent_model``."""
 
     @property
     def kind(self) -> str:
+        """``"base"`` or ``"model"``."""
         return str(self.endor.get("kind") or ("model" if "/" in self.name else "base"))
 
 
@@ -427,6 +434,14 @@ class AdamParams(_Strict):
 
 
 class _View(BaseModel):
+    """Read-only views of API responses: unknown fields are ignored, so newer servers don't break older SDKs."""
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class LoraInfo(LoraConfig):
+    """A run's adapter settings as the API reports them (unknown fields ignored)."""
+
     model_config = ConfigDict(extra="ignore")
 
 
@@ -440,10 +455,12 @@ class ForwardOutput(_View):
 
     @property
     def probabilities(self) -> list[dict[str, float]]:
+        """Per datum, in input order: every option's probability."""
         return [dict(o["probabilities"]) for o in self.outputs]
 
     @property
     def losses(self) -> list[float]:
+        """Per datum, in input order: its loss."""
         return [float(o["loss"]) for o in self.outputs]
 
     @property
@@ -453,10 +470,13 @@ class ForwardOutput(_View):
 
     @property
     def accuracy(self) -> float:
+        """The share of datums whose most likely option is the target's."""
         return self.metrics.get("accuracy", float("nan"))
 
 
 class OptimStepOutput(_View):
+    """The result of ``optim_step``: the new step, the gradient norm before clipping and the learning rate used."""
+
     step: int
     grad_norm: float
     learning_rate: float
@@ -476,9 +496,11 @@ class RunInfo(_View):
     project: str
     name: str | None = None
     base_model: str
-    lora: LoraConfig = Field(default_factory=LoraConfig)
+    contract: str | None = None
+    lora: LoraInfo = Field(default_factory=LoraInfo)
     status: str
-    """``provisioning``, ``ready``, ``idle``, ``closed`` or ``failed``."""
+    """``provisioning``, ``ready``, ``idle`` (GPU released after 15 idle minutes; the next call restarts it),
+    ``closing`` (closed, finishing accepted calls), ``closed`` or ``failed``. Treat unknown values as active."""
     ready_future_id: str | None = None
     step: int = 0
     next_seq_id: int = 0
@@ -488,6 +510,7 @@ class RunInfo(_View):
     code_hash: str | None = None
     user_metadata: dict[str, Any] = Field(default_factory=dict)
     failure: dict[str, Any] | None = None
+    """``{"code", "message"}`` once the run failed (e.g. ``trainer_lost``)."""
     created_at: datetime
 
 
@@ -498,6 +521,9 @@ class ModelInfo(_View):
     name: str
     training_run_id: str | None = None
     base_model: str
+    contract: str | None = None
+    parent_model: str | None = None
+    """The model the training run started from (``from_model``), if any."""
     step: int = 0
     has_optimizer: bool = False
     size_bytes: int | None = None
@@ -545,20 +571,30 @@ class ArchiveInfo(_View):
 
 
 class UsageRow(_View):
+    """One hour of usage for one kind, project, base model, model and run."""
+
     hour: datetime
     kind: str
-    """``train``, ``decide`` or ``storage``."""
+    """``decide`` (billed per 1M input tokens per base model) or ``train`` (billed per GPU-hour)."""
     project: str | None = None
     base_model: str | None = None
+    model: str | None = None
+    """Decisions only: the project model that answered (None for a base model)."""
     training_run_id: str | None = None
-    tokens: int = 0
-    cost_usd: float = 0.0
+    """Training only."""
+    input_tokens: int | None = None
+    """Decisions only."""
+    gpu_seconds: float | None = None
+    """Training only: seconds of the run's reserved GPU, from request to release."""
+    cost_usd: float | None = None
 
 
 class WhoAmI(_View):
-    user_id: str
-    key_id: str
-    email: str | None = None
+    """The org and credential behind a request. ``user_id`` is None for an org API key."""
+
+    org_id: str | None = None
+    user_id: str | None = None
+    key_id: str | None = None
     key_prefix: str | None = None
 
 

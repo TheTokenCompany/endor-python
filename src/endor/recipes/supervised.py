@@ -11,7 +11,7 @@ What it does:
    ``forward_backward`` and ``optim_step`` submitted together each step.
 4. Every ``eval_every`` steps and at the end, scores the held-out datums with the run's current adapter and records
    accuracy, log loss, Brier, ECE and selective accuracy on the run's page.
-5. Saves the final adapter as ``"<project>/<model_name>"`` and closes the run.
+5. Saves the final adapter as ``"<project>/<model_name>"`` and closes the run (also when anything fails).
 """
 
 from __future__ import annotations
@@ -148,43 +148,42 @@ def train(
         try:
             project = client.projects.get_or_create(cfg.project)
             base_metrics = evaluate_model(client, cfg.base_model, eval_rows) if cfg.eval_base and eval_datums else None
-            run = project.runs.create(
+            replay = _replay_datums(client, cfg)
+            with project.runs.create(
                 cfg.base_model,
                 rank=cfg.rank,
                 seed=cfg.seed,
                 name=cfg.name,
                 tags=cfg.tags,
                 config={k: v for k, v in asdict(cfg).items() if k != "replay_rows"},
-            )
-            if base_metrics is not None:
-                run.log_eval(cfg.base_model, base_metrics, step=0, name="heldout")
-            replay = _replay_datums(client, cfg)
-            total = math.ceil(len(train_datums) / cfg.batch_size) * cfg.epochs
-            result = SupervisedResult(run.id, "", base_metrics)
+            ) as run:  # closed on success and on any error, so its GPU is released
+                if base_metrics is not None:
+                    run.log_eval(cfg.base_model, base_metrics, step=0, name="heldout")
+                total = math.ceil(len(train_datums) / cfg.batch_size) * cfg.epochs
+                result = SupervisedResult(run.id, "", base_metrics)
 
-            def held_out(step: int) -> None:
-                if eval_datums:
-                    metrics = evaluate_run(run, eval_datums)
-                    run.log_eval(f"{run.id}@{step}", metrics, step=step, name="heldout")
-                    result.history.append({"step": step, "metrics": metrics})
+                def held_out(step: int) -> None:
+                    if eval_datums:
+                        metrics = evaluate_run(run, eval_datums)
+                        run.log_eval(f"{run.id}@{step}", metrics, step=step, name="heldout")
+                        result.history.append({"step": step, "metrics": metrics})
 
-            step = 0
-            for epoch in range(cfg.epochs):
-                for batch in D.batches(train_datums, cfg.batch_size, seed=cfg.seed + epoch):
-                    if replay:
-                        k = cfg.replay_per_batch
-                        batch = batch + [replay[(step * k + i) % len(replay)] for i in range(k)]
-                    fb = run.forward_backward(batch, cfg.loss_fn)
-                    opt = run.optim_step(learning_rate=lr_at(cfg, step, total))
-                    fb.result()
-                    opt.result()
-                    step += 1
-                    if cfg.eval_every and step % cfg.eval_every == 0 and step < total:
-                        held_out(step)
-            held_out(step)
-            name = cfg.model_name or f"{cfg.name or 'sft'}-{datetime.now():%Y%m%d-%H%M%S}"
-            result.model = run.save_checkpoint(name).result()
-            run.close()
+                step = 0
+                for epoch in range(cfg.epochs):
+                    for batch in D.batches(train_datums, cfg.batch_size, seed=cfg.seed + epoch):
+                        if replay:
+                            k = cfg.replay_per_batch
+                            batch = batch + [replay[(step * k + i) % len(replay)] for i in range(k)]
+                        fb = run.forward_backward(batch, cfg.loss_fn)
+                        opt = run.optim_step(learning_rate=lr_at(cfg, step, total))
+                        fb.result()
+                        opt.result()
+                        step += 1
+                        if cfg.eval_every and step % cfg.eval_every == 0 and step < total:
+                            held_out(step)
+                held_out(step)
+                name = cfg.model_name or f"{cfg.name or 'sft'}-{datetime.now():%Y%m%d-%H%M%S}"
+                result.model = run.save_checkpoint(name).result()
             return result
         finally:
             if own:

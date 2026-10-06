@@ -117,6 +117,7 @@ class APIFuture(Generic[T]):
         return self._finish()
 
     async def result_async(self, timeout: float | None = None) -> T:
+        """``result()`` for async code."""
         leaves = self.leaves()
         if leaves:
             assert self._t is not None
@@ -133,6 +134,7 @@ class APIFuture(Generic[T]):
             leaf._t.request("POST", f"/v1/futures/{leaf.id}/cancel", method_name="future.cancel")
 
     async def cancel_async(self) -> None:
+        """``cancel()`` for async code."""
         for leaf in self.leaves():
             assert leaf._t is not None
             await leaf._t.arequest("POST", f"/v1/futures/{leaf.id}/cancel", method_name="future.cancel")
@@ -141,11 +143,12 @@ class APIFuture(Generic[T]):
 # ---------------------------------------------------------------- polling
 
 
-def _wait_s(t: Transport, deadline: float | None) -> float:
-    cap = min(FUTURE_POLL_WAIT_S, max(1.0, t.timeout - 5))
+def _wait_s(deadline: float | None) -> float:
+    """Server-side wait for the next poll: 25 s, or less when the caller's ``timeout`` runs out sooner. The HTTP
+    request timeout is the client's timeout plus this wait."""
     if deadline is None:
-        return cap
-    return max(0.0, min(cap, deadline - time.monotonic()))
+        return FUTURE_POLL_WAIT_S
+    return max(0.0, min(FUTURE_POLL_WAIT_S, deadline - time.monotonic()))
 
 
 def _timeout_error(pending: list[APIFuture[Any]]) -> TimeoutError:
@@ -158,7 +161,7 @@ def _wait_all(t: Transport, leaves: list[APIFuture[Any]], timeout: float | None,
     deadline = None if timeout is None else time.monotonic() + timeout
     pending = list(leaves)
     while pending:
-        wait = _wait_s(t, deadline)
+        wait = _wait_s(deadline)
         if len(pending) == 1:
             f = pending[0]
             state = t.request(
@@ -191,7 +194,7 @@ async def _wait_all_async(t: Transport, leaves: list[APIFuture[Any]], timeout: f
     deadline = None if timeout is None else time.monotonic() + timeout
     pending = list(leaves)
     while pending:
-        wait = _wait_s(t, deadline)
+        wait = _wait_s(deadline)
         if len(pending) == 1:
             f = pending[0]
             state = await t.arequest(
@@ -241,6 +244,7 @@ def gather(*futures: APIFuture[Any], timeout: float | None = None) -> list[Any]:
 
 
 async def gather_async(*futures: APIFuture[Any], timeout: float | None = None) -> list[Any]:
+    """``gather()`` for async code."""
     leaves = [leaf for f in futures for leaf in f.leaves()]
     if leaves:
         t = leaves[0]._t

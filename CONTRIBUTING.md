@@ -15,11 +15,15 @@ pytest
 ```
 
 The test suite runs against an in-memory fake of the API (`tests/fake_api.py`), so it needs no credentials and
-finishes in a couple of seconds. To run the integration tests against a real deployment:
+finishes in a couple of seconds. To run the same suite against a real API (tests that need the fake itself are
+skipped):
 
 ```bash
-ENDOR_TEST_BASE_URL=https://... ENDOR_TEST_API_KEY=edk_... pytest tests/test_integration.py
+ENDOR_TEST_BASE_URL=http://localhost:8000 ENDOR_TEST_API_KEY=edk_... pytest
 ```
+
+Every test must close every run it opens (`with project.runs.create(...) as run:`): the API allows 4 open runs per
+org, and the suite fails a test that leaves one open.
 
 ## Releasing
 

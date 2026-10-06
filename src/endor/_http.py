@@ -24,6 +24,7 @@ from ._constants import (
     HEADER_IDEMPOTENCY_KEY,
     HEADER_REQUEST_ID,
     HEADER_RETRY_COUNT,
+    NON_RETRYABLE_CODES,
 )
 from ._headers import context_headers, identity_headers
 from ._log import logger, redact_headers
@@ -210,7 +211,11 @@ class Transport:
                 if r.is_success:
                     return self._result(r, endpoint)
                 delay = policy.delay(attempt + 1, r.headers)
-                if not (policy.retryable_status(r.status_code) and policy.allows(attempt + 1, started, delay)):
+                if not (
+                    policy.retryable_status(r.status_code)
+                    and not _final_error(r)
+                    and policy.allows(attempt + 1, started, delay)
+                ):
                     return self._result(r, endpoint)
                 time.sleep(delay)
             attempt += 1
@@ -269,11 +274,24 @@ class Transport:
                 if r.is_success:
                     return self._result(r, endpoint)
                 delay = policy.delay(attempt + 1, r.headers)
-                if not (policy.retryable_status(r.status_code) and policy.allows(attempt + 1, started, delay)):
+                if not (
+                    policy.retryable_status(r.status_code)
+                    and not _final_error(r)
+                    and policy.allows(attempt + 1, started, delay)
+                ):
                     return self._result(r, endpoint)
                 await asyncio.sleep(delay)
             attempt += 1
             logger.info("%s %s retry %d", method, path, attempt)
+
+
+def _final_error(r: httpx.Response) -> bool:
+    """Whether the error body carries a code that retrying can't fix (``quota_exceeded``, ``insufficient_balance``)."""
+    try:
+        err = r.json().get("error")
+    except (ValueError, AttributeError):
+        return False
+    return isinstance(err, dict) and err.get("code") in NON_RETRYABLE_CODES
 
 
 def _clean(params: Mapping[str, Any] | None) -> dict[str, Any] | None:

@@ -179,19 +179,20 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
         rows = client.usage(datetime.fromisoformat(a.start), datetime.fromisoformat(a.end), a.project)
         if a.csv:
             w = csv.writer(sys.stdout)
-            w.writerow(["hour", "kind", "project", "base_model", "run_id", "tokens", "cost_usd"])
+            cols = [
+                "hour",
+                "kind",
+                "project",
+                "base_model",
+                "model",
+                "training_run_id",
+                "input_tokens",
+                "gpu_seconds",
+                "cost_usd",
+            ]
+            w.writerow(cols)
             for u in rows:
-                w.writerow(
-                    [
-                        u.hour.isoformat(),
-                        u.kind,
-                        u.project,
-                        u.base_model,
-                        u.training_run_id,
-                        u.tokens,
-                        u.cost_usd,
-                    ]
-                )
+                w.writerow(["" if v is None else v for v in (u.model_dump(mode="json")[c] for c in cols)])
         else:
             _out(rows, f)
 

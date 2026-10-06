@@ -37,7 +37,7 @@ def base_model(live: endor.EndorClient) -> str:
 
 
 def test_whoami_and_catalog(live: endor.EndorClient, base_model: str) -> None:
-    assert live.whoami().user_id
+    assert live.whoami().org_id
     assert base_model in {m.name for m in live.models.list().models}
 
 
