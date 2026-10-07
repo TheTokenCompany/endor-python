@@ -5,6 +5,24 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-07
+
+Breaking: projects have a kind, and keep warm and auto-promote are gone, as in the API.
+
+- Project kinds, set at creation and never changed: `projects.create("tickets", base_model=..., kind="custom")`
+  (the default; you train with the SDK) or `kind="managed"` (Endor trains new versions from the project's
+  decisions; its decisions are billed at the continuous-learning price, 50% more). `base_model` is now required by
+  `create` and `get_or_create`, and can't change. `get_or_create` raises `ValueError` when the existing project has
+  another kind or base model.
+- `ProjectInfo` gains `kind` and `paused` (managed only); `project.update(description=..., paused=...)`. Removed:
+  `continuous_learning` (and `ContinuousLearning`), `auto_promote`, `base_keep_warm`, and `update(base_model=...)`.
+- `WrongProjectKindError` (409 `wrong_project_kind`, a `ConflictError`): a managed project refuses datasets, runs,
+  evaluations and `set_live`; a custom project refuses `paused`.
+- `runs.create()` may leave out `base_model`: runs train on the project's base model (another base is a 422).
+- Removed `project.models.set_keep_warm`, `ModelInfo.keep_warm`, `ModelInfo.source` and `RunInfo.source`.
+- Model names may start with a digit; only `base` is reserved.
+- CLI: `endor projects create NAME --base-model BASE [--kind custom|managed]`.
+
 ## [0.1.1] - 2026-10-07
 
 - `project.set_live(model)`: make a saved model (or `"base"`) the live model, what `model="<project>"` answers with,

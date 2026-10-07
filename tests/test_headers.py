@@ -106,7 +106,7 @@ def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor, 
 
 def test_idempotency_key_on_creates_only(client: EndorClient, fake: FakeEndor) -> None:
     name = unique("idem")
-    project = client.projects.create(name)
+    project = client.projects.create(name, base_model="jev-9b")
     project.datasets.upload("d", rows(1))
     with project.runs.create("jev-9b") as run:
         run.forward(endor.data.rows_to_datums(rows(1)))
@@ -130,7 +130,7 @@ def test_idempotency_key_on_creates_only(client: EndorClient, fake: FakeEndor) -
 def test_idempotency_key_and_request_id_survive_retries(client: EndorClient, fake: FakeEndor) -> None:
     fake.fail_next.append(httpx.ConnectError("reset"))
     fake.fail_next.append(HTTPError(503, "unavailable", "try again"))
-    client.projects.create(unique("retried"))
+    client.projects.create(unique("retried"), base_model="jev-9b")
     reqs = [r for r in fake.requests if r.path == "/v1/projects"]
     assert len(reqs) == 3
     assert len({r.headers["idempotency-key"] for r in reqs}) == 1
@@ -141,7 +141,7 @@ def test_idempotency_key_and_request_id_survive_retries(client: EndorClient, fak
 def test_idempotent_replay_returns_the_same_resource(client: EndorClient, fake: FakeEndor) -> None:
     fake.fail_next.append(httpx.ReadTimeout("slow"))  # the server may have created it before we timed out
     name = unique("once")
-    project = client.projects.create(name)
+    project = client.projects.create(name, base_model="jev-9b")
     assert project.name == name and len(fake.projects) == 1
 
 

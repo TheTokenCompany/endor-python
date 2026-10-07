@@ -114,8 +114,8 @@ def _assert_no_open_runs(c: endor.EndorClient, since: datetime) -> None:
 
 @pytest.fixture
 def project(client: endor.EndorClient) -> endor.Project:
-    """A new project without a base model (its first run sets one)."""
-    return client.projects.create(unique("tickets"))
+    """A new custom project on jev-9b."""
+    return client.projects.create(unique("tickets"), base_model="jev-9b")
 
 
 DECIDE_BASE = "jev-9b"

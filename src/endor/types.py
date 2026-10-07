@@ -56,7 +56,6 @@ __all__ = [
     "AdamParams",
     "ForwardOutput",
     "OptimStepOutput",
-    "ContinuousLearning",
     "ProjectInfo",
     "RunInfo",
     "ModelInfo",
@@ -319,7 +318,7 @@ class BaseModelInfo(BaseModel):
     price_per_mtok_decide: float | None = None
     """USD per 1M decision input tokens on this base (None while unpriced)."""
     price_per_mtok_decide_continuous_learning: float | None = None
-    """The same, for a project with continuous learning on."""
+    """The same in a managed project (Endor trains it from its decisions): always this price, paused or not."""
     price_per_gpu_hour: float | None = None
     """USD per training GPU-hour, from when a run's GPU is requested until it is released (None while unpriced)."""
 
@@ -335,7 +334,7 @@ class ModelMetadata(BaseModel):
     release_date: str | None = None
     endor: dict[str, Any] = Field(default_factory=dict)
     """Endor's metadata: ``kind``, ``project`` and ``base_model``; for ``live`` also ``model`` (what ``<project>``
-    calls now), for ``base`` ``contract``, and for saved models ``source``, ``training_run_id``, ``step`` and
+    calls now), for ``base`` ``contract``, and for saved models ``training_run_id``, ``step`` and
     ``parent_model``."""
 
     @property
@@ -499,38 +498,22 @@ class OptimStepOutput(_View):
     learning_rate: float
 
 
-class ContinuousLearning(_View):
-    """A project's continuous-learning setting: Endor keeps fine-tuning a model on the project's decisions.
-
-    Pass it (or a dict with the same keys) to ``projects.create`` or ``project.update``; ``model`` is read-only.
-    """
-
-    enabled: bool = False
-    base_model: str | None = None
-    """The base model continuous learning trains on. Changing it starts continuous learning again from scratch."""
-    model: str | None = None
-    """The current continuously learned model (``"<project>/<name>"``), once there is one."""
-
-    def to_wire(self) -> dict[str, Any]:
-        """The fields a request sends: ``enabled`` and ``base_model`` when set."""
-        return {k: v for k, v in {"enabled": self.enabled, "base_model": self.base_model}.items() if v is not None}
-
-
 class ProjectInfo(_View):
     name: str
     description: str | None = None
+    kind: str = "custom"
+    """``custom`` (you train models with the SDK) or ``managed`` (Endor trains new versions from the project's
+    decisions). Set at creation; it never changes."""
     base_model: str | None = None
-    """The project's base model (``"<project>/base"``); None until set or the first run."""
+    """The project's base model (``"<project>/base"``). Set at creation; it never changes."""
     live_model: str | None = None
-    """What ``"<project>"`` serves now: ``"<project>/base"`` or ``"<project>/<name>"``; None without a base model."""
-    auto_promote: bool = True
-    """Each new continuous-learning model becomes the live model. Promoting a model by hand turns it off."""
-    base_keep_warm: bool = False
-    """The base model's keep warm; it takes one of the project's keep-warm slots."""
+    """What ``"<project>"`` serves now: ``"<project>/base"`` or ``"<project>/<name>"``. A custom project serves the
+    model made live with ``set_live`` (the base until then); a managed project its newest version."""
+    paused: bool | None = None
+    """Managed projects: learning is paused (the project keeps serving its newest version). None for custom."""
     n_datasets: int = 0
     n_runs: int = 0
     n_models: int = 0
-    continuous_learning: ContinuousLearning | None = None
     created_at: datetime
 
 
@@ -538,8 +521,6 @@ class RunInfo(_View):
     id: str
     project: str
     name: str | None = None
-    source: str = "sdk"
-    """Who trains it: ``sdk`` (you) or ``continuous`` (Endor's continuous learning)."""
     base_model: str
     contract: str | None = None
     lora: LoraInfo = Field(default_factory=LoraInfo)
@@ -564,10 +545,8 @@ class ModelInfo(_View):
     """``"<project>/<name>"``: pass it as ``model`` to ``system_one``."""
     project: str
     name: str
-    """``base`` for the project's base model (listed first)."""
-    source: str = "sdk"
-    """``base`` (the project's base model, no adapter), ``sdk`` (saved by your run) or ``continuous`` (saved by
-    continuous learning, named ``YYYY-MM-DD-N``)."""
+    """``base`` for the project's base model (listed first). A managed project's versions are named
+    ``YYYY-MM-DD-N``."""
     live: bool = False
     """Whether ``"<project>"`` serves this model."""
     training_run_id: str | None = None
@@ -577,8 +556,6 @@ class ModelInfo(_View):
     """The model the training run started from (``from_model``), if any."""
     step: int = 0
     has_optimizer: bool = False
-    keep_warm: bool = False
-    """Kept loaded on the decision servers, so even its first request answers without a load time."""
     size_bytes: int | None = None
     expires_at: datetime | None = None
     user_metadata: dict[str, Any] = Field(default_factory=dict)
@@ -641,13 +618,14 @@ class UsageRow(_View):
     gpu_seconds: float | None = None
     """Training only: seconds of the run's reserved GPU, from request to release."""
     continuous_learning: bool | None = None
-    """Decisions only: whether the project had continuous learning on (on and off usage come as separate rows)."""
+    """Decisions only: whether the project is managed, so billed at the continuous-learning price (managed and
+    custom usage come as separate rows)."""
     price_per_mtok: float | None = None
     """Decisions only: the price per 1M input tokens applied."""
     base_cost_usd: float | None = None
     """Decisions only: the cost at the base price."""
     continuous_learning_cost_usd: float | None = None
-    """Decisions only: the continuous-learning extra (0 when off). ``cost_usd`` is the total."""
+    """Decisions only: the managed-project extra (0 in a custom project). ``cost_usd`` is the total."""
     cost_usd: float | None = None
 
 

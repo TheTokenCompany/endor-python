@@ -55,7 +55,7 @@ def test_decision(live: endor.EndorClient, base_model: str) -> None:
 
 
 def test_tiny_training_loop(live: endor.EndorClient, base_model: str) -> None:
-    project = live.projects.create(f"sdk-it-{uuid.uuid4().hex[:8]}")
+    project = live.projects.create(f"sdk-it-{uuid.uuid4().hex[:8]}", base_model="jev-9b")
     try:
         rows = [
             {

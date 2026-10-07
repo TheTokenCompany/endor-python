@@ -69,7 +69,7 @@ def test_usage(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
 
 
 def test_errors_exit_nonzero(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
-    assert cli.main(["projects", "create", "Bad Name"], client=client) == 1
+    assert cli.main(["projects", "create", "Bad Name", "--base-model", "jev-9b"], client=client) == 1
     assert "error: POST /v1/projects: 422 invalid_input" in capsys.readouterr().err
     assert cli.main(["models", "info", "no-slash"], client=client) == 1
     assert "<project>/<name>" in capsys.readouterr().err
@@ -84,7 +84,7 @@ def test_version_and_help(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_download(capsys: pytest.CaptureFixture[str], client: EndorClient, fake: FakeEndor, tmp_path: Path) -> None:
-    project = client.projects.create(unique("dl"))
+    project = client.projects.create(unique("dl"), base_model="jev-9b")
     with project.runs.create("jev-9b") as r:
         r.save_checkpoint("v1", include_optimizer=True).result()
     target = tmp_path / "m"

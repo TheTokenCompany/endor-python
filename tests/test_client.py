@@ -139,12 +139,12 @@ class TestDecisions:
         assert req.body["trace"] == "abc" and req.body["model"] == decider and req.headers["x-trace"] == "1"
 
     def test_project_model_id(self, client: EndorClient, project: endor.Project) -> None:
-        with project.runs.create("pplx-decider-v1.1-27b") as run:
+        with project.runs.create() as run:
             model = run.save_checkpoint("v1").result()
         assert client.system_one("x", {"d": DEPT}, model=model).model == f"{project.name}/v1"
 
     def test_project_base_and_live_model(self, client: EndorClient, fake: FakeEndor, project: endor.Project) -> None:
-        with project.runs.create("pplx-decider-v1.1-27b") as run:  # the first run sets the project's base model
+        with project.runs.create() as run:  # on the project's base model
             run.save_checkpoint("v1").result()
         assert client.system_one("x", {"d": DEPT}, model=project.name).model == f"{project.name}/base"
         assert client.system_one("x", {"d": DEPT}, model=f"{project.name}/base").model == f"{project.name}/base"
@@ -169,7 +169,8 @@ class TestDecisions:
         assert isinstance(e.value, UnprocessableEntityError)
         assert e.value.status == 422 and e.value.code == "model_requires_project" and e.value.param == "model"
 
-    def test_project_without_base_model(self, client: EndorClient, project: endor.Project) -> None:
+    def test_project_without_base_model(self, client: EndorClient, fake: FakeEndor, project: endor.Project) -> None:
+        fake.projects[project.name]["base_model"] = None  # only projects made before base models were required
         with pytest.raises(NoBaseModelError) as e:
             client.system_one("x", {"d": DEPT}, model=project.name)
         assert isinstance(e.value, endor.ConflictError) and e.value.status == 409 and e.value.code == "no_base_model"
@@ -215,7 +216,6 @@ class TestCatalogAndAccount:
         assert by_name[f"{project.name}/base"].kind == "base"
         saved = by_name[f"{project.name}/v1"]
         assert saved.kind == "model" and saved.endor["base_model"] == "jev-9b" and saved.release_date
-        assert saved.endor["source"] == "sdk"
 
     def test_base_models(self, client: EndorClient, project: endor.Project) -> None:
         with project.runs.create("jev-9b") as run:

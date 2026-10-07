@@ -36,9 +36,9 @@ FUTURE_POLL_WAIT_S = 25.0  # server-side long poll per request (server clamps at
 MAX_ERROR_BODY_LENGTH = 200
 LIST_PAGE_SIZE = 100  # page size when a list call pages through every item
 
-# Model names saved from the SDK: the API's name pattern, starting with a letter (names starting with a digit are
-# continuous learning's, YYYY-MM-DD-N), and never "base" (``<project>/base`` is the project's base model).
-SDK_MODEL_NAME = r"^[a-z][a-z0-9._-]{0,62}$"
+# Model names saved from the SDK: the API's name pattern, and never "base" (``<project>/base`` is the project's base
+# model).
+SDK_MODEL_NAME = r"^[a-z0-9][a-z0-9._-]{0,62}$"
 BASE_MODEL_NAME = "base"
 
 # Error codes that are never retried, whatever their status: waiting a few seconds doesn't fix them.

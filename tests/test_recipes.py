@@ -33,7 +33,7 @@ def test_supervised_train(client: EndorClient, fake: FakeEndor) -> None:
 
 
 def test_supervised_sets_the_base_of_a_project_without_one(client: EndorClient) -> None:
-    name = client.projects.create(unique("sl")).name
+    name = client.projects.create(unique("sl"), base_model="jev-9b").name
     cfg = SupervisedConfig(project=name, base_model="jev-9b", batch_size=8, model_name="v1")
     supervised.train(cfg, rows(10), eval_rows=rows(2), client=client)
     assert client.projects.get(name).info_.base_model == "jev-9b"
@@ -45,8 +45,6 @@ def test_supervised_refuses_another_projects_base(client: EndorClient, fake: Fak
     with pytest.raises(ValueError, match="decider-2b"):
         supervised.train(cfg, rows(10), eval_rows=rows(2), client=client)
     assert not fake.runs  # before any GPU is requested
-    cfg.eval_base = False  # without the baseline, the run may use another base
-    supervised.train(cfg, rows(10), eval_rows=rows(2), client=client)
 
 
 def test_supervised_with_eval_rows_and_no_base(client: EndorClient) -> None:

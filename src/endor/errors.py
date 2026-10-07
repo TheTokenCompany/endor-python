@@ -4,7 +4,7 @@
       APIError (status, code, param, message, body, headers, endpoint, request_id)
         BadRequestError 400 · AuthenticationError 401 · InsufficientBalanceError 402 · PermissionDeniedError 403
         NotFoundError 404
-        ConflictError 409 (LimitReachedError, NoBaseModelError) · PayloadTooLargeError 413
+        ConflictError 409 (LimitReachedError, NoBaseModelError, WrongProjectKindError) · PayloadTooLargeError 413
         UnprocessableEntityError 422 (ModelRequiresProjectError)
         RateLimitError 429 (retry_after) · OverloadedError 529 · InternalServerError 5xx
         ResponseValidationError: a 2xx whose body does not have the expected shape
@@ -37,6 +37,7 @@ __all__ = [
     "ConflictError",
     "LimitReachedError",
     "NoBaseModelError",
+    "WrongProjectKindError",
     "PayloadTooLargeError",
     "UnprocessableEntityError",
     "ModelRequiresProjectError",
@@ -138,13 +139,19 @@ class ConflictError(APIError):
 
 class LimitReachedError(ConflictError):
     """409 ``limit_reached``: a count limit of the org or project is reached, for example 7 projects, 4 open runs,
-    50 models in a project or 3 kept-warm models in a project. The message names the limit and its value
+    or 50 models in a project. The message names the limit and its value
     (``client.whoami().limits`` has them all). Free one first: waiting doesn't help, so it is never retried."""
 
 
 class NoBaseModelError(ConflictError):
-    """409 ``no_base_model``: the project has no base model yet. Set one with
-    ``project.update(base_model=...)`` (or ``projects.create(..., base_model=...)``), or start a run in it."""
+    """409 ``no_base_model``: the project has no base model (only projects made before base models were required).
+    A project's base model can't change: create a new project with ``projects.create(..., base_model=...)``."""
+
+
+class WrongProjectKindError(ConflictError):
+    """409 ``wrong_project_kind``: the call doesn't apply to this kind of project. Managed projects refuse datasets,
+    training runs, saved models, evaluations and ``set_live`` (Endor trains them); custom projects refuse
+    ``paused``. The message says what the project is."""
 
 
 class PayloadTooLargeError(APIError):
@@ -259,6 +266,7 @@ _CODE_ERRORS: dict[str, type[APIError]] = {
     "insufficient_balance": InsufficientBalanceError,
     "limit_reached": LimitReachedError,
     "no_base_model": NoBaseModelError,
+    "wrong_project_kind": WrongProjectKindError,
     "model_requires_project": ModelRequiresProjectError,
 }
 

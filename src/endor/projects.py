@@ -1,6 +1,6 @@
 """Projects: the unit of work. A project, keyed by its name, holds datasets, runs, models and evaluations.
 
-project = client.projects.get_or_create("tickets", base_model="decider-2b")
+project = client.projects.get_or_create("tickets", base_model="decider-2b")   # kind="custom"
 project.datasets.upload("train", rows)
 run = project.runs.create(base_model="decider-2b")
 project.models.list()                      # "tickets/base", then every saved model: "tickets/<name>"
@@ -14,8 +14,8 @@ import builtins
 import os
 import subprocess
 import time
-from collections.abc import Iterable, Iterator, Mapping
-from typing import Any
+from collections.abc import Iterable, Iterator
+from typing import Any, Literal
 
 from . import _constants as C
 from . import data as D
@@ -25,7 +25,6 @@ from .errors import NotFoundError
 from .futures import APIFuture
 from .runs import Run
 from .types import (
-    ContinuousLearning,
     DatasetInfo,
     DecisionRow,
     DownloadedFile,
@@ -35,12 +34,8 @@ from .types import (
     ProjectInfo,
 )
 
-ContinuousLearningArg = ContinuousLearning | Mapping[str, Any]
-"""``ContinuousLearning(enabled=True)``, or a dict with the same keys."""
-
-
-def _cl_wire(cl: ContinuousLearningArg) -> dict[str, Any]:
-    return (cl if isinstance(cl, ContinuousLearning) else ContinuousLearning.model_validate(dict(cl))).to_wire()
+ProjectKind = Literal["custom", "managed"]
+"""``custom``: you train models with the SDK. ``managed``: Endor trains new versions from the project's decisions."""
 
 
 __all__ = ["Projects", "Project", "Datasets", "Runs", "Models", "MAX_UPLOAD_ROWS"]
@@ -58,22 +53,18 @@ class Projects:
         self,
         name: str,
         description: str | None = None,
-        continuous_learning: ContinuousLearningArg | None = None,
         *,
-        base_model: str | None = None,
+        base_model: str,
+        kind: ProjectKind = "custom",
     ) -> Project:
         """A new project. Names are lowercase, ``[a-z0-9._-]``, up to 63 characters, and permanent (they are part
         of every model id). Raises ``ConflictError`` if you already have one with that name, and
         ``LimitReachedError`` (a ``ConflictError``) when the org has as many projects as it may.
 
         ``base_model`` (for example ``"decider-2b"``) is the project's base model: ``model="<name>"`` answers with
-        it at once. Without it, the project's first run sets it. ``continuous_learning`` (``{"enabled": True}``)
-        turns on continuous learning on the project's decisions."""
-        body: dict[str, Any] = {"name": name, "description": description}
-        if base_model is not None:
-            body["base_model"] = base_model
-        if continuous_learning is not None:
-            body["continuous_learning"] = _cl_wire(continuous_learning)
+        it at once. ``kind`` is ``"custom"`` (you train models with the SDK) or ``"managed"`` (Endor trains new
+        versions from the project's decisions; its decisions cost 50% more). Neither can change later."""
+        body: dict[str, Any] = {"name": name, "description": description, "kind": kind, "base_model": base_model}
         r = self._t.request("POST", "/v1/projects", json=body, method_name="projects.create", idempotent=True)
         return Project(self._t, r, self._capture)
 
@@ -87,16 +78,23 @@ class Projects:
         self,
         name: str,
         description: str | None = None,
-        continuous_learning: ContinuousLearningArg | None = None,
         *,
-        base_model: str | None = None,
+        base_model: str,
+        kind: ProjectKind = "custom",
     ) -> Project:
         """The project called ``name``, created if missing (with these settings). Safe to call at the top of every
-        script; an existing project's settings are left as they are."""
+        script; an existing project's description is left as it is. Raises ``ValueError`` if the existing project
+        has another ``kind`` or ``base_model``: neither can change, so use another project name."""
         try:
-            return self.get(name)
+            p = self.get(name)
         except NotFoundError:
-            return self.create(name, description, continuous_learning, base_model=base_model)
+            return self.create(name, description, base_model=base_model, kind=kind)
+        if p.info_.kind != kind or p.info_.base_model != base_model:
+            raise ValueError(
+                f"project {name!r} exists as a {p.info_.kind} project on {p.info_.base_model}, not a {kind} project "
+                f"on {base_model}; a project's kind and base model can't change, so pick another name"
+            )
+        return p
 
     def list(self, limit: int | None = None, offset: int = 0) -> list[Project]:
         """Your projects, newest first: all of them, or at most ``limit`` starting at ``offset``."""
@@ -128,9 +126,8 @@ class Project:
 
     def set_live(self, model: str) -> ProjectInfo:
         """Make ``model`` the live model: what ``model="<project>"`` answers with. ``model`` is a saved model's name,
-        ``"<project>/<name>"``, or ``"base"`` for the project's base model. Like Make live on the dashboard, this turns
-        ``auto_promote`` off, so a new continuous-learning version doesn't replace your choice. Raises
-        ``NotFoundError`` for an unknown model and ``NoBaseModelError`` for ``"base"`` without a base model."""
+        ``"<project>/<name>"``, or ``"base"`` for the project's base model. Custom projects only: a managed project
+        always serves its newest version (``WrongProjectKindError``). Raises ``NotFoundError`` for an unknown model."""
         self.info_ = ProjectInfo.model_validate(
             self._t.request(
                 "POST", f"/v1/projects/{self.name}/live", json={"model": model}, method_name="project.set_live"
@@ -142,35 +139,20 @@ class Project:
         self,
         *,
         description: str | None = None,
-        base_model: str | None = None,
-        auto_promote: bool | None = None,
-        base_keep_warm: bool | None = None,
-        continuous_learning: ContinuousLearningArg | None = None,
+        paused: bool | None = None,
     ) -> ProjectInfo:
-        """Change the project's settings; arguments left as None are unchanged.
+        """Change the project's settings; arguments left as None are unchanged. The kind and base model never change.
 
-        - ``base_model``: the project's base model. A different base makes ``"<project>"`` serve the new base
-          again, and starts continuous learning again from scratch on it; models saved so far stay in the project.
-        - ``auto_promote``: each new continuous-learning version becomes the live model (never a model saved from
-          the SDK; ``set_live`` turns it off).
-        - ``base_keep_warm``: keep the base model warm. It takes one of the project's keep-warm slots
-          (``LimitReachedError`` when they are full; ``NoBaseModelError`` without a base model).
-        - ``continuous_learning``: ``{"enabled": True}``; ``{"enabled": False}`` pauses it."""
+        - ``description``: free text.
+        - ``paused``: managed projects only (``WrongProjectKindError`` for a custom one). A paused project stops
+          learning and keeps serving its newest version; its decisions keep the managed price."""
         body: dict[str, Any] = {}
         if description is not None:
             body["description"] = description
-        if base_model is not None:
-            body["base_model"] = base_model
-        if auto_promote is not None:
-            body["auto_promote"] = auto_promote
-        if base_keep_warm is not None:
-            body["base_keep_warm"] = base_keep_warm
-        if continuous_learning is not None:
-            body["continuous_learning"] = _cl_wire(continuous_learning)
+        if paused is not None:
+            body["paused"] = paused
         if not body:
-            raise ValueError(
-                "nothing to update: pass description, base_model, auto_promote, base_keep_warm or continuous_learning"
-            )
+            raise ValueError("nothing to update: pass description or paused")
         self.info_ = ProjectInfo.model_validate(
             self._t.request("PATCH", f"/v1/projects/{self.name}", json=body, method_name="project.update")
         )
@@ -294,8 +276,9 @@ class Runs:
         user_metadata: dict[str, Any] | None = None,
         wait: bool = True,
     ) -> Run:
-        """Start a run: a fresh adapter on ``base_model``, or one warm-started from ``from_model`` (a model of this
-        project, as ``"name"`` or ``"<project>/name"``; with ``include_optimizer=True`` training resumes exactly).
+        """Start a run: a fresh adapter on the project's base model, or one warm-started from ``from_model`` (a model
+        of this project, as ``"name"`` or ``"<project>/name"``; with ``include_optimizer=True`` training resumes
+        exactly).
 
         LoRA settings left as None default to rank 16, alpha 32, attention and MLP, no readout for a fresh run. With
         ``from_model`` they are inherited from the saved model, and only the ones you pass are sent (a value that
@@ -308,12 +291,12 @@ class Runs:
 
         Close every run you create (``with project.runs.create(...) as run:``): a run holds its GPU until closed or
         idle for 15 minutes, and an org can have at most 4 runs that aren't closed, idle ones included (a fifth
-        raises ``LimitReachedError``). A project without a base model takes its first run's.
+        raises ``LimitReachedError``). ``base_model`` may be left out: a run always trains on the project's base model,
+        and another base is a 422 (``UnprocessableEntityError``). Custom projects only: a managed project raises
+        ``WrongProjectKindError`` (Endor trains it).
         ``config`` is free-form and shown on the dashboard; when the client was created with ``capture=True`` the
         SDK adds the LoRA settings and the current git commit (never file contents).
         """
-        if not base_model and not from_model:
-            raise ValueError("pass base_model or from_model")
         given = {
             "rank": rank,
             "alpha": alpha,
@@ -384,8 +367,8 @@ class Models:
         return model.split("/", 1)[1] if "/" in model else model
 
     def list(self, run_id: str | None = None) -> list[ModelInfo]:
-        """The project's models: its base model first (``name == "base"``, ``source == "base"``) once it has one,
-        then every saved, unexpired model, newest first; optionally only those saved by ``run_id``."""
+        """The project's models: its base model first (``name == "base"``), then every saved, unexpired model, newest
+        first; optionally only those saved by ``run_id``."""
         items = _list_all(self._t, self._base, {"run_id": run_id}, "project.models.list")
         return [ModelInfo.model_validate(m) for m in items]
 
@@ -402,28 +385,6 @@ class Models:
             f"{self._base}/{self._name(model)}",
             json={"ttl_seconds": ttl_seconds},
             method_name="project.models.set_ttl",
-        )
-        return ModelInfo.model_validate(r)
-
-    def set_keep_warm(self, model: str, on: bool = True) -> ModelInfo:
-        """Keep the model loaded on the decision servers (``on=True``), so even its first request answers without a
-        load time, or release it (``on=False``). Free. At most 3 models can be kept warm in a project, the base
-        model included when its keep warm is on: a fourth raises ``LimitReachedError`` with
-        ``param == "keep_warm"``; turn one off first. The live model is always loaded and doesn't count. For the
-        base model (``"base"``), this sets the project's ``base_keep_warm``."""
-        if self._name(model) == C.BASE_MODEL_NAME:
-            self._t.request(
-                "PATCH",
-                f"/v1/projects/{self._project}",
-                json={"base_keep_warm": on},
-                method_name="project.models.set_keep_warm",
-            )
-            return self.get(C.BASE_MODEL_NAME)
-        r = self._t.request(
-            "PATCH",
-            f"{self._base}/{self._name(model)}",
-            json={"keep_warm": on},
-            method_name="project.models.set_keep_warm",
         )
         return ModelInfo.model_validate(r)
 
