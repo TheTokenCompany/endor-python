@@ -145,15 +145,21 @@ class Choice(_Question):
 class Score(_Question):
     """One of several ordered levels. The answer is the expected level plus a probability per level.
 
+    ``criteria`` are the levels of one scale, lowest first: each item describes one level, not a thing to check.
+    The answer's ``score`` is the expected level, from 0 (the first item) to n - 1 (the last).
+
     ```python
     Score(instructions="How frustrated is the customer?", criteria=["Calm", "Annoyed", "Angry"])
+    Score(instructions="How Finnish is this name?",
+          criteria=["Clearly not Finnish", "Possibly Finnish", "Unmistakably Finnish"])
     ```
     """
 
     type: Literal["score"] = "score"
     instructions: JSONContent | None = None
     criteria: list[JSONContent]
-    """Level descriptions, lowest first. 2 to 10 levels; level ``i`` has option id ``str(i)``."""
+    """The levels of one scale, lowest first (not a list of things to check). 2 to 10 levels; level ``i`` has option
+    id ``str(i)``."""
 
     @field_validator("criteria")
     @classmethod
