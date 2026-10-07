@@ -1,6 +1,6 @@
 """Run: one adapter on one base model inside a project, driven step by step.
 
-    run = project.runs.create(base_model="pplx-decider-v1.1-27b", rank=16)
+    run = project.runs.create(base_model="decider-2b", rank=16)
     fb = run.forward_backward(datums)                 # gradients accumulate
     opt = run.optim_step(learning_rate=1e-4)          # AdamW step, then zero gradients
     fb.result(); opt.result()                         # submit both, then wait: no idle round trip
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -41,6 +42,7 @@ from .types import (
 __all__ = ["Run", "MAX_DATUMS_PER_CALL"]
 
 _FINAL = ("closed", "failed")
+_MODEL_NAME = re.compile(C.SDK_MODEL_NAME)
 _CLOSE_POLL_S = 1.0
 
 MAX_DATUMS_PER_CALL = C.MAX_DATUMS_PER_CALL
@@ -166,6 +168,10 @@ class Run:
     ) -> APIFuture[str]:
         """Save the adapter as the project model ``"<project>/<name>"``. The future resolves to that id, which
         ``client.system_one(model=...)`` accepts at once.
+
+        ``name``: lowercase letters, digits, ``.``, ``_`` and ``-``, up to 63 characters, starting with a letter
+        (names starting with a digit are continuous learning's), and not ``base`` (the project's base model).
+        Raises ``ValueError`` otherwise, before anything is sent.
 
         ``include_optimizer`` also stores the optimizer state, so
         ``runs.create(from_model=..., include_optimizer=True)``
@@ -381,12 +387,24 @@ class Run:
     def _save_body(
         name: str, include_optimizer: bool, ttl_seconds: int | None, user_metadata: dict[str, Any] | None
     ) -> dict[str, Any]:
+        check_model_name(name)
         return {
             "name": name,
             "include_optimizer": include_optimizer,
             "ttl_seconds": ttl_seconds,
             "user_metadata": user_metadata or {},
         }
+
+
+def check_model_name(name: str) -> None:
+    """The API's rule for model names saved from the SDK; raises ValueError naming the problem."""
+    if name == C.BASE_MODEL_NAME:
+        raise ValueError('"base" is reserved for the project\'s base model; pick another model name')
+    if not isinstance(name, str) or not _MODEL_NAME.fullmatch(name):
+        raise ValueError(
+            f"bad model name {name!r}: start with a letter (a-z), then lowercase letters, digits, '.', '_' or '-', "
+            "63 characters at most (names starting with a digit are reserved for continuous learning)"
+        )
 
 
 def check_datum(d: Datum, where: str) -> None:

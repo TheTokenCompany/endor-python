@@ -2,8 +2,9 @@
 
 It implements the public contract the SDK relies on: bearer auth, the error envelope, strict sequence numbers with
 idempotent retries, ``Idempotency-Key`` on creates, long-polled futures (optionally pending for N polls), the
-decision answer formulas, the 4-open-runs limit, ``no_gradients``, 402 for a blocked org, and fault injection for
-retry tests. It is a test double, not a reference server.
+decision answer formulas, model ids through a project (``<project>``, ``<project>/base``, ``<project>/<name>``),
+the count limits (409 ``limit_reached``), ``no_gradients``, 402 for a blocked org, and fault injection for retry
+tests. It is a test double, not a reference server.
 """
 
 from __future__ import annotations
@@ -25,7 +26,24 @@ import httpx
 FILES_HOST = "files.endor.test"
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
-MAX_ACTIVE_RUNS = 4
+LIMITS: dict[str, float] = {
+    "max_projects_per_org": 7,
+    "max_api_keys_per_org": 20,
+    "max_active_runs": 4,
+    "max_models_per_project": 50,
+    "max_keep_warm_per_project": 3,
+    "max_dataset_rows": 50_000,
+    "max_pending_ops": 64,
+    "decisions_per_second": 50.0,
+    "decisions_burst": 100,
+    "downloads_per_minute": 30,
+    "dataset_uploads_per_minute": 20,
+    "runs_per_minute": 20,
+    "evaluations_per_minute": 30,
+}
+MAX_ACTIVE_RUNS = int(LIMITS["max_active_runs"])
+MAX_WARM_PER_PROJECT = int(LIMITS["max_keep_warm_per_project"])
+BASE = "base"  # "<project>/base": the project's base model
 BASE_MODELS: dict[str, dict[str, Any]] = {
     "pplx-decider-v1.1-27b": {
         "max_options": 255,
@@ -58,7 +76,6 @@ BASE_MODELS: dict[str, dict[str, Any]] = {
         "lora_targets": ["attn", "mlp"],
     },
 }
-MAX_WARM_PER_BASE = 3
 
 
 class HTTPError(Exception):
@@ -237,14 +254,76 @@ class FakeEndor:
 
     @staticmethod
     def project_view(p: dict, self_: FakeEndor) -> dict:
+        live = self_.live_model(p)
         return {
             "name": p["name"],
             "description": p["description"],
+            "base_model": p["base_model"],
+            "base_keep_warm": p["base_keep_warm"],
+            "live_model": None if p["base_model"] is None else (live or f"{p['name']}/{BASE}"),
+            "auto_promote": p["auto_promote"],
             "created_at": p["created_at"],
             "n_datasets": sum(1 for (pr, _) in self_.datasets if pr == p["name"]),
             "n_runs": sum(1 for r in self_.runs.values() if r["project"] == p["name"]),
-            "n_models": sum(1 for m in self_.models.values() if m["project"] == p["name"]),
-            "continuous_learning": p["continuous_learning"],
+            "n_models": sum(1 for m in self_.models.values() if m["project"] == p["name"])
+            + (p["base_model"] is not None),
+            "continuous_learning": {**p["continuous_learning"], "base_model": p["base_model"]},
+        }
+
+    def live_model(self, p: dict) -> str | None:
+        """The saved model "<project>" serves, or None for its base."""
+        mid = p["live_model"]
+        return mid if mid in self.models and self.models[mid]["_ready"] else None
+
+    def promote(self, project: str, name: str) -> None:
+        """What the dashboard's promote does: make a model (or the base) live and turn auto-promote off."""
+        p = self.project(project)
+        p["live_model"] = None if name == BASE else f"{project}/{name}"
+        p["auto_promote"] = False
+
+    def warm_slots(self, p: dict) -> list[str]:
+        warm = [m["id"] for m in self.models.values() if m["project"] == p["name"] and m["keep_warm"]]
+        return warm + ([f"{p['name']}/{BASE}"] if p["base_keep_warm"] else [])
+
+    def check_warm_slot(self, p: dict) -> None:
+        warm = self.warm_slots(p)
+        if len(warm) >= MAX_WARM_PER_PROJECT:
+            raise HTTPError(
+                409,
+                "limit_reached",
+                f"Project {p['name']} keeps {len(warm)} models warm, the maximum of {MAX_WARM_PER_PROJECT}. "
+                "Turn one off first.",
+                "keep_warm",
+            )
+
+    def set_base_model(self, p: dict, base: str, param: str = "base_model") -> None:
+        if base not in BASE_MODELS:
+            raise HTTPError(422, "unknown_model", f"Not a base model: {base!r}.", param)
+        if base != p["base_model"]:
+            first = p["base_model"] is None
+            p["base_model"], p["live_model"] = base, None
+            if first:
+                p["base_keep_warm"] = False
+                p["base_keep_warm"] = len(self.warm_slots(p)) < MAX_WARM_PER_PROJECT
+
+    def base_model_view(self, p: dict) -> dict:
+        return {
+            "id": f"{p['name']}/{BASE}",
+            "project": p["name"],
+            "name": BASE,
+            "source": "base",
+            "live": self.live_model(p) is None,
+            "training_run_id": None,
+            "base_model": p["base_model"],
+            "contract": "letters-16",
+            "parent_model": None,
+            "step": 0,
+            "has_optimizer": False,
+            "keep_warm": p["base_keep_warm"],
+            "size_bytes": None,
+            "expires_at": None,
+            "user_metadata": {},
+            "created_at": p["created_at"],
         }
 
     def project(self, name: str) -> dict:
@@ -262,7 +341,8 @@ class FakeEndor:
         return {k: v for k, v in r.items() if not k.startswith("_")}
 
     def model_view(self, m: dict) -> dict:
-        return {k: v for k, v in m.items() if not k.startswith("_")}
+        live = self.live_model(self.projects[m["project"]]) == m["id"] if m["project"] in self.projects else False
+        return {**{k: v for k, v in m.items() if not k.startswith("_")}, "live": live}
 
     @staticmethod
     def file_bytes(mid: str, name: str) -> bytes:
@@ -337,7 +417,13 @@ class FakeEndor:
         if p == ["models"] and m == "GET":
             return 200, self.list_models()
         if p == ["whoami"] and m == "GET":
-            return 200, {"user_id": None, "org_id": "org_test", "key_id": "key_test", "key_prefix": "edk_test"}
+            return 200, {
+                "user_id": None,
+                "org_id": "org_test",
+                "key_id": "key_test",
+                "key_prefix": "edk_test",
+                "limits": dict(LIMITS),
+            }
         if p == ["usage"] and m == "GET":
             start, end = datetime.fromisoformat(params["starting_on"]), datetime.fromisoformat(params["ending_before"])
             if end - start > timedelta(days=14):
@@ -385,6 +471,18 @@ class FakeEndor:
                 proj = self.project(p[1])
                 if "description" in body:
                     proj["description"] = body["description"]
+                if body.get("base_model") is not None:
+                    self.set_base_model(proj, body["base_model"])
+                if body.get("base_keep_warm") is not None:
+                    if body["base_keep_warm"] and not proj["base_keep_warm"]:
+                        if proj["base_model"] is None:
+                            raise HTTPError(
+                                409, "no_base_model", f"Project {proj['name']} has no base model yet.", "base_keep_warm"
+                            )
+                        self.check_warm_slot(proj)
+                    proj["base_keep_warm"] = body["base_keep_warm"]
+                if body.get("auto_promote") is not None:
+                    proj["auto_promote"] = body["auto_promote"]
                 self.set_continuous_learning(proj, body.get("continuous_learning"))
                 return 200, self.project_view(proj, self)
             if m == "DELETE":
@@ -515,12 +613,37 @@ class FakeEndor:
         return {"items": items[offset : offset + limit], "total": len(items)}
 
     # ------------------------------------------------------------------ decisions
-    def resolve_model(self, model: str) -> tuple[str, str | None]:
+    def resolve_model(self, model: str, project: str | None = None) -> tuple[str, str]:
+        """(base model id, the id of the model that answers) for ``<project>``, ``<project>/base`` or
+        ``<project>/<name>``; with ``project``, also a bare name in it (``base`` included). As the API's
+        services/models.resolve."""
         if model in BASE_MODELS:
-            return model, None
-        if model in self.models:
-            return self.models[model]["base_model"], model
-        raise HTTPError(404, "unknown_model", f"no model {model}")
+            raise HTTPError(
+                422,
+                "model_requires_project",
+                f'Call {model} through a project: "<project>/base" for the base model, or "<project>" for the '
+                "project's live model.",
+                "model",
+            )
+        if "/" in model:
+            proj, _, name = model.partition("/")
+        elif project is not None and model != project:
+            proj, name = project, model
+        else:
+            proj, name = model, ""
+        p = self.projects.get(proj)
+        if p is None:
+            raise HTTPError(404, "unknown_model", f"no model {model}")
+        if not name:
+            name = (self.live_model(p) or f"{proj}/{BASE}").partition("/")[2]
+        if name == BASE:
+            if p["base_model"] is None:
+                raise HTTPError(409, "no_base_model", f"Project {proj} has no base model yet.", "model")
+            return p["base_model"], f"{proj}/{BASE}"
+        mid = f"{proj}/{name}"
+        if mid not in self.models or not self.models[mid]["_ready"]:
+            raise HTTPError(404, "unknown_model", f"no model {model}")
+        return self.models[mid]["base_model"], mid
 
     def systemone(self, body: dict) -> dict:
         for k in ("model", "state", "questions"):
@@ -528,7 +651,7 @@ class FakeEndor:
                 raise HTTPError(422, "invalid_input", f"missing {k}", k)
         if not 1 <= len(body["questions"]) <= 64:
             raise HTTPError(422, "invalid_input", "send 1..64 questions", "questions")
-        base_id, path = self.resolve_model(body["model"])
+        base_id, answered = self.resolve_model(body["model"])
         base = BASE_MODELS[base_id]
         self.check_balance()
         answers = {}
@@ -538,7 +661,7 @@ class FakeEndor:
                 raise HTTPError(422, "invalid_options", f"questions.{name}: more than {base['max_options']} options")
             answers[name] = answer_from_probs(q, uniform(q))
         return {
-            "model": path or base_id,
+            "model": answered,
             "answers": answers,
             "usage": {"input_tokens": 7 * len(answers), "output_tokens": 0},
         }
@@ -567,6 +690,7 @@ class FakeEndor:
                 "endor": {
                     "kind": "model",
                     "project": m["project"],
+                    "source": m["source"],
                     "base_model": m["base_model"],
                     "training_run_id": m["training_run_id"],
                     "step": m["step"],
@@ -585,29 +709,46 @@ class FakeEndor:
             raise HTTPError(422, "invalid_input", "bad name", "name")
         if name in self.projects:
             raise HTTPError(409, "conflict", f"project {name} already exists")
+        cap = int(LIMITS["max_projects_per_org"])
+        if len(self.projects) >= cap:
+            raise HTTPError(
+                409,
+                "limit_reached",
+                f"This organization has {len(self.projects)} projects, the maximum of {cap}. Delete one first.",
+            )
         p = {
             "name": name,
             "description": body.get("description"),
+            "base_model": None,
+            "base_keep_warm": False,
+            "live_model": None,
+            "auto_promote": True,
             "continuous_learning": {"enabled": False, "base_model": None, "model": None},
             "created_at": now().isoformat(),
         }
+        if body.get("base_model") is not None:
+            self.set_base_model(p, body["base_model"])
         self.set_continuous_learning(p, body.get("continuous_learning"))
         self.projects[name] = p
         return self.project_view(p, self)
 
-    @staticmethod
-    def set_continuous_learning(p: dict, cl: dict | None) -> None:
+    def set_continuous_learning(self, p: dict, cl: dict | None) -> None:
+        """``continuous_learning.base_model`` sets the project's base model, as ``base_model``."""
         if cl is None:
             return
         cur = p["continuous_learning"]
-        base = cl.get("base_model", cur["base_model"])
-        if base is not None and base not in BASE_MODELS:
-            raise HTTPError(422, "unknown_model", f"not a base model: {base}", "continuous_learning.base_model")
-        if base != cur["base_model"]:
-            cur["model"] = None  # a new base starts continuous learning from scratch
-        cur.update(enabled=cl.get("enabled", cur["enabled"]), base_model=base)
-        if cur["enabled"] and cur["base_model"] is None:
-            raise HTTPError(422, "invalid_input", "base_model is required", "continuous_learning.base_model")
+        if cl.get("base_model") is not None:
+            if cl["base_model"] != p["base_model"]:
+                cur["model"] = None  # a new base starts continuous learning from scratch
+            self.set_base_model(p, cl["base_model"], "continuous_learning.base_model")
+        cur["enabled"] = cl.get("enabled", cur["enabled"])
+        if cur["enabled"] and p["base_model"] is None:
+            raise HTTPError(
+                422,
+                "invalid_input",
+                "Pick a base model to enable continuous learning.",
+                "continuous_learning.base_model",
+            )
 
     def datasets_route(self, m: str, project: str, tail: list[str], body: Any, params: dict) -> tuple[int, Any]:
         if not tail and m == "POST":
@@ -672,13 +813,14 @@ class FakeEndor:
 
     def create_run(self, project: str, body: dict) -> dict:
         self.check_balance()
-        open_runs = sum(1 for r in self.runs.values() if r["status"] not in ("closed", "failed"))
-        if open_runs >= MAX_ACTIVE_RUNS:
+        open_runs = [r["id"] for r in self.runs.values() if r["status"] not in ("closed", "failed")]
+        if len(open_runs) >= MAX_ACTIVE_RUNS:
             raise HTTPError(
-                429,
-                "quota_exceeded",
-                f"At most {MAX_ACTIVE_RUNS} active runs per org; close one first.",
-                headers={"retry-after": "60"},
+                409,
+                "limit_reached",
+                f"This organization has {len(open_runs)} open runs, the maximum of {MAX_ACTIVE_RUNS} (idle ones "
+                f"count): {', '.join(open_runs)}. Close one first: run.close() in the SDK or "
+                "`endor runs close <run_id>`.",
             )
         base_model, parent = body.get("base_model"), None
         if body.get("from_model"):
@@ -712,12 +854,16 @@ class FakeEndor:
         lora = {**defaults, **(body.get("lora") or {})}
         if not 1 <= lora["rank"] <= 256:
             raise HTTPError(422, "invalid_input", "rank 1..256", "lora.rank")
+        proj = self.project(project)
+        if proj["base_model"] is None:  # a project without a base takes its first run's
+            self.set_base_model(proj, base_model)
         run_id = self.new_id("run")
         ready = self.future("provision_run", {"run_id": run_id}, pending=self.provisioning_polls)
         run = {
             "id": run_id,
             "project": project,
             "name": body.get("name"),
+            "source": "sdk",
             "base_model": base_model,
             "contract": "letters-16",
             "lora": lora,
@@ -829,18 +975,29 @@ class FakeEndor:
         name = body.get("name")
         if not isinstance(name, str) or not NAME.match(name):
             raise HTTPError(422, "invalid_input", "bad name", "name")
+        if name == BASE:  # as the API's models.check_sdk_name
+            raise HTTPError(422, "invalid_input", '"base" is reserved for the project\'s base model.', "name")
+        if not name[:1].isalpha():
+            raise HTTPError(422, "invalid_input", "Model names start with a letter.", "name")
         ttl = body.get("ttl_seconds")
         if ttl is not None and not 3600 <= ttl <= 10 * 365 * 86400:
             raise HTTPError(422, "invalid_input", "ttl 1h..10y", "ttl_seconds")
         mid = f"{run['project']}/{name}"
         if "seq_id" in body and body["seq_id"] >= run["next_seq_id"] and mid in self.models:
             raise HTTPError(409, "conflict", f"model {mid} already exists")
+        n, cap = (
+            sum(1 for m in self.models.values() if m["project"] == run["project"]),
+            LIMITS["max_models_per_project"],
+        )
+        if "seq_id" in body and body["seq_id"] >= run["next_seq_id"] and n >= cap:
+            raise HTTPError(409, "limit_reached", f"Project {run['project']} has {n} models, the maximum.", "name")
 
         def result() -> dict:
             self.models[mid] = {
                 "id": mid,
                 "project": run["project"],
                 "name": name,
+                "source": "sdk",
                 "training_run_id": run["id"],
                 "base_model": run["base_model"],
                 "contract": "letters-16",
@@ -860,7 +1017,10 @@ class FakeEndor:
 
     # ------------------------------------------------------------------ models
     def models_route(self, m: str, project: str, tail: list[str], body: Any, params: dict) -> tuple[int, Any]:
+        proj = self.project(project)
+        has_base = proj["base_model"] is not None
         if not tail and m == "GET":
+            base = [self.base_model_view(proj)] if has_base and params.get("run_id") is None else []
             items = sorted(
                 (
                     x
@@ -872,7 +1032,11 @@ class FakeEndor:
                 key=lambda x: x["created_at"],
                 reverse=True,
             )
-            return 200, self.page([self.model_view(x) for x in items], params)
+            return 200, self.page(base + [self.model_view(x) for x in items], params)
+        if tail[0] == BASE and has_base and len(tail) == 1 and m == "GET":
+            return 200, self.base_model_view(proj)
+        if tail[0] == BASE and len(tail) == 1 and m == "DELETE":
+            raise HTTPError(422, "invalid_input", "The project's base model can't be deleted.", "name")
         mid = f"{project}/{tail[0]}"
         if mid not in self.models:
             raise HTTPError(404, "not_found", f"no model {mid}")
@@ -887,19 +1051,13 @@ class FakeEndor:
                 mod["expires_at"] = (now() + timedelta(seconds=ttl)).isoformat() if ttl else None
             if body.get("keep_warm") is not None:
                 if body["keep_warm"] and not mod["keep_warm"]:
-                    warm = [x for x in self.models.values() if x["keep_warm"] and x["base_model"] == mod["base_model"]]
-                    if len(warm) >= MAX_WARM_PER_BASE:
-                        raise HTTPError(
-                            409,
-                            "conflict",
-                            f"At most {MAX_WARM_PER_BASE} models per base model can be "
-                            "kept warm in an org. Turn one off first.",
-                            "keep_warm",
-                        )
+                    self.check_warm_slot(proj)
                 mod["keep_warm"] = body["keep_warm"]
             return 200, self.model_view(mod)
         if len(tail) == 1 and m == "DELETE":
             del self.models[mid]
+            if proj["live_model"] == mid:
+                proj["live_model"] = None
             return 204, None
         if tail[1:] == ["download"] and m == "GET":
             names = ["adapter_model.safetensors", "adapter_config.json", "endor_manifest.json"]
@@ -926,7 +1084,7 @@ class FakeEndor:
         self.check_balance()
         if (project, body.get("dataset")) not in self.datasets:
             raise HTTPError(404, "not_found", f"no dataset {body.get('dataset')}")
-        self.resolve_model(body["model"])
+        self.resolve_model(body["model"], project)
         e = {
             "id": self.new_id("evl"),
             "project": project,

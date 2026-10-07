@@ -6,11 +6,12 @@ from endor import Choice, Noul
 client = endor.EndorClient()                                        # ENDOR_API_KEY
 res = client.system_one({"body": "charged twice"},
                         {"dept": Choice(criteria={"billing": None, "technical": None}),
-                         "urgent": Noul(instructions="Does this need an answer today?")})
+                         "urgent": Noul(instructions="Does this need an answer today?")},
+                        model="tickets")                            # the project's live model
 res.choices["dept"].choice, res.nouls["urgent"].noul
 
-project = client.projects.get_or_create("tickets")
-with project.runs.create(base_model="pplx-decider-v1.1-27b", rank=16) as run:   # closed on exit, even on errors
+project = client.projects.get_or_create("tickets", base_model="decider-2b")   # "tickets" answers at once
+with project.runs.create(base_model="decider-2b", rank=16) as run:   # closed on exit, even on errors
     for batch in endor.data.batches(endor.data.rows_to_datums(rows), 16):
         fb = run.forward_backward(batch)
         opt = run.optim_step(learning_rate=1e-4)
@@ -34,6 +35,9 @@ from .errors import (
     EndorError,
     InsufficientBalanceError,
     InternalServerError,
+    LimitReachedError,
+    ModelRequiresProjectError,
+    NoBaseModelError,
     NotFoundError,
     OperationFailedError,
     OverloadedError,
@@ -140,9 +144,12 @@ __all__ = [
     "PermissionDeniedError",
     "NotFoundError",
     "ConflictError",
+    "LimitReachedError",
+    "NoBaseModelError",
     "DownloadError",
     "PayloadTooLargeError",
     "UnprocessableEntityError",
+    "ModelRequiresProjectError",
     "RateLimitError",
     "OverloadedError",
     "InternalServerError",

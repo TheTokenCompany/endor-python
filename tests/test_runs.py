@@ -243,6 +243,36 @@ class TestLifecycle:
             with pytest.raises(UnprocessableEntityError):
                 run.save_checkpoint("v2", ttl_seconds=10)
 
+    @pytest.mark.parametrize(
+        "name",
+        ["base", "2026-10-07-1", "1v", "-v", ".v", "_v", "V1", "v 1", "v/1", "", "a" * 64, "v\n", "\u00e9v"],
+    )
+    def test_save_rejects_reserved_and_bad_names_locally(
+        self, project: endor.Project, fake: FakeEndor, name: str
+    ) -> None:
+        with project.runs.create("jev-9b") as run:
+            sent = len(fake.requests)
+            with pytest.raises(ValueError, match="base|start with a letter"):
+                run.save_checkpoint(name)
+            assert len(fake.requests) == sent and run.next_seq_id == 0  # nothing sent, no number used
+
+    async def test_save_rejects_bad_names_async(self, project: endor.Project) -> None:
+        with project.runs.create("jev-9b") as run, pytest.raises(ValueError, match="base"):
+            await run.save_checkpoint_async("base")
+
+    @pytest.mark.parametrize("name", ["v", "v1", "a" * 63, "base2", "basel", "my-model_1.0", "z0"])
+    def test_save_accepts_names_the_api_accepts(self, project: endor.Project, name: str) -> None:
+        with project.runs.create("jev-9b") as run:
+            assert run.save_checkpoint(name).result() == f"{project.name}/{name}"
+
+    def test_api_refuses_reserved_names_too(self, project: endor.Project, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(endor.runs, "check_model_name", lambda name: None)  # the server's own check
+        with project.runs.create("jev-9b") as run:
+            for name in ("base", "2026-10-07-1"):
+                with pytest.raises(UnprocessableEntityError) as e:
+                    run.save_checkpoint(name)
+                assert e.value.code == "invalid_input" and e.value.param == "name"
+
     def test_optim_step_params(self, project: endor.Project, fake: FakeEndor) -> None:
         with project.runs.create("jev-9b") as run:
             run.forward_backward(datums()).result()

@@ -6,7 +6,7 @@
 What it does:
 
 1. Splits off a held-out set (unless ``eval_rows`` is given) and expands rows into datums, one per labeled question.
-2. Scores the untuned base model on the held-out rows, so every later number has a baseline.
+2. Scores the untuned base model (``"<project>/base"``) on the held-out rows, so every later number has a baseline.
 3. Trains one run: batches of ``batch_size``, a learning rate with linear warmup then linear decay,
    ``forward_backward`` and ``optim_step`` submitted together each step.
 4. Every ``eval_every`` steps and at the end, scores the held-out datums with the run's current adapter and records
@@ -39,8 +39,11 @@ class SupervisedConfig:
     """Settings for ``train``."""
 
     project: str
-    """The project that gets the run and the model (created if missing)."""
+    """The project that gets the run and the model (created with ``base_model`` if missing; a project without a
+    base model gets ``base_model``)."""
     base_model: str = "pplx-decider-v1.1-27b"
+    """The base model the run trains on. With ``eval_base`` or replay rows it must be the project's base model,
+    which they call as ``"<project>/base"``."""
     model_name: str | None = None
     """The saved model's name in the project; default ``"<name or sft>-<timestamp>"``."""
     rank: int = 16
@@ -109,12 +112,12 @@ def evaluate_model(client: EndorClient, model: str, rows: Sequence[Any]) -> dict
     return decision_metrics(probs, targets)
 
 
-def _replay_datums(client: EndorClient, cfg: SupervisedConfig) -> list[Datum]:
+def _replay_datums(client: EndorClient, cfg: SupervisedConfig, base: str) -> list[Datum]:
     if not cfg.replay_rows or cfg.replay_per_batch <= 0:
         return []
     out = []
     for row in map(D.to_row, cfg.replay_rows):
-        res = client.system_one(row.state, row.questions, model=cfg.base_model)
+        res = client.system_one(row.state, row.questions, model=base)
         out += [
             Datum(state=row.state, question=q, target=Target(probs=answer_probabilities(res.answers[n])))
             for n, q in row.questions.items()
@@ -146,9 +149,19 @@ def train(
         own = client is None
         client = client or EndorClient()
         try:
-            project = client.projects.get_or_create(cfg.project)
-            base_metrics = evaluate_model(client, cfg.base_model, eval_rows) if cfg.eval_base and eval_datums else None
-            replay = _replay_datums(client, cfg)
+            project = client.projects.get_or_create(cfg.project, base_model=cfg.base_model)
+            base = f"{project.name}/base"  # decisions name a project: the untuned base is "<project>/base"
+            uses_base = (cfg.eval_base and eval_datums) or (cfg.replay_rows and cfg.replay_per_batch > 0)
+            if uses_base and project.info_.base_model is None:
+                project.update(base_model=cfg.base_model)  # what the first run would set anyway
+            elif uses_base and project.info_.base_model != cfg.base_model:
+                raise ValueError(
+                    f"project {project.name!r} has base model {project.info_.base_model!r}, not "
+                    f"{cfg.base_model!r}: {base} would score the wrong base. Use the project's base model, another "
+                    "project, or eval_base=False without replay rows"
+                )
+            base_metrics = evaluate_model(client, base, eval_rows) if cfg.eval_base and eval_datums else None
+            replay = _replay_datums(client, cfg, base)
             with project.runs.create(
                 cfg.base_model,
                 rank=cfg.rank,
@@ -158,7 +171,7 @@ def train(
                 config={k: v for k, v in asdict(cfg).items() if k != "replay_rows"},
             ) as run:  # closed on success and on any error, so its GPU is released
                 if base_metrics is not None:
-                    run.log_eval(cfg.base_model, base_metrics, step=0, name="heldout")
+                    run.log_eval(base, base_metrics, step=0, name="heldout")
                 total = math.ceil(len(train_datums) / cfg.batch_size) * cfg.epochs
                 result = SupervisedResult(run.id, "", base_metrics)
 

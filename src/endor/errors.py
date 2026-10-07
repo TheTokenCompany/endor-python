@@ -4,7 +4,8 @@
       APIError (status, code, param, message, body, headers, endpoint, request_id)
         BadRequestError 400 · AuthenticationError 401 · InsufficientBalanceError 402 · PermissionDeniedError 403
         NotFoundError 404
-        ConflictError 409 · PayloadTooLargeError 413 · UnprocessableEntityError 422
+        ConflictError 409 (LimitReachedError, NoBaseModelError) · PayloadTooLargeError 413
+        UnprocessableEntityError 422 (ModelRequiresProjectError)
         RateLimitError 429 (retry_after) · OverloadedError 529 · InternalServerError 5xx
         ResponseValidationError: a 2xx whose body does not have the expected shape
       APIConnectionError: no HTTP response
@@ -34,8 +35,11 @@ __all__ = [
     "PermissionDeniedError",
     "NotFoundError",
     "ConflictError",
+    "LimitReachedError",
+    "NoBaseModelError",
     "PayloadTooLargeError",
     "UnprocessableEntityError",
+    "ModelRequiresProjectError",
     "RateLimitError",
     "OverloadedError",
     "InternalServerError",
@@ -128,7 +132,19 @@ class NotFoundError(APIError):
 
 
 class ConflictError(APIError):
-    """409: a name is taken, a run is closed, or a sequence number is out of order (see ``code``)."""
+    """409: a name is taken, a run is closed, a sequence number is out of order, or a limit is reached (see
+    ``code``)."""
+
+
+class LimitReachedError(ConflictError):
+    """409 ``limit_reached``: a count limit of the org or project is reached, for example 7 projects, 4 open runs,
+    50 models in a project or 3 kept-warm models in a project. The message names the limit and its value
+    (``client.whoami().limits`` has them all). Free one first: waiting doesn't help, so it is never retried."""
+
+
+class NoBaseModelError(ConflictError):
+    """409 ``no_base_model``: the project has no base model yet. Set one with
+    ``project.update(base_model=...)`` (or ``projects.create(..., base_model=...)``), or start a run in it."""
 
 
 class PayloadTooLargeError(APIError):
@@ -139,8 +155,13 @@ class UnprocessableEntityError(APIError):
     """422: validation failed; ``param`` or the message names the field or item."""
 
 
+class ModelRequiresProjectError(UnprocessableEntityError):
+    """422 ``model_requires_project``: ``model`` is a bare base model id. Every decision names a project:
+    ``"<project>"`` (its live model), ``"<project>/base"`` (its base model) or ``"<project>/<name>"``."""
+
+
 class RateLimitError(APIError):
-    """429: rate limited, queue full or quota exceeded (see ``code``). Honors ``Retry-After``."""
+    """429: rate limited or queue full (see ``code``). Honors ``Retry-After``."""
 
     def __init__(
         self,
@@ -233,12 +254,22 @@ _STATUS_ERRORS: dict[int, type[APIError]] = {
 }
 
 
+# Error codes with their own class, whatever the status.
+_CODE_ERRORS: dict[str, type[APIError]] = {
+    "insufficient_balance": InsufficientBalanceError,
+    "limit_reached": LimitReachedError,
+    "no_base_model": NoBaseModelError,
+    "model_requires_project": ModelRequiresProjectError,
+}
+
+
 def api_error(status: int, body: Any, headers: httpx.Headers, endpoint: str | None = None) -> APIError:
     """The exception for an HTTP error response."""
     err = body.get("error") if isinstance(body, dict) else None
-    if isinstance(err, dict) and err.get("code") == "insufficient_balance":
-        return InsufficientBalanceError(status, body, headers, endpoint=endpoint)
-    cls = _STATUS_ERRORS.get(status, InternalServerError if status >= 500 else APIError)
+    code = err.get("code") if isinstance(err, dict) else None
+    cls = _CODE_ERRORS.get(code) if isinstance(code, str) else None
+    if cls is None:
+        cls = _STATUS_ERRORS.get(status, InternalServerError if status >= 500 else APIError)
     return cls(status, body, headers, endpoint=endpoint)
 
 

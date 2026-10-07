@@ -29,7 +29,8 @@ def test_whoami_and_base_models(capsys: pytest.CaptureFixture[str], client: Endo
 
 def test_projects_datasets_runs_models(capsys: pytest.CaptureFixture[str], client: EndorClient, tmp_path: Path) -> None:
     name = unique("cli")
-    assert run_json(capsys, client, "projects", "create", name)["name"] == name  # type: ignore[index]
+    created = run_json(capsys, client, "projects", "create", name, "--base-model", "jev-9b")
+    assert created["name"] == name and created["base_model"] == "jev-9b"  # type: ignore[index]
     assert name in [p["name"] for p in run_json(capsys, client, "projects", "list")]  # type: ignore[union-attr]
     f = tmp_path / "rows.jsonl"
     endor.data.save_rows(f, rows(4))
@@ -46,9 +47,10 @@ def test_projects_datasets_runs_models(capsys: pytest.CaptureFixture[str], clien
     assert run_json(capsys, client, "models", "set-ttl", f"{name}/v1", "none")["expires_at"] is None  # type: ignore[index]
     ev = run_json(capsys, client, "eval", name, f"{name}/v1", "train")
     assert ev["status"] == "completed"  # type: ignore[index]
+    assert run_json(capsys, client, "eval", name, "base", "train")["model"] == "base"  # type: ignore[index]
     assert run_json(capsys, client, "runs", "close", r.id)["status"] in ("closing", "closed")  # type: ignore[index]
     run(capsys, client, "models", "delete", f"{name}/v1")
-    assert run_json(capsys, client, "models", "list", name) == []
+    assert [m["name"] for m in run_json(capsys, client, "models", "list", name)] == ["base"]  # type: ignore[union-attr]
     run(capsys, client, "datasets", "delete", name, "train")
     run(capsys, client, "projects", "delete", name)
     assert name not in [p["name"] for p in run_json(capsys, client, "projects", "list")]  # type: ignore[union-attr]

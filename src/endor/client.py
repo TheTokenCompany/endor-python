@@ -1,9 +1,12 @@
 """EndorClient: decisions, plus fine-tuning.
 
     client = endor.EndorClient()                               # ENDOR_API_KEY from the environment
-    client.system_one(state, questions, model="tickets/v1")    # a decision
+    client.system_one(state, questions, model="tickets")       # a decision with the project's live model
     client.models.list()                                       # base models and your saved models
-    project = client.projects.get_or_create("tickets")         # fine-tuning: datasets, runs, models
+    project = client.projects.get_or_create("tickets", base_model="decider-2b")   # datasets, runs, models
+
+``model`` always names a project: ``"<project>"`` (its live model), ``"<project>/base"`` (its base model) or
+``"<project>/<name>"`` (one saved model). A bare base model id is refused (``ModelRequiresProjectError``).
 
 Environment: ``ENDOR_API_KEY``, ``ENDOR_BASE_URL``, ``ENDOR_DEFAULT_MODEL``, ``ENDOR_LOG_LEVEL``.
 """
@@ -34,10 +37,9 @@ from .types import (
     question_dict,
 )
 
-__all__ = ["EndorClient", "Models", "DEFAULT_BASE_URL", "DEFAULT_MODEL"]
+__all__ = ["EndorClient", "Models", "DEFAULT_BASE_URL"]
 
 DEFAULT_BASE_URL = C.DEFAULT_BASE_URL
-DEFAULT_MODEL = C.DEFAULT_MODEL
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
@@ -65,7 +67,8 @@ class EndorClient:
 
         Args:
             api_key: Your API key (``edk_...``). Defaults to ``ENDOR_API_KEY``.
-            model: Default model for ``system_one``. Defaults to ``ENDOR_DEFAULT_MODEL``, then the current base model.
+            model: Default model for ``system_one``, for example ``"tickets"``. Defaults to ``ENDOR_DEFAULT_MODEL``;
+                without either, each ``system_one`` call must pass ``model``.
             retry: A ``RetryPolicy``; ``RetryPolicy(max_retries=0)`` disables retries.
             timeout: Seconds per HTTP request. A future poll waits up to 25 s on the server on top of this.
             headers: Extra headers for every request.
@@ -89,7 +92,7 @@ class EndorClient:
             raise EndorError("the API key must be printable ASCII without whitespace")
         self.api_key = key
         self.base_url = (base_url or _env(C.BASE_URL_ENV) or DEFAULT_BASE_URL).rstrip("/")
-        self.default_model = model or _env(C.DEFAULT_MODEL_ENV) or DEFAULT_MODEL
+        self.default_model: str | None = model or _env(C.DEFAULT_MODEL_ENV)
         self.timeout = C.DEFAULT_TIMEOUT if timeout is None else float(timeout)
         if self.timeout <= 0:
             raise ValueError("timeout must be positive")
@@ -160,7 +163,8 @@ class EndorClient:
         Args:
             state: Text, a JSON object or an array: the data the decisions are about.
             questions: 1 to 64 named questions (``Noul``, ``Choice``, ``Score`` or dicts in the same shape).
-            model: A base model id or one of your models, ``"<project>/<name>"``. Defaults to the client's model.
+            model: ``"<project>"`` (the project's live model), ``"<project>/base"`` (its base model) or
+                ``"<project>/<name>"``. Defaults to the client's model.
             retry, timeout: Overrides for this call.
             extra_headers: Extra request headers.
             extra_body: Extra top-level request fields, merged last.
@@ -171,8 +175,10 @@ class EndorClient:
             an instance of ``response_model``.
 
         Raises:
-            APIError: ``NotFoundError`` for an unknown model, ``UnprocessableEntityError`` naming a bad question,
-                ``RateLimitError`` and ``OverloadedError`` when told to wait.
+            EndorError: No ``model`` was given and the client has no default model.
+            APIError: ``NotFoundError`` for an unknown model, ``ModelRequiresProjectError`` for a bare base model
+                id, ``NoBaseModelError`` for a project without a base model, ``UnprocessableEntityError`` naming a
+                bad question, ``RateLimitError`` and ``OverloadedError`` when told to wait.
         """
         body = self._decision_body(state, questions, model, extra_body)
         raw = self._t.request(
@@ -222,8 +228,14 @@ class EndorClient:
             raise ValueError("at least one question is required")
         if len(questions) > C.MAX_QUESTIONS_PER_REQUEST:
             raise ValueError(f"at most {C.MAX_QUESTIONS_PER_REQUEST} questions per request")
+        model = model or self.default_model
+        if not model and not (extra_body and extra_body.get("model")):
+            raise EndorError(
+                'no model: pass model="<project>" (its live model), "<project>/base" or "<project>/<name>", '
+                f"or set a default with EndorClient(model=...) or {C.DEFAULT_MODEL_ENV}"
+            )
         body: dict[str, Any] = {
-            "model": model or self.default_model,
+            "model": model,
             "state": state,
             "questions": {name: question_dict(q) for name, q in questions.items()},
         }

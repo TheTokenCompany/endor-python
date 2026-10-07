@@ -26,6 +26,27 @@ def test_supervised_train(client: EndorClient, fake: FakeEndor) -> None:
     lrs = [r.body["adam_params"]["learning_rate"] for r in fake.requests if r.path.endswith("/optim_step")]
     assert len(lrs) == 9 and lrs[0] < lrs[1] and lrs[-1] < lrs[1]
     assert fake.models[r.model]["step"] == 9
+    assert project.info_.base_model == cfg.base_model  # created with the run's base model
+    base_calls = [x.body["model"] for x in fake.requests if x.path == "/v1/systemone"]
+    assert base_calls and set(base_calls) == {f"{cfg.project}/base"}  # the baseline goes through the project
+    assert {e.model for e in evals} >= {f"{cfg.project}/base"}
+
+
+def test_supervised_sets_the_base_of_a_project_without_one(client: EndorClient) -> None:
+    name = client.projects.create(unique("sl")).name
+    cfg = SupervisedConfig(project=name, base_model="jev-9b", batch_size=8, model_name="v1")
+    supervised.train(cfg, rows(10), eval_rows=rows(2), client=client)
+    assert client.projects.get(name).info_.base_model == "jev-9b"
+
+
+def test_supervised_refuses_another_projects_base(client: EndorClient, fake: FakeEndor) -> None:
+    name = client.projects.create(unique("sl"), base_model="decider-2b").name
+    cfg = SupervisedConfig(project=name, base_model="jev-9b", batch_size=8)
+    with pytest.raises(ValueError, match="decider-2b"):
+        supervised.train(cfg, rows(10), eval_rows=rows(2), client=client)
+    assert not fake.runs  # before any GPU is requested
+    cfg.eval_base = False  # without the baseline, the run may use another base
+    supervised.train(cfg, rows(10), eval_rows=rows(2), client=client)
 
 
 def test_supervised_with_eval_rows_and_no_base(client: EndorClient) -> None:
@@ -70,7 +91,8 @@ def test_lr_schedule() -> None:
 
 
 def test_evaluate_model(client: EndorClient) -> None:
-    m = supervised.evaluate_model(client, "jev-9b", rows(3))
+    name = client.projects.create(unique("ev"), base_model="jev-9b").name
+    m = supervised.evaluate_model(client, f"{name}/base", rows(3))
     assert m["n"] == 6 and m["accuracy"] in (0.0, 0.5, 1.0) or 0 <= m["accuracy"] <= 1
 
 

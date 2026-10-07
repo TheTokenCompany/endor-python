@@ -504,6 +504,14 @@ class ContinuousLearning(_View):
 class ProjectInfo(_View):
     name: str
     description: str | None = None
+    base_model: str | None = None
+    """The project's base model (``"<project>/base"``); None until set or the first run."""
+    live_model: str | None = None
+    """What ``"<project>"`` serves now: ``"<project>/base"`` or ``"<project>/<name>"``; None without a base model."""
+    auto_promote: bool = True
+    """Each new continuous-learning model becomes the live model. Promoting a model by hand turns it off."""
+    base_keep_warm: bool = False
+    """The base model's keep warm; it takes one of the project's keep-warm slots."""
     n_datasets: int = 0
     n_runs: int = 0
     n_models: int = 0
@@ -515,6 +523,8 @@ class RunInfo(_View):
     id: str
     project: str
     name: str | None = None
+    source: str = "sdk"
+    """Who trains it: ``sdk`` (you) or ``continuous`` (Endor's continuous learning)."""
     base_model: str
     contract: str | None = None
     lora: LoraInfo = Field(default_factory=LoraInfo)
@@ -539,6 +549,12 @@ class ModelInfo(_View):
     """``"<project>/<name>"``: pass it as ``model`` to ``system_one``."""
     project: str
     name: str
+    """``base`` for the project's base model (listed first)."""
+    source: str = "sdk"
+    """``base`` (the project's base model, no adapter), ``sdk`` (saved by your run) or ``continuous`` (saved by
+    continuous learning, named ``YYYY-MM-DD-N``)."""
+    live: bool = False
+    """Whether ``"<project>"`` serves this model."""
     training_run_id: str | None = None
     base_model: str
     contract: str | None = None
@@ -627,6 +643,9 @@ class WhoAmI(_View):
     user_id: str | None = None
     key_id: str | None = None
     key_prefix: str | None = None
+    limits: dict[str, float] = Field(default_factory=dict)
+    """The org's limits by name, for example ``max_projects_per_org`` or ``max_active_runs``. A count limit raises
+    ``LimitReachedError`` once reached; a rate (``decisions_per_second``, ``..._per_minute``) ``RateLimitError``."""
 
 
 class FutureInfo(_View):
