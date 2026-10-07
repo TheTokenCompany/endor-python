@@ -293,29 +293,39 @@ def answer_probabilities(answer: Answer) -> dict[str, float]:
 
 
 class BaseModelInfo(BaseModel):
-    """A base decision model you can decide with and fine-tune."""
+    """A base decision model you can fine-tune and decide with, through a project (``"<project>/base"``)."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     id: str
     description: str | None = None
     release_date: str | None = None
+    params: str | None = None
+    """The model size, for example ``"26B (4B active)"``."""
     max_options: int | None = None
     """The most options a Choice (or levels a Score) may have on this base."""
     trainable: bool = True
     default_rank: int = 16
+    max_rank: int | None = None
     lora_targets: list[str] = Field(default_factory=list)
     contract: str | None = None
+    """How a decision becomes the model's input and which outputs give the probabilities."""
+    contract_version: int | None = None
     hf_repo: str | None = None
+    """The Hugging Face repository of the weights; a downloaded adapter is a PEFT LoRA for it."""
+    hf_revision: str | None = None
+    """The pinned commit of ``hf_repo`` that Endor loads."""
     trainer_gpu: str | None = None
     price_per_mtok_decide: float | None = None
     """USD per 1M decision input tokens on this base (None while unpriced)."""
+    price_per_mtok_decide_continuous_learning: float | None = None
+    """The same, for a project with continuous learning on."""
     price_per_gpu_hour: float | None = None
     """USD per training GPU-hour, from when a run's GPU is requested until it is released (None while unpriced)."""
 
 
 class ModelMetadata(BaseModel):
-    """One entry of ``client.models.list()``: a base model or one of your saved models."""
+    """One entry of ``client.models.list()``: a name you can pass as ``model``."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -324,13 +334,18 @@ class ModelMetadata(BaseModel):
     description: str = ""
     release_date: str | None = None
     endor: dict[str, Any] = Field(default_factory=dict)
-    """Endor's metadata: ``kind`` (``base`` or ``model``), and for saved models ``project``, ``base_model``,
-    ``training_run_id``, ``step`` and ``parent_model``."""
+    """Endor's metadata: ``kind``, ``project`` and ``base_model``; for ``live`` also ``model`` (what ``<project>``
+    calls now), for ``base`` ``contract``, and for saved models ``source``, ``training_run_id``, ``step`` and
+    ``parent_model``."""
 
     @property
     def kind(self) -> str:
-        """``"base"`` or ``"model"``."""
-        return str(self.endor.get("kind") or ("model" if "/" in self.name else "base"))
+        """``"live"`` (``<project>``), ``"base"`` (``<project>/base``) or ``"model"`` (``<project>/<name>``)."""
+        if self.endor.get("kind"):
+            return str(self.endor["kind"])
+        if "/" not in self.name:
+            return "live"
+        return "base" if self.name.endswith("/base") else "model"
 
 
 class ListModelsResponse(BaseModel):

@@ -41,7 +41,7 @@ class SupervisedConfig:
     project: str
     """The project that gets the run and the model (created with ``base_model`` if missing; a project without a
     base model gets ``base_model``)."""
-    base_model: str = "pplx-decider-v1.1-27b"
+    base_model: str = "decider-2b"
     """The base model the run trains on. With ``eval_base`` or replay rows it must be the project's base model,
     which they call as ``"<project>/base"``."""
     model_name: str | None = None

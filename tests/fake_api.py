@@ -115,9 +115,11 @@ def label_target(q: dict, label: Any) -> dict:
         return {"label": "true" if label else "false"}
     elif q["type"] == "noul" and isinstance(label, (int, float)) and 0 <= label <= 1:
         probs = {"false": 1 - float(label), "true": float(label)}
-    elif q["type"] == "score" and isinstance(label, int) and not isinstance(label, bool):
-        if not 0 <= label < len(keys):
-            raise ValueError(f"level {label} out of range")
+    elif q["type"] == "score" and (
+        (isinstance(label, int) and not isinstance(label, bool)) or (isinstance(label, str) and label.isdigit())
+    ):
+        if str(label) not in keys:
+            raise ValueError(f"{str(label)!r} is not an option of this question")
         return {"label": str(label)}
     elif q["type"] == "choice" and isinstance(label, str):
         if label not in keys:
@@ -416,6 +418,8 @@ class FakeEndor:
             return 200, self.systemone(body)
         if p == ["models"] and m == "GET":
             return 200, self.list_models()
+        if p == ["base_models"] and m == "GET":
+            return 200, self.list_base_models()
         if p == ["whoami"] and m == "GET":
             return 200, {
                 "user_id": None,
@@ -495,6 +499,16 @@ class FakeEndor:
                     del self.models[k]
                 del self.projects[p[1]]
                 return 204, None
+        if len(p) == 3 and p[0] == "projects" and p[2] == "live" and m == "POST":
+            proj = self.project(p[1])
+            name = str(body.get("model", "")).removeprefix(f"{p[1]}/")
+            if name == BASE:
+                if proj["base_model"] is None:
+                    raise HTTPError(409, "no_base_model", f"Project {p[1]} has no base model yet.", "model")
+            elif not (f"{p[1]}/{name}" in self.models and self.models[f"{p[1]}/{name}"]["_ready"]):
+                raise HTTPError(404, "not_found", f"No model {p[1]}/{name}.", "name")
+            self.promote(p[1], name)
+            return 200, self.project_view(proj, self)
         if len(p) >= 3 and p[0] == "projects":
             project, sub = p[1], p[2]
             self.project(project)
@@ -667,21 +681,28 @@ class FakeEndor:
         }
 
     def list_models(self) -> dict:
-        items = [
-            {
-                "name": k,
-                "description": "base decision model",
-                "release_date": "2026-10-01",
-                "endor": {
-                    "kind": "base",
-                    "id": k,
-                    **v,
-                    "price_per_mtok_decide": 0.5,
-                    "price_per_gpu_hour": 3.0,
-                },
-            }
-            for k, v in BASE_MODELS.items()
-        ]
+        """GET /v1/models: the names a decision can send (`<project>`, `<project>/base`, `<project>/<name>`)."""
+        items: list[dict] = []
+        for name, p in sorted(self.projects.items()):
+            if p["base_model"] is None:
+                continue
+            serves = self.live_model(p) or f"{name}/{BASE}"
+            items.append(
+                {
+                    "name": name,
+                    "description": f"{name}: the project's live model, now {serves}.",
+                    "release_date": "2026-10-01",
+                    "endor": {"kind": "live", "project": name, "base_model": p["base_model"], "model": serves},
+                }
+            )
+            items.append(
+                {
+                    "name": f"{name}/{BASE}",
+                    "description": f"{name}: the base model {p['base_model']}.",
+                    "release_date": "2026-10-01",
+                    "endor": {"kind": "base", "project": name, "base_model": p["base_model"], "contract": "c"},
+                }
+            )
         items += [
             {
                 "name": m["id"],
@@ -701,6 +722,28 @@ class FakeEndor:
             if m["_ready"]
         ]
         return {"models": items}
+
+    def list_base_models(self) -> dict:
+        """GET /v1/base_models: the catalog."""
+        return {
+            "base_models": [
+                {
+                    "id": k,
+                    "params": "1B",
+                    "hf_repo": f"org/{k}",
+                    "hf_revision": "abc123",
+                    "contract": "c",
+                    "contract_version": 1,
+                    "max_rank": 64,
+                    "trainer_gpu": "H100",
+                    **v,
+                    "price_per_mtok_decide": 0.5,
+                    "price_per_mtok_decide_continuous_learning": 0.75,
+                    "price_per_gpu_hour": 3.0,
+                }
+                for k, v in BASE_MODELS.items()
+            ]
+        }
 
     # ------------------------------------------------------------------ projects, datasets
     def create_project(self, body: dict) -> dict:

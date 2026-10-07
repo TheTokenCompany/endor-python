@@ -2,7 +2,8 @@
 
     client = endor.EndorClient()                               # ENDOR_API_KEY from the environment
     client.system_one(state, questions, model="tickets")       # a decision with the project's live model
-    client.models.list()                                       # base models and your saved models
+    client.models.list()                                       # every name you can pass as model
+    client.base_models()                                       # the base models, with limits and prices
     project = client.projects.get_or_create("tickets", base_model="decider-2b")   # datasets, runs, models
 
 ``model`` always names a project: ``"<project>"`` (its live model), ``"<project>/base"`` (its base model) or
@@ -24,7 +25,7 @@ from pydantic import BaseModel, ValidationError
 from . import _constants as C
 from ._http import Transport
 from ._retry import RetryPolicy
-from .errors import EndorError, ResponseValidationError
+from .errors import EndorError, NotFoundError, ResponseValidationError
 from .projects import Projects
 from .types import (
     BaseModelInfo,
@@ -110,7 +111,7 @@ class EndorClient:
             async_transport=async_transport,
         )
         self.models = Models(self._t)
-        """``client.models.list()``: base models and your saved models."""
+        """``client.models.list()``: every name you can pass as ``model``."""
         self.projects = Projects(self._t, capture)
         """``client.projects``: create, fetch and list projects."""
 
@@ -244,8 +245,13 @@ class EndorClient:
         return body
 
     def base_models(self) -> list[BaseModelInfo]:
-        """The base models you can decide with and fine-tune, with their option limits and prices."""
-        r = self._t.request("GET", "/v1/models", method_name="client.base_models")
+        """The base models you can fine-tune and decide with (through a project, as ``"<project>/base"``): option
+        limits, ``hf_repo``, ``contract`` and prices (``GET /v1/base_models``)."""
+        try:
+            r = self._t.request("GET", "/v1/base_models", method_name="client.base_models")
+            return [_parse(BaseModelInfo, b, "GET /v1/base_models") for b in r.get("base_models", [])]
+        except NotFoundError:  # an API from before /v1/base_models: the catalog was part of /v1/models
+            r = self._t.request("GET", "/v1/models", method_name="client.base_models")
         out = []
         for m in r.get("models", []):
             meta = m.get("endor") or {}
@@ -314,7 +320,9 @@ class Models:
         timeout: float | None = None,
         extra_headers: Mapping[str, str] | None = None,
     ) -> ListModelsResponse:
-        """Every model you can pass as ``model``: the base models and your saved, unexpired models."""
+        """Every name you can pass as ``model``: ``"<project>"`` (its live model) and ``"<project>/base"`` for each
+        project with a base model, then ``"<project>/<name>"`` for each saved, unexpired model. ``.kind`` is
+        ``live``, ``base`` or ``model``. The base model catalog is ``client.base_models()``."""
         raw = self._t.request(
             "GET",
             "/v1/models",

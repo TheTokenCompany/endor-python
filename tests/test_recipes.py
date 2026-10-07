@@ -26,7 +26,7 @@ def test_supervised_train(client: EndorClient, fake: FakeEndor) -> None:
     lrs = [r.body["adam_params"]["learning_rate"] for r in fake.requests if r.path.endswith("/optim_step")]
     assert len(lrs) == 9 and lrs[0] < lrs[1] and lrs[-1] < lrs[1]
     assert fake.models[r.model]["step"] == 9
-    assert project.info_.base_model == cfg.base_model  # created with the run's base model
+    assert project.info_.base_model == cfg.base_model == "decider-2b"  # the default, set on the new project
     base_calls = [x.body["model"] for x in fake.requests if x.path == "/v1/systemone"]
     assert base_calls and set(base_calls) == {f"{cfg.project}/base"}  # the baseline goes through the project
     assert {e.model for e in evals} >= {f"{cfg.project}/base"}

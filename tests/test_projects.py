@@ -348,6 +348,18 @@ class TestModels:
         with pytest.raises(UnprocessableEntityError):
             project.models.delete("base")
 
+    def test_set_live(self, project: endor.Project, client: endor.EndorClient) -> None:
+        with project.runs.create("jev-9b") as run:
+            run.save_checkpoint("v1").result()
+        info = project.set_live("v1")
+        assert info.live_model == f"{project.name}/v1" and not info.auto_promote and project.info_ is info
+        assert client.system_one("x", {"u": {"type": "noul"}}, model=project.name).model == f"{project.name}/v1"
+        assert project.set_live(f"{project.name}/base").live_model == f"{project.name}/base"
+        with pytest.raises(NotFoundError):
+            project.set_live("v9")
+        with pytest.raises(NoBaseModelError):
+            client.projects.create(project.name + "-empty").set_live("base")
+
     def test_keep_warm_limit(self, project: endor.Project) -> None:
         with project.runs.create("gliner2.5-decide") as run:  # sets the base, kept warm: one of the 3 slots
             for i in range(3):

@@ -5,7 +5,22 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Matches the current API (org API keys, GPU-hour billing, balances).
+## [0.1.1] - 2026-10-07
+
+- `project.set_live(model)`: make a saved model (or `"base"`) the live model, what `model="<project>"` answers with,
+  through the new `POST /v1/projects/{project}/live`. It turns `auto_promote` off, as Make live on the dashboard does.
+- `client.models.list()` lists the names you can pass as `model`: `"<project>"` and `"<project>/base"` for each
+  project with a base model, then `"<project>/<name>"`. `ModelMetadata.kind` is `live`, `base` or `model`.
+- `client.base_models()` reads the new `GET /v1/base_models` (falling back to `/v1/models` on an older API).
+  `BaseModelInfo` gains `params`, `hf_revision`, `contract_version`, `max_rank` and
+  `price_per_mtok_decide_continuous_learning`.
+- `SupervisedConfig.base_model` defaults to `decider-2b` (was `pplx-decider-v1.1-27b`).
+- Score labels also take the option id: `"2"` as well as `2`.
+- Docs: `ENDOR_BASE_URL` for staging, continuous learning marked as coming soon, GPU start-up usually under a minute.
+
+## [0.1.0] - 2026-10-06
+
+First release. Matches the current API (org API keys, GPU-hour billing, balances).
 
 - Every decision names a project: `model` is `"<project>"` (its live model), `"<project>/base"` (its base model) or
   `"<project>/<name>"`. A bare base model id raises `ModelRequiresProjectError` (422 `model_requires_project`), a
@@ -54,9 +69,6 @@ Matches the current API (org API keys, GPU-hour billing, balances).
   existing `X-Endor-SDK`, `X-Endor-SDK-Version`, `X-Endor-Runtime` and `X-Endor-SDK-Interface` headers.
 - `usage()` takes datetimes without a timezone as UTC.
 
-## [0.1.0] - 2026-10-06
-
-First release.
 
 - `EndorClient`: `system_one` decisions (sync and async), the model catalog, `whoami` and `usage`.
 - Projects with datasets, runs, models and evaluations.

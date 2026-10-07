@@ -4,6 +4,7 @@ project = client.projects.get_or_create("tickets", base_model="decider-2b")
 project.datasets.upload("train", rows)
 run = project.runs.create(base_model="decider-2b")
 project.models.list()                      # "tickets/base", then every saved model: "tickets/<name>"
+project.set_live("v1")                     # model="tickets" now answers with "tickets/v1"
 project.evaluate("base", "heldout").result()   # names resolve in the project: "base" is "tickets/base"
 """
 
@@ -125,6 +126,18 @@ class Project:
         )
         return self.info_
 
+    def set_live(self, model: str) -> ProjectInfo:
+        """Make ``model`` the live model: what ``model="<project>"`` answers with. ``model`` is a saved model's name,
+        ``"<project>/<name>"``, or ``"base"`` for the project's base model. Like Make live on the dashboard, this turns
+        ``auto_promote`` off, so a new continuous-learning version doesn't replace your choice. Raises
+        ``NotFoundError`` for an unknown model and ``NoBaseModelError`` for ``"base"`` without a base model."""
+        self.info_ = ProjectInfo.model_validate(
+            self._t.request(
+                "POST", f"/v1/projects/{self.name}/live", json={"model": model}, method_name="project.set_live"
+            )
+        )
+        return self.info_
+
     def update(
         self,
         *,
@@ -138,7 +151,8 @@ class Project:
 
         - ``base_model``: the project's base model. A different base makes ``"<project>"`` serve the new base
           again, and starts continuous learning again from scratch on it; models saved so far stay in the project.
-        - ``auto_promote``: each new continuous-learning model becomes the live model.
+        - ``auto_promote``: each new continuous-learning version becomes the live model (never a model saved from
+          the SDK; ``set_live`` turns it off).
         - ``base_keep_warm``: keep the base model warm. It takes one of the project's keep-warm slots
           (``LimitReachedError`` when they are full; ``NoBaseModelError`` without a base model).
         - ``continuous_learning``: ``{"enabled": True}``; ``{"enabled": False}`` pauses it."""
@@ -165,10 +179,13 @@ class Project:
     def evaluate(self, model: str, dataset: str, run_id: str | None = None) -> APIFuture[Evaluation]:
         """Score a model on one of this project's datasets, server-side. ``model`` is ``"base"`` (this project's
         base model), a model name of this project, this project's name (its live model) or a full model id
-        (``"<project>"``, ``"<project>/base"``, ``"<project>/<name>"``). A bare base model id is refused.
+        (``"<project>"``, ``"<project>/base"``, ``"<project>/<name>"``). A bare base model id is refused. The
+        evaluation records the full id of the model that answered: ``"base"`` becomes ``"<project>/base"``.
 
-        The result's ``results`` has accuracy, NLL, Brier, ECE and selective accuracy overall, per question type and
-        per question. With ``run_id``, the evaluation appears on that run's page.
+        The result's ``results`` has ``n``, then ``overall``, ``by_type`` and ``by_question``, each with accuracy,
+        NLL, Brier, ECE, mean confidence and ``selective`` (``{"0.5": {"accuracy", "coverage"}, ...}`` for the
+        thresholds 0.5, 0.7, 0.9 and 0.95), and ``rows_url``, a link to every scored question that expires after 1
+        hour. With ``run_id``, the evaluation appears on that run's page.
         """
         body = {"model": model, "dataset": dataset, "training_run_id": run_id}
         r = self._t.request(
@@ -284,7 +301,7 @@ class Runs:
         ``from_model`` they are inherited from the saved model, and only the ones you pass are sent (a value that
         conflicts with the model is a 422).
 
-        Provisioning a trainer can take minutes, and the GPU is billed from the moment it is requested. With
+        Provisioning a trainer usually takes under a minute, and the GPU is billed from the moment it is requested. With
         ``wait=True`` this blocks until the run is ready and logs progress on the ``endor`` logger; if the wait is
         interrupted (Ctrl-C, an error) the run is closed so its GPU is released. With ``wait=False`` it returns at
         once and ``run.ready`` is the future.
