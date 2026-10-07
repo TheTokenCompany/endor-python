@@ -5,6 +5,11 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-07
+
+- A custom project may be created without `base_model`: its first `runs.create(base_model=...)` sets it, for good.
+  Managed projects still need it at creation.
+
 ## [0.2.1] - 2026-10-07
 
 - `WhoAmI` no longer has `key_prefix`: the API stores only a hash of each key.

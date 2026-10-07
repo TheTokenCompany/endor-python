@@ -54,16 +54,19 @@ class Projects:
         name: str,
         description: str | None = None,
         *,
-        base_model: str,
+        base_model: str | None = None,
         kind: ProjectKind = "custom",
     ) -> Project:
         """A new project. Names are lowercase, ``[a-z0-9._-]``, up to 63 characters, and permanent (they are part
         of every model id). Raises ``ConflictError`` if you already have one with that name, and
         ``LimitReachedError`` (a ``ConflictError``) when the org has as many projects as it may.
 
-        ``base_model`` (for example ``"decider-2b"``) is the project's base model: ``model="<name>"`` answers with
-        it at once. ``kind`` is ``"custom"`` (you train models with the SDK) or ``"managed"`` (Endor trains new
-        versions from the project's decisions; its decisions cost 50% more). Neither can change later."""
+        ``kind`` is ``"custom"`` (you train models with the SDK) or ``"managed"`` (Endor trains new versions from the
+        project's decisions; its decisions cost 50% more). ``base_model`` (for example ``"decider-2b"``) is the
+        project's base model, and ``model="<name>"`` answers with it at once. A managed project needs it; a custom
+        project may leave it out, and its first ``runs.create(base_model=...)`` sets it. Neither can change later."""
+        if kind == "managed" and base_model is None:
+            raise ValueError("a managed project needs a base_model")
         body: dict[str, Any] = {"name": name, "description": description, "kind": kind, "base_model": base_model}
         r = self._t.request("POST", "/v1/projects", json=body, method_name="projects.create", idempotent=True)
         return Project(self._t, r, self._capture)
@@ -79,17 +82,19 @@ class Projects:
         name: str,
         description: str | None = None,
         *,
-        base_model: str,
+        base_model: str | None = None,
         kind: ProjectKind = "custom",
     ) -> Project:
         """The project called ``name``, created if missing (with these settings). Safe to call at the top of every
         script; an existing project's description is left as it is. Raises ``ValueError`` if the existing project
-        has another ``kind`` or ``base_model``: neither can change, so use another project name."""
+        has another ``kind``, or another ``base_model`` once both are set: neither can change, so use another project
+        name."""
         try:
             p = self.get(name)
         except NotFoundError:
             return self.create(name, description, base_model=base_model, kind=kind)
-        if p.info_.kind != kind or p.info_.base_model != base_model:
+        other_base = base_model is not None and p.info_.base_model is not None and p.info_.base_model != base_model
+        if p.info_.kind != kind or other_base:
             raise ValueError(
                 f"project {name!r} exists as a {p.info_.kind} project on {p.info_.base_model}, not a {kind} project "
                 f"on {base_model}; a project's kind and base model can't change, so pick another name"
