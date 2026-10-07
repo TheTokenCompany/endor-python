@@ -169,8 +169,8 @@ class Run:
         """Save the adapter as the project model ``"<project>/<name>"``. The future resolves to that id, which
         ``client.system_one(model=...)`` accepts at once.
 
-        ``name``: lowercase letters, digits, ``.``, ``_`` and ``-``, up to 63 characters, starting with a letter
-        (names starting with a digit are continuous learning's), and not ``base`` (the project's base model).
+        ``name``: lowercase letters, digits, ``.``, ``_`` and ``-``, up to 63 characters, starting with a letter or
+        digit, and not ``base`` (the project's base model).
         Raises ``ValueError`` otherwise, before anything is sent.
 
         ``include_optimizer`` also stores the optimizer state, so
@@ -402,8 +402,8 @@ def check_model_name(name: str) -> None:
         raise ValueError('"base" is reserved for the project\'s base model; pick another model name')
     if not isinstance(name, str) or not _MODEL_NAME.fullmatch(name):
         raise ValueError(
-            f"bad model name {name!r}: start with a letter (a-z), then lowercase letters, digits, '.', '_' or '-', "
-            "63 characters at most (names starting with a digit are reserved for continuous learning)"
+            f"bad model name {name!r}: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit, "
+            "63 characters at most"
         )
 
 

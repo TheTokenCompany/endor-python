@@ -40,8 +40,7 @@ API keys belong to an organization (`edk_...`, created in the dashboard); everyt
 
 ## Decisions
 
-Every decision goes through a project, which records it (for continuous learning, coming soon). Create one
-with a base model and it answers at once:
+Every decision goes through a project, which records it. Create one with a base model and it answers at once:
 
 ```python
 import endor
@@ -70,12 +69,11 @@ res.model, res.usage.input_tokens         # the model that answered, e.g. "ticke
 
 | `model` | The model that answers |
 |---|---|
-| `"tickets"` | the project's live model: its base model, until you make a saved model live with `project.set_live("v1")` (or Make live on the dashboard's Models tab) |
+| `"tickets"` | the project's live model. Custom project: its base model, until you make a saved model live with `project.set_live("v1")` (or Make live on the dashboard). Managed project: its newest version, or the base until there is one |
 | `"tickets/base"` | the project's base model, without an adapter |
 | `"tickets/v1"` | one saved model |
 
-A bare base model id such as `"decider-2b"` raises `ModelRequiresProjectError` (422 `model_requires_project`); a
-project without a base model raises `NoBaseModelError` (409 `no_base_model`). There is no default model: pass
+A bare base model id such as `"decider-2b"` raises `ModelRequiresProjectError` (422 `model_requires_project`). There is no default model: pass
 `model=` or set one with `EndorClient(model="tickets")` or `ENDOR_DEFAULT_MODEL`, else `system_one` raises
 `EndorError` before sending anything.
 
@@ -102,7 +100,8 @@ triage.department.choice, triage.urgent.noul
 **The catalog.** `client.models.list()` returns every name you can pass as `model` (`GET /v1/models`):
 `"<project>"` and `"<project>/base"` for each project with a base model, then `"<project>/<name>"` for each saved
 model (`.kind` is `live`, `base` or `model`). `client.base_models()` returns the base models (`GET /v1/base_models`)
-with their option limits, `hf_repo`, `contract` and prices (`price_per_mtok_decide`, `price_per_gpu_hour`). Call a
+with their option limits, `hf_repo`, `contract` and prices (`price_per_mtok_decide`,
+`price_per_mtok_decide_continuous_learning` for managed projects, `price_per_gpu_hour`). Call a
 base model through a project: `"<project>/base"`.
 
 **Async.** `await client.system_one_async(...)` and `await client.models.list_async()`; `async with EndorClient()`
@@ -110,44 +109,43 @@ closes the connections.
 
 ## Projects
 
-Everything you create lives in a **project**, keyed by its name. A project has a base model and holds datasets,
-runs, the models those runs save (named `<project>/<name>`), and evaluations.
+Everything you create lives in a **project**, keyed by its name. Each project has a **kind** and a **base model**,
+both set at creation and never changed:
+
+| | Custom (`kind="custom"`, the default) | Managed (`kind="managed"`) |
+|---|---|---|
+| Who trains | you, with the SDK | Endor, from the project's own decisions (coming soon) |
+| `"tickets"` serves | the model you make live with `set_live`, else the base | the newest version, else the base |
+| Datasets, runs, saves, evaluations | yes | no (`WrongProjectKindError`, 409 `wrong_project_kind`) |
+| Decision price | the base model's price | +50% (`price_per_mtok_decide_continuous_learning`), paused or not |
+
+A custom project holds datasets, runs, the models those runs save (named `<project>/<name>`), and evaluations:
 
 ```python
-project = client.projects.get_or_create("tickets", base_model="decider-2b")
+project = client.projects.get_or_create("tickets", base_model="decider-2b")    # kind="custom"
 project.datasets.upload("train", endor.data.load_rows("train.jsonl"))   # rows: see "Data format" below
 project.datasets.upload("heldout", endor.data.load_rows("heldout.jsonl"))
 baseline = project.evaluate("base", "heldout").result()   # names resolve in the project: "base" is "tickets/base"
 ```
 
-Without `base_model`, the project's first run sets it. `project.info_` has `base_model`, `live_model` (what
-`"tickets"` serves), `auto_promote` and `base_keep_warm`; change them with
-`project.update(base_model=..., auto_promote=..., base_keep_warm=...)`. `project.set_live("v1")` makes a saved model
-the live model (`"base"` goes back to the base model) and turns `auto_promote` off. A different base model makes `"tickets"`
-serve the new base again; saved models stay in the project. `project.models.list()` starts with the base model
-(`name == "base"`, `source == "base"`); each model has `source` (`base`, `sdk` or `continuous`) and `live`.
+`project.info_` has `kind`, `base_model`, `live_model` (what `"tickets"` serves) and `paused` (managed projects
+only). `project.update(description=...)` changes the description. `project.set_live("v1")` makes a saved model the
+live model (`"base"` goes back to the base model). `project.models.list()` starts with the base model
+(`name == "base"`); each model has `live`. Runs always train on the project's base model: `runs.create()` can leave
+`base_model` out, and another base raises `UnprocessableEntityError`. `get_or_create` raises `ValueError` when the
+existing project has another kind or base model.
 
-**Continuous learning** (coming soon). A project setting for Endor to keep fine-tuning a model on the project's
-decisions, from its base model. The setting exists today; the training pipeline behind it is not available yet.
+**Managed projects.** Endor trains new versions from the project's decisions, named `YYYY-MM-DD-N`, and
+`"tickets"` serves the newest one. The training pipeline is coming soon: until then a managed project serves its
+base model. Its decisions are billed at the managed price (50% more) from the start.
 
 ```python
-project = client.projects.create("tickets", base_model="decider-2b", continuous_learning={"enabled": True})
-project.update(continuous_learning={"enabled": False})            # pause it
-project.info_.continuous_learning   # ContinuousLearning(enabled, base_model, model): model is the newest one
+project = client.projects.create("triage", kind="managed", base_model="decider-2b")
+project.update(paused=True)    # stops learning; keeps serving its newest version, at the managed price
 ```
 
-Its versions will be named `YYYY-MM-DD-N` (`source == "continuous"`). With `auto_promote` on (the default), each new
-version becomes the live model, so `"tickets"` follows it. `auto_promote` never applies to models saved from the SDK;
-`set_live` (or Make live on the dashboard) turns it off.
-
-**Keep a model warm.** `project.models.set_keep_warm("v1")` keeps a model loaded on the decision servers, so even
-its first request answers without a load time (free; `set_keep_warm("v1", False)` releases it). At most 3 models can
-be kept warm in a project, the base model included while its keep warm is on (the default for a new project); a
-fourth raises `LimitReachedError` with `param == "keep_warm"`. The live model is always loaded and doesn't count.
-
-**Model names** you save start with a letter (`a-z`), then lowercase letters, digits, `.`, `_` or `-`, up to 63
-characters, and can't be `base`. Names starting with a digit are continuous learning's. `save_checkpoint` raises
-`ValueError` for any other name before sending it.
+**Model names** you save are lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit, up to 63
+characters, and can't be `base`. `save_checkpoint` raises `ValueError` for any other name before sending it.
 
 A dataset row is a decision request with labels:
 
@@ -354,7 +352,7 @@ stored. You can add your own headers with `EndorClient(headers=...)`; the ones a
 ```
 endor whoami
 endor base-models
-endor projects list | create NAME [--base-model BASE] | delete NAME
+endor projects list | create NAME --base-model BASE [--kind custom|managed] | delete NAME
 endor datasets list PROJECT | upload PROJECT NAME FILE | delete PROJECT NAME
 endor runs list PROJECT | show RUN_ID | close RUN_ID
 endor models list PROJECT | info MODEL | download MODEL [-o DIR] [--include-optimizer] | set-ttl MODEL SECONDS|none | delete MODEL
@@ -365,26 +363,26 @@ endor usage --start 2026-10-01 --end 2026-10-06 [--project P] [--csv]
 `MODEL` is `<project>/<name>` (`<project>/base` for the base model). Every command takes `-f json`. Training itself happens in Python. `endor runs close`
 frees a slot when a script left a run open. `usage --csv` columns are `hour, kind, project, base_model, model,
 training_run_id, input_tokens, gpu_seconds, continuous_learning, price_per_mtok, base_cost_usd,
-continuous_learning_cost_usd, cost_usd`.
+continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a managed project's decisions.
 
 ## Reference
 
 | Object | Members |
 |---|---|
 | `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(starting_on, ending_before, project=None)`, `close()`, `aclose()`, context managers |
-| `client.projects` | `create(name, description=None, continuous_learning=None, *, base_model=None)`, `get(name)`, `get_or_create(name, description=None, continuous_learning=None, *, base_model=None)`, `list(limit=None, offset=0)` (all pages) |
-| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `update(*, description=None, base_model=None, auto_promote=None, base_keep_warm=None, continuous_learning=None)`, `set_live(model)`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
+| `client.projects` | `create(name, description=None, *, base_model, kind="custom")`, `get(name)`, `get_or_create(name, description=None, *, base_model, kind="custom")`, `list(limit=None, offset=0)` (all pages) |
+| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `update(*, description=None, paused=None)`, `set_live(model)`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
 | `project.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
 | `project.runs` | `create(base_model=None, *, rank, alpha, seed, train_attn, train_mlp, train_readout, from_model, include_optimizer, name, tags, config, user_metadata, wait)` → `Run`, `get(run_id)`, `list(tag=None, limit=None, offset=0)` |
-| `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `set_keep_warm(model, on=True)`, `download(model, path, include_optimizer=False)`, `delete(model)`; `model` is a name or `<project>/<name>`, `base` for the base model |
+| `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `download(model, path, include_optimizer=False)`, `delete(model)`; `model` is a name or `<project>/<name>`, `base` for the base model |
 | `Run` | `.id`, `.project`, `.info_`, `.ready`, `.next_seq_id`, `forward(data, loss_fn)`, `forward_backward(data, loss_fn)`, `optim_step(adam_params=None, *, learning_rate=None)`, `save_checkpoint(name, *, include_optimizer, ttl_seconds, user_metadata)` → `APIFuture[str]`, the `_async` variants of those four, `close(*, wait=False, timeout=None)`, `close_async(...)`, `info()`, `log(metrics, step=None)`, `metrics(keys=None, since_step=None)`, `log_eval(model, results, *, step, name)`, sync and async context manager |
 | `APIFuture[T]` | `result(timeout=None)`, `await f`, `result_async(timeout)`, `done()`, `info`, `cancel()`, `cancel_async()`, `APIFuture.completed(value)`; `endor.gather(*futures)`, `endor.gather_async(*futures)` |
 | `endor.data` | `to_row`, `load_rows(path)`, `save_rows(path, rows)`, `label_target(question, label)`, `row_to_datums(row)`, `rows_to_datums(rows)`, `split(rows, holdout=0.1, seed=0)`, `batches(items, size, *, shuffle=True, seed=0)` |
 | `endor.metrics` | `decision_metrics(probs, targets, bins=10)` → `{n, accuracy, nll, brier, ece, mean_confidence, selective}` |
 | `endor.recipes.supervised` | `SupervisedConfig`, `SupervisedResult`, `train(cfg, rows, eval_rows=None, client=None)`, `evaluate_run(run, datums)`, `evaluate_model(client, model, rows)`, `lr_at(cfg, step, total)` |
 | `endor.recipes.distill` | `Teacher` (protocol), `DistillConfig(supervised, teacher, budget, seed)`, `label_with_teacher(rows, cfg)`, `distill(cfg, unlabeled_rows, eval_rows, client=None)` |
-| Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `ProjectInfo`, `ContinuousLearning`, `RunInfo`, `LoraInfo`, `ModelInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `DownloadedFile`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
-| Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError`, `ConflictError` (`LimitReachedError`, `NoBaseModelError`), `PayloadTooLargeError`, `UnprocessableEntityError` (`ModelRequiresProjectError`), `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
+| Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `ProjectInfo`, `RunInfo`, `LoraInfo`, `ModelInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `DownloadedFile`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
+| Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError`, `ConflictError` (`LimitReachedError`, `NoBaseModelError`, `WrongProjectKindError`), `PayloadTooLargeError`, `UnprocessableEntityError` (`ModelRequiresProjectError`), `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
 
 Every public member has a docstring with the details.
 

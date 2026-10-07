@@ -31,7 +31,6 @@ LIMITS: dict[str, float] = {
     "max_api_keys_per_org": 20,
     "max_active_runs": 4,
     "max_models_per_project": 50,
-    "max_keep_warm_per_project": 3,
     "max_dataset_rows": 50_000,
     "max_pending_ops": 64,
     "decisions_per_second": 50.0,
@@ -42,7 +41,6 @@ LIMITS: dict[str, float] = {
     "evaluations_per_minute": 30,
 }
 MAX_ACTIVE_RUNS = int(LIMITS["max_active_runs"])
-MAX_WARM_PER_PROJECT = int(LIMITS["max_keep_warm_per_project"])
 BASE = "base"  # "<project>/base": the project's base model
 BASE_MODELS: dict[str, dict[str, Any]] = {
     "pplx-decider-v1.1-27b": {
@@ -260,16 +258,15 @@ class FakeEndor:
         return {
             "name": p["name"],
             "description": p["description"],
+            "kind": p["kind"],
             "base_model": p["base_model"],
-            "base_keep_warm": p["base_keep_warm"],
             "live_model": None if p["base_model"] is None else (live or f"{p['name']}/{BASE}"),
-            "auto_promote": p["auto_promote"],
+            "paused": p["paused"] if p["kind"] == "managed" else None,
             "created_at": p["created_at"],
             "n_datasets": sum(1 for (pr, _) in self_.datasets if pr == p["name"]),
             "n_runs": sum(1 for r in self_.runs.values() if r["project"] == p["name"]),
             "n_models": sum(1 for m in self_.models.values() if m["project"] == p["name"])
             + (p["base_model"] is not None),
-            "continuous_learning": {**p["continuous_learning"], "base_model": p["base_model"]},
         }
 
     def live_model(self, p: dict) -> str | None:
@@ -278,42 +275,21 @@ class FakeEndor:
         return mid if mid in self.models and self.models[mid]["_ready"] else None
 
     def promote(self, project: str, name: str) -> None:
-        """What the dashboard's promote does: make a model (or the base) live and turn auto-promote off."""
-        p = self.project(project)
-        p["live_model"] = None if name == BASE else f"{project}/{name}"
-        p["auto_promote"] = False
+        """What set_live does: make a model (or the base) what "<project>" serves."""
+        self.project(project)["live_model"] = None if name == BASE else f"{project}/{name}"
 
-    def warm_slots(self, p: dict) -> list[str]:
-        warm = [m["id"] for m in self.models.values() if m["project"] == p["name"] and m["keep_warm"]]
-        return warm + ([f"{p['name']}/{BASE}"] if p["base_keep_warm"] else [])
-
-    def check_warm_slot(self, p: dict) -> None:
-        warm = self.warm_slots(p)
-        if len(warm) >= MAX_WARM_PER_PROJECT:
+    def require_custom(self, project: str, what: str) -> None:
+        """409 wrong_project_kind for a managed project (Endor trains it)."""
+        if self.project(project)["kind"] == "managed":
             raise HTTPError(
-                409,
-                "limit_reached",
-                f"Project {p['name']} keeps {len(warm)} models warm, the maximum of {MAX_WARM_PER_PROJECT}. "
-                "Turn one off first.",
-                "keep_warm",
+                409, "wrong_project_kind", f"Project {project} is managed: Endor trains it, so {what} isn't available."
             )
-
-    def set_base_model(self, p: dict, base: str, param: str = "base_model") -> None:
-        if base not in BASE_MODELS:
-            raise HTTPError(422, "unknown_model", f"Not a base model: {base!r}.", param)
-        if base != p["base_model"]:
-            first = p["base_model"] is None
-            p["base_model"], p["live_model"] = base, None
-            if first:
-                p["base_keep_warm"] = False
-                p["base_keep_warm"] = len(self.warm_slots(p)) < MAX_WARM_PER_PROJECT
 
     def base_model_view(self, p: dict) -> dict:
         return {
             "id": f"{p['name']}/{BASE}",
             "project": p["name"],
             "name": BASE,
-            "source": "base",
             "live": self.live_model(p) is None,
             "training_run_id": None,
             "base_model": p["base_model"],
@@ -321,7 +297,6 @@ class FakeEndor:
             "parent_model": None,
             "step": 0,
             "has_optimizer": False,
-            "keep_warm": p["base_keep_warm"],
             "size_bytes": None,
             "expires_at": None,
             "user_metadata": {},
@@ -475,19 +450,13 @@ class FakeEndor:
                 proj = self.project(p[1])
                 if "description" in body:
                     proj["description"] = body["description"]
-                if body.get("base_model") is not None:
-                    self.set_base_model(proj, body["base_model"])
-                if body.get("base_keep_warm") is not None:
-                    if body["base_keep_warm"] and not proj["base_keep_warm"]:
-                        if proj["base_model"] is None:
-                            raise HTTPError(
-                                409, "no_base_model", f"Project {proj['name']} has no base model yet.", "base_keep_warm"
-                            )
-                        self.check_warm_slot(proj)
-                    proj["base_keep_warm"] = body["base_keep_warm"]
-                if body.get("auto_promote") is not None:
-                    proj["auto_promote"] = body["auto_promote"]
-                self.set_continuous_learning(proj, body.get("continuous_learning"))
+                for field in ("kind", "base_model"):
+                    if field in body:
+                        raise HTTPError(422, "invalid_input", f"A project's {field} can't change.", field)
+                if body.get("paused") is not None:
+                    if proj["kind"] != "managed":
+                        raise HTTPError(409, "wrong_project_kind", f"Project {p[1]} is custom: only managed pause.")
+                    proj["paused"] = body["paused"]
                 return 200, self.project_view(proj, self)
             if m == "DELETE":
                 self.project(p[1])
@@ -501,6 +470,7 @@ class FakeEndor:
                 return 204, None
         if len(p) == 3 and p[0] == "projects" and p[2] == "live" and m == "POST":
             proj = self.project(p[1])
+            self.require_custom(p[1], "set_live")
             name = str(body.get("model", "")).removeprefix(f"{p[1]}/")
             if name == BASE:
                 if proj["base_model"] is None:
@@ -513,9 +483,12 @@ class FakeEndor:
             project, sub = p[1], p[2]
             self.project(project)
             if sub == "datasets":
+                if m == "POST":
+                    self.require_custom(project, "datasets")
                 return self.datasets_route(m, project, p[3:], body, params)
             if sub == "runs":
                 if m == "POST" and len(p) == 3:
+                    self.require_custom(project, "training runs")
                     return 201, self.create_run(project, body)
                 if m == "GET" and len(p) == 3:
                     items = sorted(
@@ -532,6 +505,7 @@ class FakeEndor:
                 return self.models_route(m, project, p[3:], body, params)
             if sub == "evaluations":
                 if m == "POST":
+                    self.require_custom(project, "evaluations")
                     return 202, self.create_evaluation(project, body)
                 if m == "GET":
                     items = sorted(
@@ -711,7 +685,6 @@ class FakeEndor:
                 "endor": {
                     "kind": "model",
                     "project": m["project"],
-                    "source": m["source"],
                     "base_model": m["base_model"],
                     "training_run_id": m["training_run_id"],
                     "step": m["step"],
@@ -759,39 +732,22 @@ class FakeEndor:
                 "limit_reached",
                 f"This organization has {len(self.projects)} projects, the maximum of {cap}. Delete one first.",
             )
+        kind = body.get("kind", "custom")
+        if kind not in ("custom", "managed"):
+            raise HTTPError(422, "invalid_input", "kind is custom or managed", "kind")
+        if body.get("base_model") not in BASE_MODELS:
+            raise HTTPError(422, "unknown_model", f"Not a base model: {body.get('base_model')!r}.", "base_model")
         p = {
             "name": name,
             "description": body.get("description"),
-            "base_model": None,
-            "base_keep_warm": False,
+            "kind": kind,
+            "base_model": body["base_model"],
             "live_model": None,
-            "auto_promote": True,
-            "continuous_learning": {"enabled": False, "base_model": None, "model": None},
+            "paused": False,
             "created_at": now().isoformat(),
         }
-        if body.get("base_model") is not None:
-            self.set_base_model(p, body["base_model"])
-        self.set_continuous_learning(p, body.get("continuous_learning"))
         self.projects[name] = p
         return self.project_view(p, self)
-
-    def set_continuous_learning(self, p: dict, cl: dict | None) -> None:
-        """``continuous_learning.base_model`` sets the project's base model, as ``base_model``."""
-        if cl is None:
-            return
-        cur = p["continuous_learning"]
-        if cl.get("base_model") is not None:
-            if cl["base_model"] != p["base_model"]:
-                cur["model"] = None  # a new base starts continuous learning from scratch
-            self.set_base_model(p, cl["base_model"], "continuous_learning.base_model")
-        cur["enabled"] = cl.get("enabled", cur["enabled"])
-        if cur["enabled"] and p["base_model"] is None:
-            raise HTTPError(
-                422,
-                "invalid_input",
-                "Pick a base model to enable continuous learning.",
-                "continuous_learning.base_model",
-            )
 
     def datasets_route(self, m: str, project: str, tail: list[str], body: Any, params: dict) -> tuple[int, Any]:
         if not tail and m == "POST":
@@ -865,7 +821,15 @@ class FakeEndor:
                 f"count): {', '.join(open_runs)}. Close one first: run.close() in the SDK or "
                 "`endor runs close <run_id>`.",
             )
-        base_model, parent = body.get("base_model"), None
+        proj = self.project(project)
+        if body.get("base_model") is not None and body["base_model"] != proj["base_model"]:
+            raise HTTPError(
+                422,
+                "invalid_input",
+                f"Project {project} trains on its base model {proj['base_model']}, not {body['base_model']}.",
+                "base_model",
+            )
+        base_model, parent = proj["base_model"], None
         if body.get("from_model"):
             mid = body["from_model"] if "/" in body["from_model"] else f"{project}/{body['from_model']}"
             m = self.models.get(mid)
@@ -897,16 +861,12 @@ class FakeEndor:
         lora = {**defaults, **(body.get("lora") or {})}
         if not 1 <= lora["rank"] <= 256:
             raise HTTPError(422, "invalid_input", "rank 1..256", "lora.rank")
-        proj = self.project(project)
-        if proj["base_model"] is None:  # a project without a base takes its first run's
-            self.set_base_model(proj, base_model)
         run_id = self.new_id("run")
         ready = self.future("provision_run", {"run_id": run_id}, pending=self.provisioning_polls)
         run = {
             "id": run_id,
             "project": project,
             "name": body.get("name"),
-            "source": "sdk",
             "base_model": base_model,
             "contract": "letters-16",
             "lora": lora,
@@ -1020,8 +980,6 @@ class FakeEndor:
             raise HTTPError(422, "invalid_input", "bad name", "name")
         if name == BASE:  # as the API's models.check_sdk_name
             raise HTTPError(422, "invalid_input", '"base" is reserved for the project\'s base model.', "name")
-        if not name[:1].isalpha():
-            raise HTTPError(422, "invalid_input", "Model names start with a letter.", "name")
         ttl = body.get("ttl_seconds")
         if ttl is not None and not 3600 <= ttl <= 10 * 365 * 86400:
             raise HTTPError(422, "invalid_input", "ttl 1h..10y", "ttl_seconds")
@@ -1040,14 +998,12 @@ class FakeEndor:
                 "id": mid,
                 "project": run["project"],
                 "name": name,
-                "source": "sdk",
                 "training_run_id": run["id"],
                 "base_model": run["base_model"],
                 "contract": "letters-16",
                 "parent_model": run["parent_model"],
                 "step": run["step"],
                 "has_optimizer": bool(body.get("include_optimizer")),
-                "keep_warm": False,
                 "size_bytes": 1024,
                 "expires_at": (now() + timedelta(seconds=ttl)).isoformat() if ttl else None,
                 "user_metadata": body.get("user_metadata") or {},
@@ -1092,10 +1048,6 @@ class FakeEndor:
                 if ttl is not None and not 3600 <= ttl <= 10 * 365 * 86400:
                     raise HTTPError(422, "invalid_input", "ttl 1h..10y", "ttl_seconds")
                 mod["expires_at"] = (now() + timedelta(seconds=ttl)).isoformat() if ttl else None
-            if body.get("keep_warm") is not None:
-                if body["keep_warm"] and not mod["keep_warm"]:
-                    self.check_warm_slot(proj)
-                mod["keep_warm"] = body["keep_warm"]
             return 200, self.model_view(mod)
         if len(tail) == 1 and m == "DELETE":
             del self.models[mid]

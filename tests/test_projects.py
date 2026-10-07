@@ -9,9 +9,9 @@ from endor import (
     ConflictError,
     EndorClient,
     LimitReachedError,
-    NoBaseModelError,
     NotFoundError,
     UnprocessableEntityError,
+    WrongProjectKindError,
 )
 
 from .conftest import ANGER, DEPT, requests_to, rows, unique, wait_closed
@@ -21,12 +21,12 @@ from .fake_api import FakeEndor
 class TestProjects:
     def test_create_get_list_delete(self, client: EndorClient) -> None:
         name = unique("proj")
-        p = client.projects.create(name, description="tickets")
+        p = client.projects.create(name, description="tickets", base_model="jev-9b")
         assert p.name == name and p.info_.description == "tickets" and repr(p) == f"Project({name!r})"
         assert client.projects.get(name).info_.n_runs == 0
         assert name in [x.name for x in client.projects.list()]
         with pytest.raises(ConflictError) as e:
-            client.projects.create(name)
+            client.projects.create(name, base_model="jev-9b")
         assert e.value.code == "conflict"
         p.delete()
         with pytest.raises(NotFoundError):
@@ -35,54 +35,67 @@ class TestProjects:
     def test_get_or_create(self, client: EndorClient, fake: FakeEndor) -> None:
         name = unique("goc")
         a = client.projects.get_or_create(name, base_model="decider-2b")
-        b = client.projects.get_or_create(name, base_model="jev-9b")  # an existing project is left as it is
-        assert a.name == b.name and len(fake.projects) == 1 and b.info_.base_model == "decider-2b"
+        b = client.projects.get_or_create(name, "ignored", base_model="decider-2b")  # an existing one is left as is
+        assert a.name == b.name and len(fake.projects) == 1 and b.info_.description is None
+        with pytest.raises(ValueError, match="custom project on decider-2b"):
+            client.projects.get_or_create(name, base_model="jev-9b")
+        with pytest.raises(ValueError, match="kind and base model can't change"):
+            client.projects.get_or_create(name, base_model="decider-2b", kind="managed")
 
-    def test_create_with_base_model(self, client: EndorClient, fake: FakeEndor) -> None:
+    def test_create_custom_and_managed(self, client: EndorClient, fake: FakeEndor) -> None:
         name = unique("base")
         p = client.projects.create(name, base_model="decider-2b")
-        assert fake.requests[-1].body == {"name": name, "description": None, "base_model": "decider-2b"}
+        assert fake.requests[-1].body == {
+            "name": name,
+            "description": None,
+            "kind": "custom",
+            "base_model": "decider-2b",
+        }
         info = p.info_
-        assert info.base_model == "decider-2b" and info.live_model == f"{name}/base"
-        assert info.auto_promote and info.base_keep_warm  # a new project keeps its base warm
-        assert info.n_models == 1  # the base model counts
+        assert info.kind == "custom" and info.base_model == "decider-2b" and info.live_model == f"{name}/base"
+        assert info.paused is None and info.n_models == 1  # the base model counts
+        m = client.projects.create(unique("man"), base_model="jev-9b", kind="managed")
+        assert fake.requests[-1].body["kind"] == "managed"
+        assert m.info_.kind == "managed" and m.info_.paused is False and m.info_.live_model == f"{m.name}/base"
         with pytest.raises(UnprocessableEntityError) as e:
             client.projects.create(unique("base"), base_model="gpt-9")
         assert e.value.code == "unknown_model"
 
-    def test_without_base_model_the_first_run_sets_it(self, project: endor.Project) -> None:
-        assert project.info_.base_model is None and project.info_.live_model is None
-        assert project.models.list() == []
-        with project.runs.create("jev-9b") as run:
-            assert run.info_.source == "sdk"
-        info = project.info()
-        assert info.base_model == "jev-9b" and info.live_model == f"{project.name}/base"
-
-    def test_update_base_model_auto_promote_and_base_keep_warm(self, client: EndorClient, fake: FakeEndor) -> None:
-        p = client.projects.create(unique("upd"))
-        with pytest.raises(NoBaseModelError) as e:
-            p.update(base_keep_warm=True)
-        assert e.value.code == "no_base_model" and e.value.status == 409
-        info = p.update(base_model="jev-9b", auto_promote=False)
-        assert fake.requests[-1].body == {"base_model": "jev-9b", "auto_promote": False}
-        assert info.base_model == "jev-9b" and not info.auto_promote and info.live_model == f"{p.name}/base"
-        info = p.update(base_keep_warm=False)
-        assert fake.requests[-1].body == {"base_keep_warm": False} and not info.base_keep_warm
-        assert p.update(base_keep_warm=True).base_keep_warm
-        assert p.update(auto_promote=True).auto_promote
-        with pytest.raises(ValueError, match="base_keep_warm"):
+    def test_update_description_and_paused(self, client: EndorClient, fake: FakeEndor) -> None:
+        p = client.projects.create(unique("upd"), base_model="jev-9b")
+        info = p.update(description="tickets")
+        assert fake.requests[-1].body == {"description": "tickets"} and info.description == "tickets"
+        with pytest.raises(WrongProjectKindError) as e:
+            p.update(paused=True)  # only managed projects pause
+        assert isinstance(e.value, ConflictError) and e.value.code == "wrong_project_kind"
+        m = client.projects.create(unique("man"), base_model="jev-9b", kind="managed")
+        assert m.update(paused=True).paused is True
+        assert fake.requests[-1].body == {"paused": True}
+        assert m.update(paused=False).paused is False
+        with pytest.raises(ValueError, match="description or paused"):
             p.update()
+
+    def test_managed_projects_refuse_training(self, client: EndorClient) -> None:
+        m = client.projects.create(unique("man"), base_model="jev-9b", kind="managed")
+        with pytest.raises(WrongProjectKindError):
+            m.datasets.upload("d", rows(1))
+        with pytest.raises(WrongProjectKindError):
+            m.runs.create(wait=False)
+        with pytest.raises(WrongProjectKindError):
+            m.evaluate("base", "d")
+        with pytest.raises(WrongProjectKindError):
+            m.set_live("base")
 
     def test_project_limit(self, client: EndorClient, fake: FakeEndor) -> None:
         for _ in range(7):
-            client.projects.create(unique("lim"))
+            client.projects.create(unique("lim"), base_model="jev-9b")
         with pytest.raises(LimitReachedError) as e:
-            client.projects.create(unique("lim"))
+            client.projects.create(unique("lim"), base_model="jev-9b")
         assert isinstance(e.value, ConflictError) and e.value.code == "limit_reached"
 
     def test_bad_name(self, client: EndorClient) -> None:
         with pytest.raises(UnprocessableEntityError) as e:
-            client.projects.create("Bad Name")
+            client.projects.create("Bad Name", base_model="jev-9b")
         assert e.value.param == "name"
 
     def test_delete_with_active_run_conflicts(self, project: endor.Project) -> None:
@@ -92,32 +105,6 @@ class TestProjects:
             assert e.value.code == "run_active"
         wait_closed(run)
         project.delete()
-
-    def test_continuous_learning_settings(self, client: EndorClient) -> None:
-        name = unique("cl")
-        try:
-            p = client.projects.create(name, continuous_learning={"enabled": True, "base_model": "decider-2b"})
-        except UnprocessableEntityError as e:
-            pytest.xfail(f"waiting on the API's continuous-learning settings: {e}")
-        if p.info_.continuous_learning is None:
-            pytest.xfail("waiting on the API's continuous-learning settings (not in the project response)")
-        cl = p.info_.continuous_learning
-        assert cl.enabled and cl.base_model == "decider-2b"
-        info = p.update(continuous_learning=endor.ContinuousLearning(enabled=True, base_model="jev-9b"))
-        assert info.continuous_learning and info.continuous_learning.base_model == "jev-9b"
-        assert info.continuous_learning.model is None  # a new base starts from scratch
-        info = p.update(description="tickets", continuous_learning={"enabled": False})
-        assert info.description == "tickets" and info.continuous_learning
-        assert not info.continuous_learning.enabled and info.continuous_learning.base_model == "jev-9b"
-        with pytest.raises(ValueError):
-            p.update()
-
-    def test_continuous_learning_wire_form(self, client: EndorClient, fake: FakeEndor) -> None:
-        p = client.projects.create(unique("cl"))
-        assert fake.requests[-1].body == {"name": p.name, "description": None}  # not sent unless given
-        p.update(continuous_learning=endor.ContinuousLearning(base_model="decider-2b"))
-        assert fake.requests[-1].method == "PATCH" and fake.requests[-1].path == f"/v1/projects/{p.name}"
-        assert fake.requests[-1].body == {"continuous_learning": {"enabled": False, "base_model": "decider-2b"}}
 
     def test_info_refreshes_counts(self, project: endor.Project) -> None:
         project.datasets.upload("d", rows(1))
@@ -225,19 +212,17 @@ class TestRunsResource:
             transport=httpx.MockTransport(fake.handler),
             capture=False,
         )
-        p = c.projects.create("nocap")
+        p = c.projects.create("nocap", base_model="jev-9b")
         with p.runs.create("jev-9b", config={"lr": 1}):
             body = fake.requests[-1].body
         assert body["config"] == {"lr": 1} and "code_hash" not in body
 
-    def test_requires_a_model(self, project: endor.Project) -> None:
-        with pytest.raises(ValueError):
-            project.runs.create()
-
-    def test_unknown_base(self, project: endor.Project) -> None:
+    def test_trains_on_the_projects_base(self, project: endor.Project, fake: FakeEndor) -> None:
+        with project.runs.create() as run:  # base_model left out: the project's
+            assert run.info_.base_model == "jev-9b" and fake.requests[-1].body is not None
         with pytest.raises(UnprocessableEntityError) as e:
-            project.runs.create("gpt-9")
-        assert e.value.code == "unknown_model"
+            project.runs.create("decider-2b")  # another base than the project's
+        assert e.value.param == "base_model"
 
     def test_resume_from_model(self, project: endor.Project) -> None:
         with project.runs.create("jev-9b") as run:
@@ -294,9 +279,9 @@ class TestRunsResource:
     ) -> None:
         fake.provisioning_polls = 2
         with caplog.at_level(logging.INFO, logger="endor"):
-            run = project.runs.create("pplx-decider-v1.1-27b")
+            run = project.runs.create("jev-9b")
         messages = [r.getMessage() for r in caplog.records]
-        assert any("provisioning a trainer for pplx-decider-v1.1-27b" in m for m in messages)
+        assert any("provisioning a trainer for jev-9b" in m for m in messages)
         assert any("ready after" in m for m in messages)
         assert run.ready.done() and run.info_.status == "ready"
         assert len([r for r in fake.requests if r.path == f"/v1/futures/{run.info_.ready_future_id}"]) == 3
@@ -323,12 +308,10 @@ class TestModels:
         assert [m.name for m in project.models.list(run_id=run.id)] == ["v1"]
         m = project.models.get(mid)
         assert m.id == mid and m.step == 1 and m.training_run_id == run.id and not m.has_optimizer
-        assert m.source == "sdk" and not m.live
+        assert not m.live
         assert project.models.get("v1").id == mid
         assert project.models.set_ttl("v1", 3600).expires_at is not None
         assert project.models.set_ttl(mid, None).expires_at is None
-        assert project.models.set_keep_warm("v1").keep_warm and project.models.get("v1").expires_at is None
-        assert not project.models.set_keep_warm(mid, False).keep_warm
         project.models.delete("v1")
         with pytest.raises(NotFoundError):
             project.models.get("v1")
@@ -338,13 +321,13 @@ class TestModels:
         with project.runs.create("jev-9b") as run:
             run.save_checkpoint("v1").result()
         base = project.models.get("base")
-        assert base.id == f"{project.name}/base" and base.source == "base" and base.live
+        assert base.id == f"{project.name}/base" and base.name == "base" and base.live
         assert base.base_model == "jev-9b" and base.training_run_id is None
         assert project.models.get(f"{project.name}/base").id == base.id
         fake.promote(project.name, "v1")
         live = {m.name: m.live for m in project.models.list()}
         assert live == {"base": False, "v1": True}
-        assert project.info().live_model == f"{project.name}/v1" and not project.info_.auto_promote
+        assert project.info().live_model == f"{project.name}/v1"
         with pytest.raises(UnprocessableEntityError):
             project.models.delete("base")
 
@@ -352,31 +335,11 @@ class TestModels:
         with project.runs.create("jev-9b") as run:
             run.save_checkpoint("v1").result()
         info = project.set_live("v1")
-        assert info.live_model == f"{project.name}/v1" and not info.auto_promote and project.info_ is info
+        assert info.live_model == f"{project.name}/v1" and project.info_ is info
         assert client.system_one("x", {"u": {"type": "noul"}}, model=project.name).model == f"{project.name}/v1"
         assert project.set_live(f"{project.name}/base").live_model == f"{project.name}/base"
         with pytest.raises(NotFoundError):
             project.set_live("v9")
-        with pytest.raises(NoBaseModelError):
-            client.projects.create(project.name + "-empty").set_live("base")
-
-    def test_keep_warm_limit(self, project: endor.Project) -> None:
-        with project.runs.create("gliner2.5-decide") as run:  # sets the base, kept warm: one of the 3 slots
-            for i in range(3):
-                run.save_checkpoint(f"w{i}").result()
-        assert project.models.get("base").keep_warm
-        for i in range(2):
-            assert project.models.set_keep_warm(f"w{i}").keep_warm
-        with pytest.raises(LimitReachedError) as e:
-            project.models.set_keep_warm("w2")
-        assert isinstance(e.value, ConflictError) and e.value.code == "limit_reached" and e.value.param == "keep_warm"
-        assert not project.models.set_keep_warm("base", False).keep_warm  # the base's keep warm frees a slot
-        assert not project.info().base_keep_warm
-        assert project.models.set_keep_warm("w2").keep_warm
-        with pytest.raises(LimitReachedError):
-            project.models.set_keep_warm("base")
-        for i in range(3):
-            project.models.set_keep_warm(f"w{i}", False)
 
 
 class TestEvaluations:

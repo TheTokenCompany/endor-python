@@ -2,7 +2,7 @@
 
     endor whoami
     endor base-models
-    endor projects list | create NAME [--base-model BASE] | delete NAME
+    endor projects list | create NAME --base-model BASE [--kind custom|managed] | delete NAME
     endor datasets list PROJECT | upload PROJECT NAME FILE | delete PROJECT NAME
     endor runs list PROJECT | show RUN_ID | close RUN_ID
     endor models list PROJECT | info MODEL | download MODEL [-o DIR] | set-ttl MODEL SECONDS|none | delete MODEL
@@ -68,7 +68,13 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_parser("list")
     pc = pr.add_parser("create")
     pc.add_argument("name")
-    pc.add_argument("--base-model", help="the project's base model, e.g. decider-2b (default: the first run's)")
+    pc.add_argument("--base-model", required=True, help="the project's base model, e.g. decider-2b (never changes)")
+    pc.add_argument(
+        "--kind",
+        choices=["custom", "managed"],
+        default="custom",
+        help="custom: you train models with the SDK; managed: Endor trains from the project's decisions (+50%%)",
+    )
     pr.add_parser("delete").add_argument("name")
     ds = sub.add_parser("datasets").add_subparsers(dest="action", required=True)
     ds.add_parser("list").add_argument("project")
@@ -137,7 +143,7 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
         if a.action == "list":
             _out(client.projects.list(), f)
         elif a.action == "create":
-            _out(client.projects.create(a.name, base_model=a.base_model), f)
+            _out(client.projects.create(a.name, base_model=a.base_model, kind=a.kind), f)
         else:
             client.projects.get(a.name).delete()
     elif a.cmd == "datasets":

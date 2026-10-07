@@ -39,11 +39,11 @@ class SupervisedConfig:
     """Settings for ``train``."""
 
     project: str
-    """The project that gets the run and the model (created with ``base_model`` if missing; a project without a
-    base model gets ``base_model``)."""
+    """The custom project that gets the run and the model (created with ``base_model`` if missing; an existing one
+    must have this base model)."""
     base_model: str = "decider-2b"
-    """The base model the run trains on. With ``eval_base`` or replay rows it must be the project's base model,
-    which they call as ``"<project>/base"``."""
+    """The base model the run trains on: the project's base model, called as ``"<project>/base"`` by ``eval_base``
+    and replay rows."""
     model_name: str | None = None
     """The saved model's name in the project; default ``"<name or sft>-<timestamp>"``."""
     rank: int = 16
@@ -151,15 +151,6 @@ def train(
         try:
             project = client.projects.get_or_create(cfg.project, base_model=cfg.base_model)
             base = f"{project.name}/base"  # decisions name a project: the untuned base is "<project>/base"
-            uses_base = (cfg.eval_base and eval_datums) or (cfg.replay_rows and cfg.replay_per_batch > 0)
-            if uses_base and project.info_.base_model is None:
-                project.update(base_model=cfg.base_model)  # what the first run would set anyway
-            elif uses_base and project.info_.base_model != cfg.base_model:
-                raise ValueError(
-                    f"project {project.name!r} has base model {project.info_.base_model!r}, not "
-                    f"{cfg.base_model!r}: {base} would score the wrong base. Use the project's base model, another "
-                    "project, or eval_base=False without replay rows"
-                )
             base_metrics = evaluate_model(client, base, eval_rows) if cfg.eval_base and eval_datums else None
             replay = _replay_datums(client, cfg, base)
             with project.runs.create(

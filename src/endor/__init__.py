@@ -46,6 +46,7 @@ from .errors import (
     RateLimitError,
     ResponseValidationError,
     UnprocessableEntityError,
+    WrongProjectKindError,
 )
 from .futures import APIFuture, gather, gather_async
 from .projects import Project
@@ -55,7 +56,6 @@ from .types import (
     BaseModelInfo,
     Choice,
     ChoiceAnswer,
-    ContinuousLearning,
     DatasetInfo,
     Datum,
     DecisionRow,
@@ -122,7 +122,6 @@ __all__ = [
     "ForwardOutput",
     "OptimStepOutput",
     # resources
-    "ContinuousLearning",
     "ProjectInfo",
     "RunInfo",
     "ModelInfo",
@@ -146,6 +145,7 @@ __all__ = [
     "ConflictError",
     "LimitReachedError",
     "NoBaseModelError",
+    "WrongProjectKindError",
     "DownloadError",
     "PayloadTooLargeError",
     "UnprocessableEntityError",
