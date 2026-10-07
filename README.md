@@ -238,6 +238,20 @@ cfg = DistillConfig(SupervisedConfig(project="tickets", model_name="distilled"),
 result = distill.distill(cfg, unlabeled_rows, eval_rows=gold_rows)
 ```
 
+## Download a trained model
+
+A saved model is a LoRA adapter (PEFT) for its base model. Download its files to run it yourself:
+
+```python
+files = project.models.download("v1", "./tickets-v1")   # include_optimizer=True adds optimizer.pt
+```
+
+This writes `adapter_model.safetensors`, `adapter_config.json`, `endor_manifest.json` and, if the model has one,
+`readout.safetensors` into the folder. `optimizer.pt` (Adam state) is only needed to resume training. Each file comes
+straight from storage over a link that expires after 10 minutes, and is checked against its size and SHA-256 (when
+the API gives one); a file that fails raises `DownloadError` and is not left behind. The links are never returned or
+logged, and your API key is never sent to storage. From the shell: `endor models download tickets/v1 -o ./tickets-v1`.
+
 ## Errors and retries
 
 Every API error is an `endor.APIError` subclass named after its status (`NotFoundError`, `ConflictError`,
@@ -301,7 +315,7 @@ endor base-models
 endor projects list | create NAME | delete NAME
 endor datasets list PROJECT | upload PROJECT NAME FILE | delete PROJECT NAME
 endor runs list PROJECT | show RUN_ID | close RUN_ID
-endor models list PROJECT | info MODEL | download MODEL [-o FILE] | set-ttl MODEL SECONDS|none | delete MODEL
+endor models list PROJECT | info MODEL | download MODEL [-o DIR] [--include-optimizer] | set-ttl MODEL SECONDS|none | delete MODEL
 endor eval PROJECT MODEL DATASET
 endor usage --start 2026-10-01 --end 2026-10-06 [--project P] [--csv]
 ```
@@ -320,14 +334,14 @@ continuous_learning_cost_usd, cost_usd`.
 | `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `update(*, description=None, continuous_learning=None)`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
 | `project.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
 | `project.runs` | `create(base_model=None, *, rank, alpha, seed, train_attn, train_mlp, train_readout, from_model, include_optimizer, name, tags, config, user_metadata, wait)` → `Run`, `get(run_id)`, `list(tag=None, limit=None, offset=0)` |
-| `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `set_keep_warm(model, on=True)`, `archive_url(model)`, `delete(model)`; `model` is a name or `<project>/<name>` |
+| `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `set_keep_warm(model, on=True)`, `download(model, path, include_optimizer=False)`, `delete(model)`; `model` is a name or `<project>/<name>` |
 | `Run` | `.id`, `.project`, `.info_`, `.ready`, `.next_seq_id`, `forward(data, loss_fn)`, `forward_backward(data, loss_fn)`, `optim_step(adam_params=None, *, learning_rate=None)`, `save_checkpoint(name, *, include_optimizer, ttl_seconds, user_metadata)` → `APIFuture[str]`, the `_async` variants of those four, `close(*, wait=False, timeout=None)`, `close_async(...)`, `info()`, `log(metrics, step=None)`, `metrics(keys=None, since_step=None)`, `log_eval(model, results, *, step, name)`, sync and async context manager |
 | `APIFuture[T]` | `result(timeout=None)`, `await f`, `result_async(timeout)`, `done()`, `info`, `cancel()`, `cancel_async()`, `APIFuture.completed(value)`; `endor.gather(*futures)`, `endor.gather_async(*futures)` |
 | `endor.data` | `to_row`, `load_rows(path)`, `save_rows(path, rows)`, `label_target(question, label)`, `row_to_datums(row)`, `rows_to_datums(rows)`, `split(rows, holdout=0.1, seed=0)`, `batches(items, size, *, shuffle=True, seed=0)` |
 | `endor.metrics` | `decision_metrics(probs, targets, bins=10)` → `{n, accuracy, nll, brier, ece, mean_confidence, selective}` |
 | `endor.recipes.supervised` | `SupervisedConfig`, `SupervisedResult`, `train(cfg, rows, eval_rows=None, client=None)`, `evaluate_run(run, datums)`, `evaluate_model(client, model, rows)`, `lr_at(cfg, step, total)` |
 | `endor.recipes.distill` | `Teacher` (protocol), `DistillConfig(supervised, teacher, budget, seed)`, `label_with_teacher(rows, cfg)`, `distill(cfg, unlabeled_rows, eval_rows, client=None)` |
-| Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `ProjectInfo`, `ContinuousLearning`, `RunInfo`, `LoraInfo`, `ModelInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `ArchiveInfo`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
+| Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `ProjectInfo`, `ContinuousLearning`, `RunInfo`, `LoraInfo`, `ModelInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `DownloadedFile`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
 | Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError`, `ConflictError`, `PayloadTooLargeError`, `UnprocessableEntityError`, `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
 
 Every public member has a docstring with the details.

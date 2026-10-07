@@ -259,7 +259,7 @@ class TestRunsResource:
 
 
 class TestModels:
-    def test_list_get_ttl_archive_delete(self, project: endor.Project) -> None:
+    def test_list_get_ttl_delete(self, project: endor.Project) -> None:
         with project.runs.create("jev-9b") as run:
             run.forward_backward(endor.data.rows_to_datums(rows(1))).result()
             run.optim_step().result()
@@ -275,12 +275,6 @@ class TestModels:
         assert project.models.set_ttl(mid, None).expires_at is None
         assert project.models.set_keep_warm("v1").keep_warm and project.models.get("v1").expires_at is None
         assert not project.models.set_keep_warm(mid, False).keep_warm
-        archive = project.models.archive_url("v1")
-        assert (
-            archive.url.startswith(("https://", "file://"))
-            and "endor_manifest.json" in archive.files
-            and "optimizer.pt" not in archive.files
-        )
         project.models.delete("v1")
         with pytest.raises(NotFoundError):
             project.models.get("v1")

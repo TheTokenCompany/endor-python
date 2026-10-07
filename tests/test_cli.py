@@ -81,36 +81,17 @@ def test_version_and_help(capsys: pytest.CaptureFixture[str]) -> None:
         cli.main([])
 
 
-def test_download(
-    capsys: pytest.CaptureFixture[str],
-    client: EndorClient,
-    fake: FakeEndor,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import httpx
-
+def test_download(capsys: pytest.CaptureFixture[str], client: EndorClient, fake: FakeEndor, tmp_path: Path) -> None:
     project = client.projects.create(unique("dl"))
     with project.runs.create("jev-9b") as r:
-        r.save_checkpoint("v1").result()
-
-    class FakeStream:
-        def __init__(self, *a: object, **k: object) -> None:
-            pass
-
-        def __enter__(self) -> FakeStream:
-            return self
-
-        def __exit__(self, *a: object) -> None:
-            pass
-
-        def raise_for_status(self) -> None:
-            pass
-
-        def iter_bytes(self) -> list[bytes]:
-            return [b"tar", b"bytes"]
-
-    monkeypatch.setattr(httpx, "stream", FakeStream)
-    target = tmp_path / "m.tar"
-    out = run(capsys, client, "models", "download", f"{project.name}/v1", "-o", str(target))
-    assert out.strip() == str(target) and target.read_bytes() == b"tarbytes"
+        r.save_checkpoint("v1", include_optimizer=True).result()
+    target = tmp_path / "m"
+    out = run_json(capsys, client, "models", "download", f"{project.name}/v1", "-o", str(target))
+    assert isinstance(out, list) and [f["name"] for f in out] == [
+        "adapter_model.safetensors",
+        "adapter_config.json",
+        "endor_manifest.json",
+    ]
+    assert all(Path(f["path"]).parent == target and "url" not in f for f in out)
+    run(capsys, client, "models", "download", f"{project.name}/v1", "-o", str(target), "--include-optimizer")
+    assert (target / "optimizer.pt").is_file()

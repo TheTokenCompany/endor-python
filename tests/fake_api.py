@@ -22,6 +22,7 @@ from urllib.parse import parse_qs
 
 import httpx
 
+FILES_HOST = "files.endor.test"
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
 MAX_ACTIVE_RUNS = 4
@@ -175,6 +176,9 @@ class FakeEndor:
     fail_next: list[Any] = field(default_factory=list)
     """Queued faults applied to the next requests: an ``HTTPError`` or an ``httpx.TransportError``."""
     requests: list[Recorded] = field(default_factory=list)
+    file_requests: list[Recorded] = field(default_factory=list)  # GETs of presigned file links
+    file_links: dict[str, tuple[str, str]] = field(default_factory=dict)  # token -> (model id, file name)
+    corrupt_files: bool = False
     blocked: bool = False
     """The org's balance is used up: paid calls answer 402 insufficient_balance."""
 
@@ -260,8 +264,26 @@ class FakeEndor:
     def model_view(self, m: dict) -> dict:
         return {k: v for k, v in m.items() if not k.startswith("_")}
 
+    @staticmethod
+    def file_bytes(mid: str, name: str) -> bytes:
+        return f"{mid}:{name}:".encode() * 1000
+
+    def serve_file(self, request: httpx.Request) -> httpx.Response:
+        """A presigned storage GET: no Endor auth, the token in the path is the whole credential."""
+        token, _, name = request.url.path.strip("/").partition("/")
+        hit = self.file_links.get(token)
+        if hit is None or hit[1] != name or request.method != "GET":
+            return httpx.Response(403, text="<Error><Code>AccessDenied</Code></Error>")
+        data = self.file_bytes(*hit)
+        if self.corrupt_files:
+            data = data[:-1] + b"!"
+        return httpx.Response(200, content=data, headers={"content-type": "application/octet-stream"})
+
     # ------------------------------------------------------------------ handler
     def handler(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host == FILES_HOST:
+            self.file_requests.append(Recorded(request.method, request.url.path, dict(request.headers), None, {}))
+            return self.serve_file(request)
         raw = request.content
         if raw and request.headers.get("content-encoding") == "gzip":
             raw = gzip.decompress(raw)
@@ -879,15 +901,24 @@ class FakeEndor:
         if len(tail) == 1 and m == "DELETE":
             del self.models[mid]
             return 204, None
-        if tail[1:] == ["archive_url"] and m == "GET":
-            files = ["adapter_model.safetensors", "adapter_config.json", "endor_manifest.json"]
-            if mod["has_optimizer"]:
-                files.append("optimizer.pt")
-            return 200, {
-                "url": f"https://files.endor.test/{uuid.uuid4()}.tar",
-                "expires_at": (now() + timedelta(hours=1)).isoformat(),
-                "files": files,
-            }
+        if tail[1:] == ["download"] and m == "GET":
+            names = ["adapter_model.safetensors", "adapter_config.json", "endor_manifest.json"]
+            if mod["has_optimizer"] and params.get("include_optimizer") == "true":
+                names.append("optimizer.pt")
+            files = []
+            for n in names:
+                data = self.file_bytes(mid, n)
+                token = uuid.uuid4().hex
+                self.file_links[token] = (mid, n)
+                files.append(
+                    {
+                        "name": n,
+                        "size_bytes": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                        "url": f"https://{FILES_HOST}/{token}/{n}?X-Amz-Signature=sig{token}&X-Amz-Expires=600",
+                    }
+                )
+            return 200, {"files": files, "expires_at": (now() + timedelta(minutes=10)).isoformat()}
         raise HTTPError(404, "not_found", "no route")
 
     # ------------------------------------------------------------------ evaluations

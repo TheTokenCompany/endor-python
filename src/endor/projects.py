@@ -9,6 +9,8 @@ project.evaluate("tickets/v1", "heldout").result()
 
 from __future__ import annotations
 
+import builtins
+import os
 import subprocess
 import time
 from collections.abc import Iterable, Iterator, Mapping
@@ -22,10 +24,10 @@ from .errors import NotFoundError
 from .futures import APIFuture
 from .runs import Run
 from .types import (
-    ArchiveInfo,
     ContinuousLearning,
     DatasetInfo,
     DecisionRow,
+    DownloadedFile,
     Evaluation,
     LoraConfig,
     ModelInfo,
@@ -371,15 +373,24 @@ class Models:
         )
         return ModelInfo.model_validate(r)
 
-    def archive_url(self, model: str) -> ArchiveInfo:
-        """A short-lived link to an archive of the model's adapter files, for self-hosting on the same base."""
-        return ArchiveInfo.model_validate(
-            self._t.request(
-                "GET",
-                f"{self._base}/{self._name(model)}/archive_url",
-                method_name="project.models.archive_url",
-            )
+    def download(
+        self, model: str, path: str | os.PathLike[str], include_optimizer: bool = False
+    ) -> builtins.list[DownloadedFile]:
+        """Write the model's files into the folder ``path`` (created if needed), to run the LoRA adapter (PEFT)
+        yourself on the same base model: ``adapter_model.safetensors``, ``adapter_config.json``,
+        ``endor_manifest.json``, ``readout.safetensors`` if the model has one, and ``optimizer.pt`` (Adam state, only
+        to resume training) with ``include_optimizer=True``. Each file is fetched straight from storage over a
+        short-lived link and checked against its size and SHA-256; a file that fails raises ``DownloadError`` and is
+        not left behind. The links are never returned or logged."""
+        from ._download import fetch_all
+
+        r = self._t.request(
+            "GET",
+            f"{self._base}/{self._name(model)}/download",
+            params={"include_optimizer": "true" if include_optimizer else "false"},
+            method_name="project.models.download",
         )
+        return fetch_all(r["files"], path, transport=self._t._transport, timeout=max(self._t.timeout, 60.0))
 
     def delete(self, model: str) -> None:
         """Delete the model's files and record. Permanent."""

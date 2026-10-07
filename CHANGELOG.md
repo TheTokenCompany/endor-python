@@ -22,6 +22,10 @@ Matches the current API (org API keys, GPU-hour billing, balances).
 - Base models are now `pplx-decider-v1.1-27b` (the default), `gev-26b`, `jev-9b`, `decider-2b` and
   `gliner2.5-decide`.
 - `project.models.set_keep_warm(model, on)`; `ModelInfo.keep_warm`.
+- `project.models.download(model, path, include_optimizer=False)` writes the model's files into a folder from
+  short-lived per-file links, verifying size and SHA-256 (`DownloadError` otherwise), and returns `DownloadedFile`s.
+  It replaces `archive_url` and `ArchiveInfo` (the API's `archive_url` route is gone). The CLI's
+  `endor models download MODEL [-o DIR] [--include-optimizer]` writes a folder instead of a tar.
 - Continuous learning settings: `projects.create(..., continuous_learning=...)`, `project.update(...)`,
   `ProjectInfo.continuous_learning`.
 - `run.log()` without a step logs at the run's current step on the server.

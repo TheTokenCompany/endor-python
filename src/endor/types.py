@@ -11,7 +11,7 @@ Training
     Target, LoraConfig, AdamParams, ForwardOutput, OptimStepOutput
 
 Resources (read-only views of what the API returns)
-    ProjectInfo, RunInfo, ModelInfo, DatasetInfo, Evaluation, MetricPoint, ArchiveInfo, UsageRow, WhoAmI, FutureInfo
+    ProjectInfo, RunInfo, ModelInfo, DatasetInfo, Evaluation, MetricPoint, DownloadedFile, UsageRow, WhoAmI, FutureInfo
 
 Option ids are the only identifiers used for a question's options anywhere in the SDK:
     noul   -> "false", "true"
@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime
 from functools import cached_property
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, field_validator, model_serializer
@@ -62,7 +63,7 @@ __all__ = [
     "DatasetInfo",
     "Evaluation",
     "MetricPoint",
-    "ArchiveInfo",
+    "DownloadedFile",
     "UsageRow",
     "WhoAmI",
     "FutureInfo",
@@ -583,12 +584,13 @@ class MetricPoint(_View):
     time: datetime | None = None
 
 
-class ArchiveInfo(_View):
-    """A short-lived download link for a saved model's files."""
+class DownloadedFile(_View):
+    """A model file written by ``project.models.download``."""
 
-    url: str
-    expires_at: datetime
-    files: list[str] = Field(default_factory=list)
+    name: str
+    path: Path
+    size_bytes: int
+    sha256: str  # of the bytes written, hex; checked against the API's when it gave one
 
 
 class UsageRow(_View):

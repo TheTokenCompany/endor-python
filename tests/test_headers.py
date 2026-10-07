@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from pathlib import Path
 
 import httpx
 import pytest
@@ -45,7 +46,7 @@ def test_every_request_carries_identity(client: EndorClient, fake: FakeEndor) ->
     assert RUNTIME_HEADER.startswith("python/3.") and RUNTIME_HEADER.endswith(")")
 
 
-def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor) -> None:
+def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor, tmp_path: Path) -> None:
     client.whoami()
     client.system_one("x", {"d": DEPT})
     client.models.list()
@@ -63,7 +64,7 @@ def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor) 
     run.log_eval(f"{name}/v1", {"accuracy": 1.0})
     project.models.get("v1")
     project.models.set_ttl("v1", 7200)
-    project.models.archive_url("v1")
+    project.models.download("v1", tmp_path)
     project.evaluate(f"{name}/v1", "d").result()
     project.evaluations()
     run.close()
@@ -91,7 +92,7 @@ def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor) 
         ("POST", "/v1/runs/run_0001/evaluations", "run.log_eval"),
         ("GET", f"/v1/projects/{name}/models/v1", "project.models.get"),
         ("PATCH", f"/v1/projects/{name}/models/v1", "project.models.set_ttl"),
-        ("GET", f"/v1/projects/{name}/models/v1/archive_url", "project.models.archive_url"),
+        ("GET", f"/v1/projects/{name}/models/v1/download", "project.models.download"),
         ("POST", f"/v1/projects/{name}/evaluations", "project.evaluate"),
         ("GET", "/v1/futures/fut_0005", "project.evaluate"),
         ("GET", "/v1/evaluations/evl_0002", "project.evaluate"),
