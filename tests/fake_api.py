@@ -400,7 +400,6 @@ class FakeEndor:
                 "user_id": None,
                 "org_id": "org_test",
                 "key_id": "key_test",
-                "key_prefix": "edk_test",
                 "limits": dict(LIMITS),
             }
         if p == ["usage"] and m == "GET":

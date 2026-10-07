@@ -254,7 +254,7 @@ class TestCatalogAndAccount:
     def test_whoami(self, client: EndorClient) -> None:
         me = client.whoami()
         assert me.org_id and me.key_id and me.user_id is None  # an org API key has no user
-        assert me.key_prefix and me.key_prefix.startswith("edk_")
+        assert not hasattr(me, "key_prefix")
         assert me.limits["max_projects_per_org"] >= 1 and me.limits["max_active_runs"] >= 1
 
     def test_usage_rows(self, client: EndorClient) -> None:
