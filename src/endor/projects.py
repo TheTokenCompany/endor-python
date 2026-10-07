@@ -42,6 +42,7 @@ class Projects:
         return Project(self._t, r, self._capture)
 
     def get(self, name: str) -> Project:
+        """Your project called ``name``; ``NotFoundError`` if there is none."""
         return Project(
             self._t, self._t.request("GET", f"/v1/projects/{name}", method_name="projects.get"), self._capture
         )
@@ -53,12 +54,10 @@ class Projects:
         except NotFoundError:
             return self.create(name, description)
 
-    def list(self, limit: int = 50, offset: int = 0) -> list[Project]:
-        """Your projects, newest first."""
-        r = self._t.request(
-            "GET", "/v1/projects", params={"limit": limit, "offset": offset}, method_name="projects.list"
-        )
-        return [Project(self._t, p, self._capture) for p in r["items"]]
+    def list(self, limit: int | None = None, offset: int = 0) -> list[Project]:
+        """Your projects, newest first: all of them, or at most ``limit`` starting at ``offset``."""
+        items = _list_all(self._t, "/v1/projects", {}, "projects.list", limit, offset)
+        return [Project(self._t, p, self._capture) for p in items]
 
 
 class Project:
@@ -106,12 +105,10 @@ class Project:
         return APIFuture(self._t, r["future_id"], fetch, method="project.evaluate")
 
     def evaluations(self, run_id: str | None = None, model: str | None = None) -> list[Evaluation]:
-        """Server-side and client-recorded evaluations in this project, newest first."""
+        """Server-side and client-recorded evaluations in this project, newest first (all pages)."""
         params = {"run_id": run_id, "model": model}
-        r = self._t.request(
-            "GET", f"/v1/projects/{self.name}/evaluations", params=params, method_name="project.evaluations"
-        )
-        return [Evaluation.model_validate(e) for e in r["items"]]
+        items = _list_all(self._t, f"/v1/projects/{self.name}/evaluations", params, "project.evaluations")
+        return [Evaluation.model_validate(e) for e in items]
 
     def delete(self) -> None:
         """Delete the project with its datasets, models, runs and evaluations. Permanent. Close its runs first
@@ -126,7 +123,7 @@ class Datasets:
         self._t, self._base = transport, f"/v1/projects/{project}/datasets"
 
     def upload(self, name: str, rows: Iterable[Any]) -> DatasetInfo:
-        """Upload decision rows (docs/DATA_FORMAT.md). Rows may be dicts or ``DecisionRow`` objects; the other
+        """Upload decision rows (README, "Data format"). Rows may be dicts or ``DecisionRow`` objects; the other
         supported row formats are converted. At most 50,000 rows per dataset. Datasets are immutable: to change
         one, upload under a new name."""
         wire = [D.to_row(r).to_wire() for r in rows]
@@ -144,10 +141,11 @@ class Datasets:
         return DatasetInfo.model_validate(r)
 
     def list(self) -> list[DatasetInfo]:
-        r = self._t.request("GET", self._base, method_name="project.datasets.list")
-        return [DatasetInfo.model_validate(d) for d in r["items"]]
+        """Every dataset in the project."""
+        return [DatasetInfo.model_validate(d) for d in _list_all(self._t, self._base, {}, "project.datasets.list")]
 
     def get(self, name: str) -> DatasetInfo:
+        """One dataset's counts; ``NotFoundError`` if missing."""
         return DatasetInfo.model_validate(
             self._t.request("GET", f"{self._base}/{name}", method_name="project.datasets.get")
         )
@@ -169,6 +167,7 @@ class Datasets:
                 return
 
     def delete(self, name: str) -> None:
+        """Delete a dataset. Evaluations made on it keep their results."""
         self._t.request("DELETE", f"{self._base}/{name}", method_name="project.datasets.delete")
 
 
@@ -182,12 +181,12 @@ class Runs:
         self,
         base_model: str | None = None,
         *,
-        rank: int = 16,
-        alpha: float = 32.0,
+        rank: int | None = None,
+        alpha: float | None = None,
         seed: int | None = None,
-        train_attn: bool = True,
-        train_mlp: bool = True,
-        train_readout: bool = False,
+        train_attn: bool | None = None,
+        train_mlp: bool | None = None,
+        train_readout: bool | None = None,
         from_model: str | None = None,
         include_optimizer: bool = False,
         name: str | None = None,
@@ -199,26 +198,39 @@ class Runs:
         """Start a run: a fresh adapter on ``base_model``, or one warm-started from ``from_model`` (a model of this
         project, as ``"name"`` or ``"<project>/name"``; with ``include_optimizer=True`` training resumes exactly).
 
-        Provisioning a trainer can take minutes. With ``wait=True`` this blocks until the run is ready and logs
-        progress on the ``endor`` logger; with ``wait=False`` it returns at once and ``run.ready`` is the future.
+        LoRA settings left as None default to rank 16, alpha 32, attention and MLP, no readout for a fresh run. With
+        ``from_model`` they are inherited from the saved model, and only the ones you pass are sent (a value that
+        conflicts with the model is a 422).
+
+        Provisioning a trainer can take minutes, and the GPU is billed from the moment it is requested. With
+        ``wait=True`` this blocks until the run is ready and logs progress on the ``endor`` logger; if the wait is
+        interrupted (Ctrl-C, an error) the run is closed so its GPU is released. With ``wait=False`` it returns at
+        once and ``run.ready`` is the future.
+
+        Close every run you create (``with project.runs.create(...) as run:``): a run holds its GPU until closed or
+        idle for 15 minutes, and an org can have at most 4 runs that aren't closed, idle ones included.
         ``config`` is free-form and shown on the dashboard; when the client was created with ``capture=True`` the
         SDK adds the LoRA settings and the current git commit (never file contents).
         """
         if not base_model and not from_model:
             raise ValueError("pass base_model or from_model")
-        lora = LoraConfig(
-            rank=rank,
-            alpha=alpha,
-            seed=seed,
-            train_attn=train_attn,
-            train_mlp=train_mlp,
-            train_readout=train_readout,
-        )
+        given = {
+            "rank": rank,
+            "alpha": alpha,
+            "seed": seed,
+            "train_attn": train_attn,
+            "train_mlp": train_mlp,
+            "train_readout": train_readout,
+        }
+        given = {k: v for k, v in given.items() if v is not None}
+        # A fresh run gets the defaults (rank 16, alpha 32, attention and MLP); a run from a saved model inherits
+        # that model's settings, so only what the caller set explicitly is sent.
+        lora = given if from_model else LoraConfig(**given).model_dump()
         body: dict[str, Any] = {
             "base_model": base_model,
             "from_model": from_model,
             "include_optimizer": include_optimizer,
-            "lora": lora.model_dump(),
+            "lora": lora,
             "name": name,
             "tags": tags or [],
             "config": dict(config or {}),
@@ -229,7 +241,7 @@ class Runs:
                 **body["config"],
                 "base_model": base_model,
                 "from_model": from_model,
-                "lora": lora.model_dump(),
+                "lora": lora,
             }
             body["code_hash"] = git_identity()
         r = self._t.request(
@@ -241,17 +253,23 @@ class Runs:
         )
         run = Run(self._t, r)
         if wait:
-            _wait_ready(run)
+            try:
+                _wait_ready(run)
+            except BaseException:
+                logger.warning("run %s: stopped waiting for provisioning; closing it so its GPU is released", run.id)
+                run._close_on_exit(failing=True)
+                raise
         return run
 
     def get(self, run_id: str) -> Run:
+        """A handle on an existing run, continuing its sequence numbers from the server."""
         return Run(self._t, self._t.request("GET", f"/v1/runs/{run_id}", method_name="project.runs.get"))
 
-    def list(self, tag: str | None = None, limit: int = 20, offset: int = 0) -> list[Run]:
-        """The project's runs, newest first, optionally those carrying ``tag``."""
-        params = {"limit": limit, "offset": offset, "tag": tag}
-        r = self._t.request("GET", f"/v1/projects/{self._project}/runs", params=params, method_name="project.runs.list")
-        return [Run(self._t, x) for x in r["items"]]
+    def list(self, tag: str | None = None, limit: int | None = None, offset: int = 0) -> list[Run]:
+        """The project's runs, newest first, optionally those carrying ``tag``: all of them, or at most ``limit``."""
+        path = f"/v1/projects/{self._project}/runs"
+        items = _list_all(self._t, path, {"tag": tag}, "project.runs.list", limit, offset)
+        return [Run(self._t, x) for x in items]
 
 
 class Models:
@@ -266,10 +284,12 @@ class Models:
         return model.split("/", 1)[1] if "/" in model else model
 
     def list(self, run_id: str | None = None) -> list[ModelInfo]:
-        r = self._t.request("GET", self._base, params={"run_id": run_id}, method_name="project.models.list")
-        return [ModelInfo.model_validate(m) for m in r["items"]]
+        """Every saved, unexpired model in the project, newest first, optionally only those saved by ``run_id``."""
+        items = _list_all(self._t, self._base, {"run_id": run_id}, "project.models.list")
+        return [ModelInfo.model_validate(m) for m in items]
 
     def get(self, model: str) -> ModelInfo:
+        """One model (a name or ``"<project>/<name>"``); ``NotFoundError`` if missing."""
         return ModelInfo.model_validate(
             self._t.request("GET", f"{self._base}/{self._name(model)}", method_name="project.models.get")
         )
@@ -300,6 +320,27 @@ class Models:
 
 
 # ---------------------------------------------------------------- helpers
+
+
+def _list_all(
+    t: Transport,
+    path: str,
+    params: dict[str, Any],
+    method_name: str,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[Any]:
+    """Every item of a paged list (``{"items", "total"}``), or at most ``limit`` of them, starting at ``offset``."""
+    out: list[Any] = []
+    while limit is None or len(out) < limit:
+        size = C.LIST_PAGE_SIZE if limit is None else min(C.LIST_PAGE_SIZE, limit - len(out))
+        r = t.request("GET", path, params={**params, "limit": size, "offset": offset}, method_name=method_name)
+        items = r["items"]
+        out += items
+        offset += len(items)
+        if not items or offset >= r.get("total", offset):
+            break
+    return out
 
 
 def _wait_ready(run: Run, log_every: float = 30.0) -> None:

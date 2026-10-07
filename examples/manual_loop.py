@@ -18,7 +18,8 @@ train = endor.data.rows_to_datums(train_rows)
 heldout = endor.data.rows_to_datums(heldout_rows)
 
 project = client.projects.get_or_create("tickets")
-project.datasets.upload("heldout", heldout_rows)
+if "heldout" not in {d.name for d in project.datasets.list()}:
+    project.datasets.upload("heldout", heldout_rows)
 
 with project.runs.create(base_model="pplx-decider-v1-27b", rank=16, tags=["manual"]) as run:
     steps = 0
@@ -31,7 +32,7 @@ with project.runs.create(base_model="pplx-decider-v1-27b", rank=16, tags=["manua
             if steps % 10 == 0:
                 scored = run.forward(heldout).result()  # the current adapter, no checkpoint needed
                 metrics = decision_metrics(scored.probabilities, [d.target for d in heldout])
-                run.log({"heldout/accuracy": metrics["accuracy"], "heldout/ece": metrics["ece"]})
+                run.log({"heldout/accuracy": metrics["accuracy"], "heldout/ece": metrics["ece"]})  # at the current step
                 print(f"step {step.step}: loss {out.loss:.3f}  held-out accuracy {metrics['accuracy']:.3f}")
 
     model = run.save_checkpoint("v2", include_optimizer=True).result()  # "tickets/v2"
@@ -40,7 +41,6 @@ print("saved", model)
 evaluation = project.evaluate(model, "heldout", run_id=run.id).result()  # server-side scoring
 print(evaluation.results)
 
-# Resume exactly where that run stopped:
-resumed = project.runs.create(from_model="v2", include_optimizer=True, wait=False)
-print("resuming as", resumed.id, "status", resumed.info_.status)
-resumed.close()
+# Resume exactly where that run stopped (a new run, so a new GPU; close it when done):
+with project.runs.create(from_model="v2", include_optimizer=True) as resumed:
+    print("resumed as", resumed.id, "at step", resumed.info_.step)

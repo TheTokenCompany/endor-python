@@ -31,8 +31,8 @@ class Teacher(Protocol):
     """Anything that labels decision rows.
 
     ``label`` returns one ``{question name: label}`` per row, in order. A label may be hard (an option key, a bool,
-    a level index) or soft (a distribution over the options, see docs/DATA_FORMAT.md). Return None for a question
-    the teacher cannot answer; it stays unlabeled.
+    a level index) or soft (a distribution over the options, see "Data format" in the README). Return None for a
+    question the teacher cannot answer; it stays unlabeled.
     """
 
     def label(self, rows: Sequence[DecisionRow]) -> Sequence[dict[str, Any] | None]: ...

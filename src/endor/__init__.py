@@ -10,12 +10,12 @@ res = client.system_one({"body": "charged twice"},
 res.choices["dept"].choice, res.nouls["urgent"].noul
 
 project = client.projects.get_or_create("tickets")
-run = project.runs.create(base_model="pplx-decider-v1-27b", rank=16)
-for batch in endor.data.batches(endor.data.rows_to_datums(rows), 16):
-    fb = run.forward_backward(batch)
-    opt = run.optim_step(learning_rate=1e-4)
-    endor.gather(fb, opt)
-model = run.save_checkpoint("v1").result()                          # "tickets/v1"
+with project.runs.create(base_model="pplx-decider-v1-27b", rank=16) as run:   # closed on exit, even on errors
+    for batch in endor.data.batches(endor.data.rows_to_datums(rows), 16):
+        fb = run.forward_backward(batch)
+        opt = run.optim_step(learning_rate=1e-4)
+        endor.gather(fb, opt)
+    model = run.save_checkpoint("v1").result()                      # "tickets/v1"
 client.system_one(state, questions, model=model)
 """
 
@@ -31,6 +31,7 @@ from .errors import (
     BadRequestError,
     ConflictError,
     EndorError,
+    InsufficientBalanceError,
     InternalServerError,
     NotFoundError,
     OperationFailedError,
@@ -57,6 +58,7 @@ from .types import (
     ForwardOutput,
     ListModelsResponse,
     LoraConfig,
+    LoraInfo,
     MetricPoint,
     ModelInfo,
     ModelMetadata,
@@ -110,6 +112,7 @@ __all__ = [
     "Target",
     "AdamParams",
     "LoraConfig",
+    "LoraInfo",
     "ForwardOutput",
     "OptimStepOutput",
     # resources
@@ -130,6 +133,7 @@ __all__ = [
     "APIError",
     "BadRequestError",
     "AuthenticationError",
+    "InsufficientBalanceError",
     "PermissionDeniedError",
     "NotFoundError",
     "ConflictError",

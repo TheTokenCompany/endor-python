@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, TypeVar, overload
 
 import httpx
@@ -67,8 +67,7 @@ class EndorClient:
             api_key: Your API key (``edk_...``). Defaults to ``ENDOR_API_KEY``.
             model: Default model for ``system_one``. Defaults to ``ENDOR_DEFAULT_MODEL``, then the current base model.
             retry: A ``RetryPolicy``; ``RetryPolicy(max_retries=0)`` disables retries.
-            timeout: Seconds per HTTP operation. Training calls use at least 30 s, since the server holds
-                future polls for up to 25 s.
+            timeout: Seconds per HTTP request. A future poll waits up to 25 s on the server on top of this.
             headers: Extra headers for every request.
             base_url: API root. Defaults to ``ENDOR_BASE_URL``, then production.
             capture: Send each run's settings and the current git commit (hash and dirty flag only, never
@@ -99,7 +98,7 @@ class EndorClient:
             self.api_key,
             self.base_url,
             retry=self.retry,
-            timeout=max(self.timeout, C.MIN_TRAINING_TIMEOUT),
+            timeout=self.timeout,
             headers=headers,
             gzip_bodies=gzip,
             http_client=http_client,
@@ -254,18 +253,19 @@ class EndorClient:
 
     # ------------------------------------------------------------------ account
     def whoami(self) -> WhoAmI:
-        """The user and key behind this client's credentials."""
-        return WhoAmI.model_validate(self._t.request("GET", "/v1/whoami", method_name="client.whoami"))
+        """The org and key behind this client's credentials (``user_id`` is None for an org API key)."""
+        return _parse(WhoAmI, self._t.request("GET", "/v1/whoami", method_name="client.whoami"), "GET /v1/whoami")
 
     def usage(self, starting_on: datetime, ending_before: datetime, project: str | None = None) -> list[UsageRow]:
-        """Hourly usage rows (training tokens, decision tokens, storage) with estimated cost, for up to 14 days."""
+        """Hourly usage with cost, for up to 14 days: ``decide`` rows (input tokens) and ``train`` rows
+        (GPU-seconds). Datetimes without a timezone are taken as UTC."""
         params = {
-            "starting_on": starting_on.isoformat(),
-            "ending_before": ending_before.isoformat(),
+            "starting_on": _utc(starting_on).isoformat(),
+            "ending_before": _utc(ending_before).isoformat(),
             "project": project,
         }
         r = self._t.request("GET", "/v1/usage", params=params, method_name="client.usage")
-        return [UsageRow.model_validate(u) for u in r]
+        return [_parse(UsageRow, u, "GET /v1/usage") for u in r]
 
     # ------------------------------------------------------------------ lifecycle
     def close(self) -> None:
@@ -273,6 +273,7 @@ class EndorClient:
         self._t.close()
 
     async def aclose(self) -> None:
+        """Close the HTTP connections this client opened (async)."""
         await self._t.aclose()
 
     def __enter__(self) -> EndorClient:
@@ -319,6 +320,7 @@ class Models:
         timeout: float | None = None,
         extra_headers: Mapping[str, str] | None = None,
     ) -> ListModelsResponse:
+        """``list()`` for async code."""
         raw = await self._t.arequest(
             "GET",
             "/v1/models",
@@ -351,6 +353,10 @@ def _parse(model: type[ResponseT], raw: Any, endpoint: str) -> ResponseT:
         first = e.errors(include_url=False)[0]
         path = ".".join(str(p) for p in first.get("loc", ())) or "<body>"
         raise ResponseValidationError(200, raw, None, f"{path}: {first.get('msg')}", endpoint) from e
+
+
+def _utc(t: datetime) -> datetime:
+    return t.replace(tzinfo=timezone.utc) if t.tzinfo is None else t
 
 
 def _env(name: str) -> str | None:

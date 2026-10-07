@@ -54,7 +54,7 @@ path = "src/endor/_version.py"
 packages = ["src/endor"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/endor", "tests", "docs", "examples", "README.md", "CHANGELOG.md", "LICENSE"]
+include = ["src/endor", "tests", "examples", "README.md", "CHANGELOG.md", "LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

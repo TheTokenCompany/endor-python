@@ -18,6 +18,7 @@ from endor import (
     BadRequestError,
     ConflictError,
     EndorClient,
+    InsufficientBalanceError,
     InternalServerError,
     NotFoundError,
     OverloadedError,
@@ -41,7 +42,7 @@ def make_client(fake: FakeEndor, **kw: object) -> EndorClient:
 class TestRetries:
     def test_retries_5xx_and_connection_errors(self, client: EndorClient, fake: FakeEndor) -> None:
         fake.fail_next += [HTTPError(500, "internal", "bug"), httpx.ConnectError("reset")]
-        assert client.whoami().user_id == "usr_test"
+        assert client.whoami().org_id == "org_test"
         assert len(fake.requests) == 3
 
     def test_retry_after_header_is_honored(self, fake: FakeEndor) -> None:
@@ -138,6 +139,7 @@ class TestErrors:
         [
             (400, BadRequestError),
             (401, AuthenticationError),
+            (402, InsufficientBalanceError),
             (403, PermissionDeniedError),
             (404, NotFoundError),
             (409, ConflictError),
@@ -171,6 +173,23 @@ class TestErrors:
         with pytest.raises(RateLimitError) as e:
             c.whoami()
         assert e.value.retry_after == 7.0 and e.value.code == "quota_exceeded"
+
+    def test_quota_and_balance_errors_are_not_retried(self, fake: FakeEndor) -> None:
+        c = make_client(fake, retry=RetryPolicy(max_retries=3, backoff_initial=0, backoff_max=0, timeout=None))
+        fake.fail_next.append(HTTPError(429, "quota_exceeded", "close a run", headers={"retry-after": "0"}))
+        with pytest.raises(RateLimitError):
+            c.whoami()
+        fake.fail_next.append(HTTPError(402, "insufficient_balance", "add credit"))
+        with pytest.raises(InsufficientBalanceError) as e:
+            c.whoami()
+        assert e.value.status == 402 and len(fake.requests) == 2
+        fake.fail_next.append(HTTPError(429, "rate_limited", "slow down", headers={"retry-after": "0"}))
+        c.whoami()  # a plain rate limit is retried
+        assert len(fake.requests) == 4
+
+    def test_balance_error_is_mapped_from_its_code(self) -> None:
+        err = endor.errors.api_error(400, {"error": {"code": "insufficient_balance", "message": "m"}}, httpx.Headers())
+        assert isinstance(err, InsufficientBalanceError)
 
     def test_bad_key_is_authentication_error(self, fake: FakeEndor) -> None:
         c = make_client(fake)
@@ -236,6 +255,16 @@ class TestEncoding:
 
     def test_none_params_are_dropped(self, client: EndorClient, fake: FakeEndor, project: endor.Project) -> None:
         project.runs.list()
-        assert fake.requests[-1].params == {"limit": "20", "offset": "0"}
+        assert fake.requests[-1].params == {"limit": "100", "offset": "0"}
         project.runs.list(tag="x", limit=5)
         assert fake.requests[-1].params == {"limit": "5", "offset": "0", "tag": "x"}
+
+    def test_lists_page_through_everything(
+        self, client: EndorClient, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(endor._constants, "LIST_PAGE_SIZE", 2)
+        names = {client.projects.create(f"page-{i}").name for i in range(5)}
+        assert {p.name for p in client.projects.list()} == names
+        pages = [r.params for r in fake.requests if r.method == "GET" and r.path == "/v1/projects"]
+        assert [p["offset"] for p in pages] == ["0", "2", "4"]
+        assert len(client.projects.list(limit=3)) == 3

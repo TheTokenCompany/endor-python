@@ -1,6 +1,6 @@
 """Decision rows: loading, format conversion, labels to training datums, splits and batches.
 
-A row is a decision request with labels (docs/DATA_FORMAT.md):
+A row is a decision request with labels (README, "Data format"):
 
     {"id"?, "state", "questions": {name: question}, "labels"?: {name: label}, "weight"?}
 

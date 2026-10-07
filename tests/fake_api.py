@@ -2,7 +2,8 @@
 
 It implements the public contract the SDK relies on: bearer auth, the error envelope, strict sequence numbers with
 idempotent retries, ``Idempotency-Key`` on creates, long-polled futures (optionally pending for N polls), the
-decision answer formulas, and fault injection for retry tests. It is a test double, not a reference server.
+decision answer formulas, the 4-open-runs limit, ``no_gradients``, 402 for a blocked org, and fault injection for
+retry tests. It is a test double, not a reference server.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import httpx
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
+MAX_ACTIVE_RUNS = 4
 BASE_MODELS: dict[str, dict[str, Any]] = {
     "pplx-decider-v1-27b": {
         "max_options": 255,
@@ -160,6 +162,8 @@ class FakeEndor:
     fail_next: list[Any] = field(default_factory=list)
     """Queued faults applied to the next requests: an ``HTTPError`` or an ``httpx.TransportError``."""
     requests: list[Recorded] = field(default_factory=list)
+    blocked: bool = False
+    """The org's balance is used up: paid calls answer 402 insufficient_balance."""
 
     projects: dict[str, dict] = field(default_factory=dict)
     datasets: dict[tuple[str, str], dict] = field(default_factory=dict)
@@ -254,7 +258,8 @@ class FakeEndor:
             fault = self.fail_next.pop(0)
             if isinstance(fault, HTTPError):
                 return self._error(fault)
-            raise fault
+            if fault is not None:  # None: let this request through
+                raise fault
         try:
             auth = request.headers.get("authorization", "")
             if not auth.startswith("Bearer ") or auth[7:] not in self.api_keys:
@@ -296,17 +301,33 @@ class FakeEndor:
         if p == ["models"] and m == "GET":
             return 200, self.list_models()
         if p == ["whoami"] and m == "GET":
-            return 200, {
-                "user_id": "usr_test",
-                "key_id": "key_test",
-                "email": "dev@example.com",
-                "key_prefix": "edk_test",
-            }
+            return 200, {"user_id": None, "org_id": "org_test", "key_id": "key_test", "key_prefix": "edk_test"}
         if p == ["usage"] and m == "GET":
             start, end = datetime.fromisoformat(params["starting_on"]), datetime.fromisoformat(params["ending_before"])
             if end - start > timedelta(days=14):
                 raise HTTPError(422, "invalid_input", "at most 14 days per call", "ending_before")
-            return 200, []
+            hour = start.replace(minute=0, second=0, microsecond=0).isoformat()
+            common = {"hour": hour, "project": params.get("project"), "base_model": "jevk5-4b"}
+            return 200, [
+                {
+                    **common,
+                    "kind": "decide",
+                    "model": None,
+                    "training_run_id": None,
+                    "input_tokens": 120,
+                    "gpu_seconds": None,
+                    "cost_usd": 0.00006,
+                },
+                {
+                    **common,
+                    "kind": "train",
+                    "model": None,
+                    "training_run_id": "run_0001",
+                    "input_tokens": None,
+                    "gpu_seconds": 360,
+                    "cost_usd": 0.3,
+                },
+            ]
         # projects
         if p == ["projects"] and m == "POST":
             return 201, self.create_project(body)
@@ -376,13 +397,15 @@ class FakeEndor:
             if tail == ["save_checkpoint"]:
                 return 202, self.save_checkpoint(run, body)
             if tail == ["close"]:
-                run["status"] = "closed"
+                if run["status"] not in ("closed", "failed"):
+                    run["status"] = "closed"
                 return 200, self.run_view(run)
             if tail == ["metrics"] and m == "POST":
                 if len(body["metrics"]) > 100:
                     raise HTTPError(422, "invalid_input", "at most 100 keys", "metrics")
+                step = body.get("step", run["step"])  # no step: the run's current step
                 self.metrics.setdefault(run["id"], []).extend(
-                    {"step": body["step"], "key": k, "value": v, "source": "client", "time": now().isoformat()}
+                    {"step": step, "key": k, "value": v, "source": "client", "time": now().isoformat()}
                     for k, v in body["metrics"].items()
                 )
                 return 204, None
@@ -457,6 +480,7 @@ class FakeEndor:
             raise HTTPError(422, "invalid_input", "send 1..64 questions", "questions")
         base_id, path = self.resolve_model(body["model"])
         base = BASE_MODELS[base_id]
+        self.check_balance()
         answers = {}
         for name, q in body["questions"].items():
             check_question(q, f"questions.{name}")
@@ -475,7 +499,13 @@ class FakeEndor:
                 "name": k,
                 "description": "base decision model",
                 "release_date": "2026-10-01",
-                "endor": {"kind": "base", "id": k, **v},
+                "endor": {
+                    "kind": "base",
+                    "id": k,
+                    **v,
+                    "price_per_mtok_decide": 0.5,
+                    "price_per_gpu_hour": 3.0,
+                },
             }
             for k, v in BASE_MODELS.items()
         ]
@@ -490,6 +520,7 @@ class FakeEndor:
                     "base_model": m["base_model"],
                     "training_run_id": m["training_run_id"],
                     "step": m["step"],
+                    "parent_model": m["parent_model"],
                 },
             }
             for m in self.models.values()
@@ -565,13 +596,28 @@ class FakeEndor:
         raise HTTPError(404, "not_found", "no route")
 
     # ------------------------------------------------------------------ runs
+    def check_balance(self) -> None:
+        if self.blocked:
+            raise HTTPError(402, "insufficient_balance", "Your balance is used up. Add credits in the dashboard.")
+
     def create_run(self, project: str, body: dict) -> dict:
+        self.check_balance()
+        open_runs = sum(1 for r in self.runs.values() if r["status"] not in ("closed", "failed"))
+        if open_runs >= MAX_ACTIVE_RUNS:
+            raise HTTPError(
+                429,
+                "quota_exceeded",
+                f"At most {MAX_ACTIVE_RUNS} active runs per org; close one first.",
+                headers={"retry-after": "60"},
+            )
         base_model, parent = body.get("base_model"), None
         if body.get("from_model"):
             mid = body["from_model"] if "/" in body["from_model"] else f"{project}/{body['from_model']}"
             m = self.models.get(mid)
             if m is None:
-                raise HTTPError(404, "not_found", f"no model {mid}")
+                raise HTTPError(
+                    422, "unknown_model", f"No model {body['from_model']!r} in project {project!r}.", "from_model"
+                )
             if m["project"] != project:
                 raise HTTPError(422, "invalid_input", "from_model must belong to this project", "from_model")
             if body.get("include_optimizer") and not m["has_optimizer"]:
@@ -579,15 +625,21 @@ class FakeEndor:
             base_model, parent = m["base_model"], mid
         if base_model not in BASE_MODELS:
             raise HTTPError(422, "unknown_model", f"not a trainable base model: {base_model}", "base_model")
-        lora = {
+        defaults = {
             "rank": 16,
             "alpha": 32.0,
             "seed": None,
             "train_attn": True,
             "train_mlp": True,
             "train_readout": False,
-            **(body.get("lora") or {}),
         }
+        if parent:  # a run from a saved model inherits its LoRA settings; explicit conflicting values are a 422
+            inherited = self.runs[self.models[parent]["training_run_id"]]["lora"]
+            for k, v in (body.get("lora") or {}).items():
+                if k != "seed" and v != inherited[k]:
+                    raise HTTPError(422, "invalid_input", f"{parent} was trained with {k}={inherited[k]}", f"lora.{k}")
+            defaults = inherited
+        lora = {**defaults, **(body.get("lora") or {})}
         if not 1 <= lora["rank"] <= 256:
             raise HTTPError(422, "invalid_input", "rank 1..256", "lora.rank")
         run_id = self.new_id("run")
@@ -597,6 +649,7 @@ class FakeEndor:
             "project": project,
             "name": body.get("name"),
             "base_model": base_model,
+            "contract": "letters-16",
             "lora": lora,
             "status": "provisioning" if self.provisioning_polls else "ready",
             "ready_future_id": ready["id"],
@@ -607,7 +660,9 @@ class FakeEndor:
             "config": body.get("config") or {},
             "code_hash": body.get("code_hash"),
             "user_metadata": body.get("user_metadata") or {},
+            "failure": None,
             "created_at": now().isoformat(),
+            "_w": 0.0,
         }
         self.runs[run_id] = run
         return self.run_view(run)
@@ -624,13 +679,14 @@ class FakeEndor:
             prev = self.ops.get((run["id"], seq))
             if prev and prev[0] == digest:
                 return {"future_id": prev[1]}
-            raise HTTPError(409, "seq_conflict", f"expected seq_id {run['next_seq_id']}, got {seq}")
+            raise HTTPError(409, "seq_conflict", f"expected seq_id {run['next_seq_id']}, got {seq}", "seq_id")
         if seq != run["next_seq_id"]:
-            raise HTTPError(409, "seq_conflict", f"expected seq_id {run['next_seq_id']}, got {seq}")
+            raise HTTPError(409, "seq_conflict", f"expected seq_id {run['next_seq_id']}, got {seq}", "seq_id")
+        self.check_balance()
         if run["status"] == "provisioning" and self.poll(self.futures[run["ready_future_id"]])["status"] == "completed":
             run["status"] = "ready"
         result = make_result()
-        f = self.future(kind, result)
+        f = self.future(kind, error=result["_error"]) if "_error" in result else self.future(kind, result)
         run["next_seq_id"] = seq + 1
         self.ops[(run["id"], seq)] = (digest, f["id"])
         return {"future_id": f["id"]}
@@ -667,15 +723,8 @@ class FakeEndor:
                 "n": n,
             }
             if kind == "forward_backward":
-                self.metrics.setdefault(run["id"], []).append(
-                    {
-                        "step": run["step"],
-                        "key": "train/loss",
-                        "value": metrics["loss:mean"],
-                        "source": "auto",
-                        "time": now().isoformat(),
-                    }
-                )
+                run["_w"] += w_sum
+                self.auto_metrics(run, {"train/loss": metrics["loss:mean"], "train/accuracy": metrics["accuracy"]})
             return {"outputs": outs, "metrics": metrics}
 
         return self.accept(run, body, kind, result)
@@ -684,10 +733,27 @@ class FakeEndor:
         adam = body.get("adam_params") or {}
 
         def result() -> dict:
+            if run["_w"] <= 0:
+                return {
+                    "_error": {
+                        "code": "no_gradients",
+                        "message": "Nothing to apply: no forward_backward with "
+                        "a positive weight since the last optim_step.",
+                    }
+                }
+            run["_w"] = 0.0
             run["step"] += 1
-            return {"step": run["step"], "grad_norm": 0.0, "learning_rate": adam.get("learning_rate", 1e-4)}
+            lr = adam.get("learning_rate", 1e-4)
+            self.auto_metrics(run, {"train/grad_norm": 0.0, "train/lr": lr})
+            return {"step": run["step"], "grad_norm": 0.0, "learning_rate": lr}
 
         return self.accept(run, body, "optim_step", result)
+
+    def auto_metrics(self, run: dict, values: dict[str, float]) -> None:
+        self.metrics.setdefault(run["id"], []).extend(
+            {"step": run["step"], "key": k, "value": v, "source": "auto", "time": now().isoformat()}
+            for k, v in values.items()
+        )
 
     def save_checkpoint(self, run: dict, body: dict) -> dict:
         name = body.get("name")
@@ -707,6 +773,8 @@ class FakeEndor:
                 "name": name,
                 "training_run_id": run["id"],
                 "base_model": run["base_model"],
+                "contract": "letters-16",
+                "parent_model": run["parent_model"],
                 "step": run["step"],
                 "has_optimizer": bool(body.get("include_optimizer")),
                 "size_bytes": 1024,
@@ -762,6 +830,7 @@ class FakeEndor:
 
     # ------------------------------------------------------------------ evaluations
     def create_evaluation(self, project: str, body: dict) -> dict:
+        self.check_balance()
         if (project, body.get("dataset")) not in self.datasets:
             raise HTTPError(404, "not_found", f"no dataset {body.get('dataset')}")
         self.resolve_model(body["model"])

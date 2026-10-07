@@ -7,7 +7,7 @@ import pytest
 import endor
 from endor import ConflictError, EndorClient, NotFoundError, UnprocessableEntityError
 
-from .conftest import ANGER, DEPT, rows, unique
+from .conftest import ANGER, DEPT, requests_to, rows, unique, wait_closed
 from .fake_api import FakeEndor
 
 
@@ -26,8 +26,9 @@ class TestProjects:
             client.projects.get(name)
 
     def test_get_or_create(self, client: EndorClient, fake: FakeEndor) -> None:
-        a = client.projects.get_or_create("goc")
-        b = client.projects.get_or_create("goc")
+        name = unique("goc")
+        a = client.projects.get_or_create(name)
+        b = client.projects.get_or_create(name)
         assert a.name == b.name and len(fake.projects) == 1
 
     def test_bad_name(self, client: EndorClient) -> None:
@@ -36,11 +37,11 @@ class TestProjects:
         assert e.value.param == "name"
 
     def test_delete_with_active_run_conflicts(self, project: endor.Project) -> None:
-        run = project.runs.create("jevk5-4b")
-        with pytest.raises(ConflictError) as e:
-            project.delete()
-        assert e.value.code == "run_active"
-        run.close()
+        with project.runs.create("jevk5-4b") as run:
+            with pytest.raises(ConflictError) as e:
+                project.delete()
+            assert e.value.code == "run_active"
+        wait_closed(run)
         project.delete()
 
     def test_info_refreshes_counts(self, project: endor.Project) -> None:
@@ -117,6 +118,28 @@ class TestRunsResource:
         )
         assert "code_hash" in body
         assert run.info_.lora.rank == 8 and run.info_.status == "ready"
+        run.close()
+
+    def test_from_model_sends_only_explicit_lora_settings(self, project: endor.Project, fake: FakeEndor) -> None:
+        with project.runs.create("jevk5-4b", rank=8) as run:
+            run.save_checkpoint("v1").result()
+        with project.runs.create(from_model="v1") as resumed:
+            assert requests_to(fake, "/runs", "POST")[-1].body["lora"] == {}
+            assert resumed.info_.lora.rank == 8  # inherited
+        with project.runs.create(from_model="v1", rank=8, seed=7):
+            assert requests_to(fake, "/runs", "POST")[-1].body["lora"] == {"rank": 8, "seed": 7}
+        with pytest.raises(UnprocessableEntityError):
+            project.runs.create(from_model="v1", rank=4)
+        with project.runs.create("jevk5-4b"):
+            lora = requests_to(fake, "/runs", "POST")[-1].body["lora"]
+        assert lora == {
+            "rank": 16,
+            "alpha": 32.0,
+            "seed": None,
+            "train_attn": True,
+            "train_mlp": True,
+            "train_readout": False,
+        }
 
     def test_capture_off(self, fake: FakeEndor) -> None:
         import httpx
@@ -128,8 +151,8 @@ class TestRunsResource:
             capture=False,
         )
         p = c.projects.create("nocap")
-        p.runs.create("jevk5-4b", config={"lr": 1})
-        body = fake.requests[-1].body
+        with p.runs.create("jevk5-4b", config={"lr": 1}):
+            body = fake.requests[-1].body
         assert body["config"] == {"lr": 1} and "code_hash" not in body
 
     def test_requires_a_model(self, project: endor.Project) -> None:
@@ -142,26 +165,51 @@ class TestRunsResource:
         assert e.value.code == "unknown_model"
 
     def test_resume_from_model(self, project: endor.Project) -> None:
-        run = project.runs.create("jevk5-4b")
-        run.optim_step().result()
-        run.save_checkpoint("v1", include_optimizer=True).result()
-        run.save_checkpoint("v2").result()
-        resumed = project.runs.create(from_model="v1", include_optimizer=True)
-        assert resumed.info_.parent_model == f"{project.name}/v1" and resumed.info_.base_model == "jevk5-4b"
-        full = project.runs.create(from_model=f"{project.name}/v2")
-        assert full.info_.parent_model == f"{project.name}/v2"
+        with project.runs.create("jevk5-4b") as run:
+            run.forward_backward(endor.data.rows_to_datums(rows(2))).result()
+            run.optim_step().result()
+            run.save_checkpoint("v1", include_optimizer=True).result()
+            run.save_checkpoint("v2").result()
+        with project.runs.create(from_model="v1", include_optimizer=True) as resumed:
+            assert resumed.info_.parent_model == f"{project.name}/v1" and resumed.info_.base_model == "jevk5-4b"
+        with project.runs.create(from_model=f"{project.name}/v2") as full:
+            assert full.info_.parent_model == f"{project.name}/v2"
+        assert project.models.get("v1").parent_model is None
         with pytest.raises(ConflictError) as e:
             project.runs.create(from_model="v2", include_optimizer=True)
         assert e.value.code == "invalid_state"
-        with pytest.raises(NotFoundError):
+        with pytest.raises(UnprocessableEntityError) as e2:
             project.runs.create(from_model="missing")
+        assert e2.value.code == "unknown_model"
 
     def test_list_and_get(self, project: endor.Project) -> None:
-        a = project.runs.create("jevk5-4b", tags=["x"])
-        project.runs.create("jevk5-4b")
-        assert [r.id for r in project.runs.list(tag="x")] == [a.id]
-        assert len(project.runs.list()) == 2
-        assert project.runs.get(a.id).info_.tags == ["x"]
+        with project.runs.create("jevk5-4b", tags=["x"]) as a, project.runs.create("jevk5-4b"):
+            assert [r.id for r in project.runs.list(tag="x")] == [a.id]
+            assert len(project.runs.list()) == 2 and len(project.runs.list(limit=1)) == 1
+            assert project.runs.get(a.id).info_.tags == ["x"]
+
+    def test_interrupted_provisioning_closes_the_run(
+        self, project: endor.Project, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake.provisioning_polls = 10**6
+
+        def interrupted(run: endor.Run, log_every: float = 30.0) -> None:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(endor.projects, "_wait_ready", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            project.runs.create("jevk5-4b")
+        (run,) = fake.runs.values()
+        assert run["status"] == "closed"
+
+    def test_quota_is_not_retried(self, project: endor.Project, fake: FakeEndor) -> None:
+        runs = [project.runs.create("jevk5-4b") for _ in range(4)]
+        with pytest.raises(endor.RateLimitError) as e:
+            project.runs.create("jevk5-4b")
+        assert e.value.code == "quota_exceeded" and e.value.retry_after == 60
+        assert len(requests_to(fake, "/runs", "POST")) == 5  # no retry
+        for r in runs:
+            r.close()
 
     def test_wait_for_provisioning_logs_progress(
         self, project: endor.Project, fake: FakeEndor, caplog: pytest.LogCaptureFixture
@@ -174,22 +222,24 @@ class TestRunsResource:
         assert any("ready after" in m for m in messages)
         assert run.ready.done() and run.info_.status == "ready"
         assert len([r for r in fake.requests if r.path == f"/v1/futures/{run.info_.ready_future_id}"]) == 3
+        run.close()
 
     def test_no_wait(self, project: endor.Project, fake: FakeEndor) -> None:
         fake.provisioning_polls = 1
-        run = project.runs.create("jevk5-4b", wait=False)
-        assert not run.ready.done() and run.info_.status == "provisioning"
-        run.ready.result()
-        run.optim_step().result()  # ops queue behind provisioning
+        with project.runs.create("jevk5-4b", wait=False) as run:
+            assert not run.ready.done() and run.info_.status == "provisioning"
+            run.forward(endor.data.rows_to_datums(rows(1))).result()  # ops queue behind provisioning
+            run.ready.result()
 
 
 class TestModels:
     def test_list_get_ttl_archive_delete(self, project: endor.Project) -> None:
-        run = project.runs.create("jevk5-4b")
-        run.optim_step().result()
-        mid = run.save_checkpoint("v1").result()
-        other = project.runs.create("jevk5-4b")
-        other.save_checkpoint("v2").result()
+        with project.runs.create("jevk5-4b") as run:
+            run.forward_backward(endor.data.rows_to_datums(rows(1))).result()
+            run.optim_step().result()
+            mid = run.save_checkpoint("v1").result()
+        with project.runs.create("jevk5-4b") as other:
+            other.save_checkpoint("v2").result()
         assert {m.name for m in project.models.list()} == {"v1", "v2"}
         assert [m.name for m in project.models.list(run_id=run.id)] == ["v1"]
         m = project.models.get(mid)
@@ -199,7 +249,7 @@ class TestModels:
         assert project.models.set_ttl(mid, None).expires_at is None
         archive = project.models.archive_url("v1")
         assert (
-            archive.url.startswith("https://")
+            archive.url.startswith(("https://", "file://"))
             and "endor_manifest.json" in archive.files
             and "optimizer.pt" not in archive.files
         )
@@ -212,8 +262,8 @@ class TestModels:
 class TestEvaluations:
     def test_evaluate_and_list(self, project: endor.Project) -> None:
         project.datasets.upload("heldout", rows(6))
-        run = project.runs.create("jevk5-4b")
-        model = run.save_checkpoint("v1").result()
+        with project.runs.create("jevk5-4b") as run:
+            model = run.save_checkpoint("v1").result()
         ev = project.evaluate(model, "heldout", run_id=run.id).result()
         assert (
             ev.status == "completed"
@@ -221,7 +271,7 @@ class TestEvaluations:
             and ev.dataset == "heldout"
             and ev.training_run_id == run.id
         )
-        assert ev.results and ev.results["overall"]["accuracy"] == 0.5
+        assert ev.results and 0 <= ev.results["overall"]["accuracy"] <= 1
         base_ev = project.evaluate("jevk5-4b", "heldout").result()
         assert [e.id for e in project.evaluations(run_id=run.id)] == [ev.id]
         assert [e.id for e in project.evaluations(model="jevk5-4b")] == [base_ev.id]

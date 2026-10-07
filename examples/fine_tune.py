@@ -2,7 +2,7 @@
 
     ENDOR_API_KEY=edk_... python examples/fine_tune.py rows.jsonl
 
-``rows.jsonl`` holds decision rows (docs/DATA_FORMAT.md): a state, named questions and the labels you know.
+``rows.jsonl`` holds decision rows (README, "Data format"): a state, named questions and the labels you know.
 """
 
 import sys

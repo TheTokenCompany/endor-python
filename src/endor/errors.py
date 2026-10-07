@@ -2,7 +2,8 @@
 
     EndorError
       APIError (status, code, param, message, body, headers, endpoint, request_id)
-        BadRequestError 400 · AuthenticationError 401 · PermissionDeniedError 403 · NotFoundError 404
+        BadRequestError 400 · AuthenticationError 401 · InsufficientBalanceError 402 · PermissionDeniedError 403
+        NotFoundError 404
         ConflictError 409 · PayloadTooLargeError 413 · UnprocessableEntityError 422
         RateLimitError 429 (retry_after) · OverloadedError 529 · InternalServerError 5xx
         ResponseValidationError: a 2xx whose body does not have the expected shape
@@ -29,6 +30,7 @@ __all__ = [
     "APIError",
     "BadRequestError",
     "AuthenticationError",
+    "InsufficientBalanceError",
     "PermissionDeniedError",
     "NotFoundError",
     "ConflictError",
@@ -108,6 +110,12 @@ class BadRequestError(APIError):
 
 class AuthenticationError(APIError):
     """401: missing, unknown or revoked API key."""
+
+
+class InsufficientBalanceError(APIError):
+    """402 ``insufficient_balance``: the org's balance is used up (a new org starts with none). Paid calls (decisions,
+    new runs, training calls, evaluations) are refused until you add credit in the dashboard under Billing. Never
+    retried."""
 
 
 class PermissionDeniedError(APIError):
@@ -191,6 +199,8 @@ class OperationFailedError(EndorError):
         self.future = future
         """The future's final state as returned by the server."""
         hint = _HINTS.get(code or "")
+        if hint and "new run" in message.lower():  # the server already says what to do
+            hint = None
         self.message = f"{message} {hint}" if hint else message
         super().__init__(self.message)
 
@@ -206,6 +216,7 @@ class OperationFailedError(EndorError):
 _STATUS_ERRORS: dict[int, type[APIError]] = {
     400: BadRequestError,
     401: AuthenticationError,
+    402: InsufficientBalanceError,
     403: PermissionDeniedError,
     404: NotFoundError,
     409: ConflictError,
@@ -218,6 +229,9 @@ _STATUS_ERRORS: dict[int, type[APIError]] = {
 
 def api_error(status: int, body: Any, headers: httpx.Headers, endpoint: str | None = None) -> APIError:
     """The exception for an HTTP error response."""
+    err = body.get("error") if isinstance(body, dict) else None
+    if isinstance(err, dict) and err.get("code") == "insufficient_balance":
+        return InsufficientBalanceError(status, body, headers, endpoint=endpoint)
     cls = _STATUS_ERRORS.get(status, InternalServerError if status >= 500 else APIError)
     return cls(status, body, headers, endpoint=endpoint)
 

@@ -22,7 +22,7 @@ def run_json(capsys: pytest.CaptureFixture[str], client: EndorClient, *args: str
 
 
 def test_whoami_and_base_models(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
-    assert "user_id=usr_test" in run(capsys, client, "whoami")
+    assert "org_id=" in run(capsys, client, "whoami")
     bases = run_json(capsys, client, "base-models")
     assert isinstance(bases, list) and {b["id"] for b in bases} >= {"jevk5-4b"}
 
@@ -46,7 +46,7 @@ def test_projects_datasets_runs_models(capsys: pytest.CaptureFixture[str], clien
     assert run_json(capsys, client, "models", "set-ttl", f"{name}/v1", "none")["expires_at"] is None  # type: ignore[index]
     ev = run_json(capsys, client, "eval", name, f"{name}/v1", "train")
     assert ev["status"] == "completed"  # type: ignore[index]
-    assert run_json(capsys, client, "runs", "close", r.id)["status"] == "closed"  # type: ignore[index]
+    assert run_json(capsys, client, "runs", "close", r.id)["status"] in ("closing", "closed")  # type: ignore[index]
     run(capsys, client, "models", "delete", f"{name}/v1")
     assert run_json(capsys, client, "models", "list", name) == []
     run(capsys, client, "datasets", "delete", name, "train")
@@ -56,8 +56,10 @@ def test_projects_datasets_runs_models(capsys: pytest.CaptureFixture[str], clien
 
 def test_usage(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
     out = run(capsys, client, "usage", "--start", "2026-10-01", "--end", "2026-10-03", "--csv")
-    assert out.splitlines()[0] == "hour,kind,project,base_model,run_id,tokens,cost_usd"
-    assert run_json(capsys, client, "usage", "--start", "2026-10-01", "--end", "2026-10-03") == []
+    lines = out.splitlines()
+    assert lines[0] == "hour,kind,project,base_model,model,training_run_id,input_tokens,gpu_seconds,cost_usd"
+    rows_json = run_json(capsys, client, "usage", "--start", "2026-10-01", "--end", "2026-10-03")
+    assert isinstance(rows_json, list) and len(rows_json) == len(lines) - 1
 
 
 def test_errors_exit_nonzero(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
@@ -85,7 +87,8 @@ def test_download(
     import httpx
 
     project = client.projects.create(unique("dl"))
-    project.runs.create("jevk5-4b").save_checkpoint("v1").result()
+    with project.runs.create("jevk5-4b") as r:
+        r.save_checkpoint("v1").result()
 
     class FakeStream:
         def __init__(self, *a: object, **k: object) -> None:
