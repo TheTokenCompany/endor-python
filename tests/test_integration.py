@@ -80,7 +80,7 @@ def test_tiny_training_loop(live: endor.EndorClient, base_model: str) -> None:
         res = live.system_one(rows[0]["state"], {"dept": DEPT}, model=model)
         assert res.model == model
         assert any(m.name == "v1" for m in project.models.list())
-        assert project.set_live("v1").live_model == model
+        assert next(m for m in project.models.list() if m.name == "v1").loss is not None
         ev = project.evaluate("v1", "train").result()
         assert ev.status == "completed" and ev.model == model
         assert ev.status == "completed"

@@ -7,7 +7,7 @@ client = endor.EndorClient()                                        # ENDOR_API_
 res = client.system_one({"body": "charged twice"},
                         {"dept": Choice(criteria={"billing": None, "technical": None}),
                          "urgent": Noul(instructions="Does this need an answer today?")},
-                        model="tickets")                            # the project's live model
+                        model="tickets/v1")                         # a saved model, by its id
 res.choices["dept"].choice, res.nouls["urgent"].noul
 
 project = client.projects.get_or_create("tickets", base_model="decider-2b")   # "tickets" answers at once

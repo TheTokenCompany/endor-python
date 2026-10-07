@@ -33,8 +33,7 @@ LIMITS: dict[str, float] = {
     "max_models_per_project": 50,
     "max_dataset_rows": 50_000,
     "max_pending_ops": 64,
-    "decisions_per_second": 50.0,
-    "decisions_burst": 100,
+    "decisions_per_minute": 60,
     "downloads_per_minute": 30,
     "dataset_uploads_per_minute": 20,
     "runs_per_minute": 20,
@@ -254,13 +253,11 @@ class FakeEndor:
 
     @staticmethod
     def project_view(p: dict, self_: FakeEndor) -> dict:
-        live = self_.live_model(p)
         return {
             "name": p["name"],
             "description": p["description"],
             "kind": p["kind"],
             "base_model": p["base_model"],
-            "live_model": None if p["base_model"] is None else (live or f"{p['name']}/{BASE}"),
             "paused": p["paused"] if p["kind"] == "managed" else None,
             "created_at": p["created_at"],
             "n_datasets": sum(1 for (pr, _) in self_.datasets if pr == p["name"]),
@@ -269,14 +266,26 @@ class FakeEndor:
             + (p["base_model"] is not None),
         }
 
-    def live_model(self, p: dict) -> str | None:
-        """The saved model "<project>" serves, or None for its base."""
-        mid = p["live_model"]
-        return mid if mid in self.models and self.models[mid]["_ready"] else None
+    def serves(self, p: dict) -> str | None:
+        """The saved model "<project>" answers with, or None for its base: a managed project's newest version; a
+        custom project always answers with its base."""
+        if p["kind"] != "managed":
+            return None
+        mine = [m for m in self.models.values() if m["project"] == p["name"] and m["_ready"]]
+        return max(mine, key=lambda m: m["created_at"])["id"] if mine else None
 
-    def promote(self, project: str, name: str) -> None:
-        """What set_live does: make a model (or the base) what "<project>" serves."""
-        self.project(project)["live_model"] = None if name == BASE else f"{project}/{name}"
+    def loss_at(self, m: dict) -> float | None:
+        """The run's train/loss at the model's step, or the last one before it (the mean of that step's points)."""
+        points = [
+            x
+            for x in self.metrics.get(m.get("training_run_id") or "", [])
+            if x["key"] == "train/loss" and x["step"] <= m["step"]
+        ]
+        if not points:
+            return None
+        last = max(x["step"] for x in points)
+        at = [x["value"] for x in points if x["step"] == last]
+        return sum(at) / len(at)
 
     def require_custom(self, project: str, what: str) -> None:
         """409 wrong_project_kind for a managed project (Endor trains it)."""
@@ -290,7 +299,6 @@ class FakeEndor:
             "id": f"{p['name']}/{BASE}",
             "project": p["name"],
             "name": BASE,
-            "live": self.live_model(p) is None,
             "training_run_id": None,
             "base_model": p["base_model"],
             "contract": "letters-16",
@@ -318,8 +326,7 @@ class FakeEndor:
         return {k: v for k, v in r.items() if not k.startswith("_")}
 
     def model_view(self, m: dict) -> dict:
-        live = self.live_model(self.projects[m["project"]]) == m["id"] if m["project"] in self.projects else False
-        return {**{k: v for k, v in m.items() if not k.startswith("_")}, "live": live}
+        return {**{k: v for k, v in m.items() if not k.startswith("_")}, "loss": self.loss_at(m)}
 
     @staticmethod
     def file_bytes(mid: str, name: str) -> bytes:
@@ -467,17 +474,6 @@ class FakeEndor:
                     del self.models[k]
                 del self.projects[p[1]]
                 return 204, None
-        if len(p) == 3 and p[0] == "projects" and p[2] == "live" and m == "POST":
-            proj = self.project(p[1])
-            self.require_custom(p[1], "set_live")
-            name = str(body.get("model", "")).removeprefix(f"{p[1]}/")
-            if name == BASE:
-                if proj["base_model"] is None:
-                    raise HTTPError(409, "no_base_model", f"Project {p[1]} has no base model yet.", "model")
-            elif not (f"{p[1]}/{name}" in self.models and self.models[f"{p[1]}/{name}"]["_ready"]):
-                raise HTTPError(404, "not_found", f"No model {p[1]}/{name}.", "name")
-            self.promote(p[1], name)
-            return 200, self.project_view(proj, self)
         if len(p) >= 3 and p[0] == "projects":
             project, sub = p[1], p[2]
             self.project(project)
@@ -608,8 +604,8 @@ class FakeEndor:
             raise HTTPError(
                 422,
                 "model_requires_project",
-                f'Call {model} through a project: "<project>/base" for the base model, or "<project>" for the '
-                "project's live model.",
+                f'Call {model} through a project: "<project>/base" for the base model, or "<project>/<name>" for a '
+                "saved model.",
                 "model",
             )
         if "/" in model:
@@ -622,7 +618,7 @@ class FakeEndor:
         if p is None:
             raise HTTPError(404, "unknown_model", f"no model {model}")
         if not name:
-            name = (self.live_model(p) or f"{proj}/{BASE}").partition("/")[2]
+            name = (self.serves(p) or f"{proj}/{BASE}").partition("/")[2]
         if name == BASE:
             if p["base_model"] is None:
                 raise HTTPError(409, "no_base_model", f"Project {proj} has no base model yet.", "model")
@@ -659,13 +655,14 @@ class FakeEndor:
         for name, p in sorted(self.projects.items()):
             if p["base_model"] is None:
                 continue
-            serves = self.live_model(p) or f"{name}/{BASE}"
+            serves = self.serves(p) or f"{name}/{BASE}"
+            what = "the newest version" if p["kind"] == "managed" else "the base model"
             items.append(
                 {
                     "name": name,
-                    "description": f"{name}: the project's live model, now {serves}.",
+                    "description": f"{name}: {what}, now {serves}.",
                     "release_date": "2026-10-01",
-                    "endor": {"kind": "live", "project": name, "base_model": p["base_model"], "model": serves},
+                    "endor": {"kind": "project", "project": name, "base_model": p["base_model"], "model": serves},
                 }
             )
             items.append(
@@ -743,7 +740,6 @@ class FakeEndor:
             "description": body.get("description"),
             "kind": kind,
             "base_model": body.get("base_model"),
-            "live_model": None,
             "paused": False,
             "created_at": now().isoformat(),
         }
@@ -1058,8 +1054,6 @@ class FakeEndor:
             return 200, self.model_view(mod)
         if len(tail) == 1 and m == "DELETE":
             del self.models[mid]
-            if proj["live_model"] == mid:
-                proj["live_model"] = None
             return 204, None
         if tail[1:] == ["download"] and m == "GET":
             names = ["adapter_model.safetensors", "adapter_config.json", "endor_manifest.json"]

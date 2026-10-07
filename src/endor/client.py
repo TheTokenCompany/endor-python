@@ -1,13 +1,14 @@
 """EndorClient: decisions, plus fine-tuning.
 
     client = endor.EndorClient()                               # ENDOR_API_KEY from the environment
-    client.system_one(state, questions, model="tickets")       # a decision with the project's live model
+    client.system_one(state, questions, model="tickets/v1")    # a decision with one saved model
     client.models.list()                                       # every name you can pass as model
     client.base_models()                                       # the base models, with limits and prices
     project = client.projects.get_or_create("tickets", base_model="decider-2b")   # datasets, runs, models
 
-``model`` always names a project: ``"<project>"`` (its live model), ``"<project>/base"`` (its base model) or
-``"<project>/<name>"`` (one saved model). A bare base model id is refused (``ModelRequiresProjectError``).
+``model`` always names a project: ``"<project>/<name>"`` (one saved model), ``"<project>/base"`` (its base model) or
+``"<project>"`` (a managed project's newest version, else its base model). A bare base model id is refused
+(``ModelRequiresProjectError``).
 
 Environment: ``ENDOR_API_KEY``, ``ENDOR_BASE_URL``, ``ENDOR_DEFAULT_MODEL``, ``ENDOR_LOG_LEVEL``.
 """
@@ -164,8 +165,8 @@ class EndorClient:
         Args:
             state: Text, a JSON object or an array: the data the decisions are about.
             questions: 1 to 64 named questions (``Noul``, ``Choice``, ``Score`` or dicts in the same shape).
-            model: ``"<project>"`` (the project's live model), ``"<project>/base"`` (its base model) or
-                ``"<project>/<name>"``. Defaults to the client's model.
+            model: ``"<project>/<name>"`` (a saved model), ``"<project>/base"`` (its base model) or ``"<project>"``
+                (a managed project's newest version, else its base model). Defaults to the client's model.
             retry, timeout: Overrides for this call.
             extra_headers: Extra request headers.
             extra_body: Extra top-level request fields, merged last.
@@ -232,7 +233,7 @@ class EndorClient:
         model = model or self.default_model
         if not model and not (extra_body and extra_body.get("model")):
             raise EndorError(
-                'no model: pass model="<project>" (its live model), "<project>/base" or "<project>/<name>", '
+                'no model: pass model="<project>/<name>", "<project>/base" or "<project>", '
                 f"or set a default with EndorClient(model=...) or {C.DEFAULT_MODEL_ENV}"
             )
         body: dict[str, Any] = {
@@ -320,9 +321,10 @@ class Models:
         timeout: float | None = None,
         extra_headers: Mapping[str, str] | None = None,
     ) -> ListModelsResponse:
-        """Every name you can pass as ``model``: ``"<project>"`` (its live model) and ``"<project>/base"`` for each
-        project with a base model, then ``"<project>/<name>"`` for each saved, unexpired model. ``.kind`` is
-        ``live``, ``base`` or ``model``. The base model catalog is ``client.base_models()``."""
+        """Every name you can pass as ``model``: ``"<project>"`` (a managed project's newest version, else the base)
+        and ``"<project>/base"`` for each project with a base model, then ``"<project>/<name>"`` for each saved,
+        unexpired model. ``.kind`` is ``project``, ``base`` or ``model``. The base model catalog is
+        ``client.base_models()``."""
         raw = self._t.request(
             "GET",
             "/v1/models",

@@ -97,7 +97,7 @@ class TestDecisions:
             {"body": "charged twice"}, {"dept": DEPT, "urgent": URGENT, "anger": ANGER}, model=decider
         )
         assert isinstance(res, SystemOneResponse)
-        assert res.model == f"{decider}/base"  # the model that answered: a new project's live model is its base
+        assert res.model == f"{decider}/base"  # the model that answered: a custom project answers with its base
         assert isinstance(res.choices["dept"], ChoiceAnswer) and res.choices["dept"].choice in ("billing", "tech")
         assert isinstance(res.nouls["urgent"], NoulAnswer) and res.nouls["urgent"].noul == 0.5
         s = res.scores["anger"]
@@ -143,13 +143,12 @@ class TestDecisions:
             model = run.save_checkpoint("v1").result()
         assert client.system_one("x", {"d": DEPT}, model=model).model == f"{project.name}/v1"
 
-    def test_project_base_and_live_model(self, client: EndorClient, fake: FakeEndor, project: endor.Project) -> None:
+    def test_project_base_and_saved_models(self, client: EndorClient, project: endor.Project) -> None:
         with project.runs.create() as run:  # on the project's base model
             run.save_checkpoint("v1").result()
-        assert client.system_one("x", {"d": DEPT}, model=project.name).model == f"{project.name}/base"
+        assert client.system_one("x", {"d": DEPT}, model=project.name).model == f"{project.name}/base"  # custom
         assert client.system_one("x", {"d": DEPT}, model=f"{project.name}/base").model == f"{project.name}/base"
-        fake.promote(project.name, "v1")
-        assert client.system_one("x", {"d": DEPT}, model=project.name).model == f"{project.name}/v1"
+        assert client.system_one("x", {"d": DEPT}, model=f"{project.name}/v1").model == f"{project.name}/v1"
 
     def test_no_model_fails_before_the_call(self, client: EndorClient, fake: FakeEndor) -> None:
         assert client.default_model is None
@@ -202,7 +201,7 @@ class TestDecisions:
         res = await client.system_one_async("x", {"u": URGENT}, model=decider)
         assert res.nouls["u"].noul == 0.5
         models = await client.models.list_async()
-        assert any(m.name == decider and m.kind == "live" for m in models.models)
+        assert any(m.name == decider and m.kind == "project" for m in models.models)
 
 
 class TestCatalogAndAccount:
@@ -212,7 +211,9 @@ class TestCatalogAndAccount:
         listed = client.models.list()
         by_name = {m.name: m for m in listed.models}
         assert "jev-9b" not in by_name  # a bare base model id is not a name a decision can send
-        assert by_name[project.name].kind == "live" and by_name[project.name].endor["model"] == f"{project.name}/base"
+        assert (
+            by_name[project.name].kind == "project" and by_name[project.name].endor["model"] == f"{project.name}/base"
+        )
         assert by_name[f"{project.name}/base"].kind == "base"
         saved = by_name[f"{project.name}/v1"]
         assert saved.kind == "model" and saved.endor["base_model"] == "jev-9b" and saved.release_date

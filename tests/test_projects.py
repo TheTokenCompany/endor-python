@@ -52,11 +52,11 @@ class TestProjects:
             "base_model": "decider-2b",
         }
         info = p.info_
-        assert info.kind == "custom" and info.base_model == "decider-2b" and info.live_model == f"{name}/base"
+        assert info.kind == "custom" and info.base_model == "decider-2b" and not hasattr(info, "live_model")
         assert info.paused is None and info.n_models == 1  # the base model counts
         m = client.projects.create(unique("man"), base_model="jev-9b", kind="managed")
         assert fake.requests[-1].body["kind"] == "managed"
-        assert m.info_.kind == "managed" and m.info_.paused is False and m.info_.live_model == f"{m.name}/base"
+        assert m.info_.kind == "managed" and m.info_.paused is False
         with pytest.raises(UnprocessableEntityError) as e:
             client.projects.create(unique("base"), base_model="gpt-9")
         assert e.value.code == "unknown_model"
@@ -83,8 +83,7 @@ class TestProjects:
             m.runs.create(wait=False)
         with pytest.raises(WrongProjectKindError):
             m.evaluate("base", "d")
-        with pytest.raises(WrongProjectKindError):
-            m.set_live("base")
+        assert not hasattr(m, "set_live")
 
     def test_project_limit(self, client: EndorClient, fake: FakeEndor) -> None:
         for _ in range(7):
@@ -308,7 +307,7 @@ class TestModels:
         assert [m.name for m in project.models.list(run_id=run.id)] == ["v1"]
         m = project.models.get(mid)
         assert m.id == mid and m.step == 1 and m.training_run_id == run.id and not m.has_optimizer
-        assert not m.live
+        assert not hasattr(m, "live") and m.loss is not None  # the loss at step 1 (the fake logs it at step 0)
         assert project.models.get("v1").id == mid
         assert project.models.set_ttl("v1", 3600).expires_at is not None
         assert project.models.set_ttl(mid, None).expires_at is None
@@ -317,29 +316,27 @@ class TestModels:
             project.models.get("v1")
         assert [m.name for m in project.models.list()] == ["base", "v2"]
 
-    def test_base_model_and_live(self, project: endor.Project, fake: FakeEndor) -> None:
+    def test_base_model(self, project: endor.Project) -> None:
         with project.runs.create("jev-9b") as run:
             run.save_checkpoint("v1").result()
         base = project.models.get("base")
-        assert base.id == f"{project.name}/base" and base.name == "base" and base.live
+        assert base.id == f"{project.name}/base" and base.name == "base" and base.loss is None
         assert base.base_model == "jev-9b" and base.training_run_id is None
         assert project.models.get(f"{project.name}/base").id == base.id
-        fake.promote(project.name, "v1")
-        live = {m.name: m.live for m in project.models.list()}
-        assert live == {"base": False, "v1": True}
-        assert project.info().live_model == f"{project.name}/v1"
+        assert [m.name for m in project.models.list()] == ["base", "v1"]
         with pytest.raises(UnprocessableEntityError):
             project.models.delete("base")
 
-    def test_set_live(self, project: endor.Project, client: endor.EndorClient) -> None:
+    def test_loss_is_the_one_at_save_time(self, project: endor.Project) -> None:
         with project.runs.create("jev-9b") as run:
-            run.save_checkpoint("v1").result()
-        info = project.set_live("v1")
-        assert info.live_model == f"{project.name}/v1" and project.info_ is info
-        assert client.system_one("x", {"u": {"type": "noul"}}, model=project.name).model == f"{project.name}/v1"
-        assert project.set_live(f"{project.name}/base").live_model == f"{project.name}/base"
-        with pytest.raises(NotFoundError):
-            project.set_live("v9")
+            run.save_checkpoint("v0").result()  # nothing trained yet
+            run.forward_backward(endor.data.rows_to_datums(rows(1))).result()  # loss at step 0
+            run.optim_step().result()
+            run.save_checkpoint("v1").result()  # step 1: the last loss at or before it is step 0's
+            run.log({"train/loss": 9.0}, step=5)  # the run trains on
+        by = {m.name: m for m in project.models.list()}
+        at0 = [p.value for p in run.metrics(keys=["train/loss"]) if p.step == 0]
+        assert by["v0"].loss == at0[0] and by["v1"].loss == at0[0]
 
 
 class TestEvaluations:
@@ -358,7 +355,7 @@ class TestEvaluations:
         base_ev = project.evaluate("base", "heldout").result()  # "base" resolves in the project
         assert base_ev.model == "base"
         assert project.evaluate("v1", "heldout").result().status == "completed"  # so does a bare name
-        assert project.evaluate(project.name, "heldout").result().status == "completed"  # its live model
+        assert project.evaluate(project.name, "heldout").result().status == "completed"  # its base model
         assert [e.id for e in project.evaluations(run_id=run.id)] == [ev.id]
         assert [e.id for e in project.evaluations(model="base")] == [base_ev.id]
         assert len(project.evaluations()) == 4

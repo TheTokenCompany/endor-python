@@ -339,17 +339,17 @@ class ModelMetadata(BaseModel):
     description: str = ""
     release_date: str | None = None
     endor: dict[str, Any] = Field(default_factory=dict)
-    """Endor's metadata: ``kind``, ``project`` and ``base_model``; for ``live`` also ``model`` (what ``<project>``
+    """Endor's metadata: ``kind``, ``project`` and ``base_model``; for ``project`` also ``model`` (what ``<project>``
     calls now), for ``base`` ``contract``, and for saved models ``training_run_id``, ``step`` and
     ``parent_model``."""
 
     @property
     def kind(self) -> str:
-        """``"live"`` (``<project>``), ``"base"`` (``<project>/base``) or ``"model"`` (``<project>/<name>``)."""
+        """``"project"`` (``<project>``), ``"base"`` (``<project>/base``) or ``"model"`` (``<project>/<name>``)."""
         if self.endor.get("kind"):
             return str(self.endor["kind"])
         if "/" not in self.name:
-            return "live"
+            return "project"
         return "base" if self.name.endswith("/base") else "model"
 
 
@@ -512,9 +512,6 @@ class ProjectInfo(_View):
     decisions). Set at creation; it never changes."""
     base_model: str | None = None
     """The project's base model (``"<project>/base"``). Set at creation; it never changes."""
-    live_model: str | None = None
-    """What ``"<project>"`` serves now: ``"<project>/base"`` or ``"<project>/<name>"``. A custom project serves the
-    model made live with ``set_live`` (the base until then); a managed project its newest version."""
     paused: bool | None = None
     """Managed projects: learning is paused (the project keeps serving its newest version). None for custom."""
     n_datasets: int = 0
@@ -553,8 +550,6 @@ class ModelInfo(_View):
     name: str
     """``base`` for the project's base model (listed first). A managed project's versions are named
     ``YYYY-MM-DD-N``."""
-    live: bool = False
-    """Whether ``"<project>"`` serves this model."""
     training_run_id: str | None = None
     base_model: str
     contract: str | None = None
@@ -565,6 +560,9 @@ class ModelInfo(_View):
     size_bytes: int | None = None
     expires_at: datetime | None = None
     user_metadata: dict[str, Any] = Field(default_factory=dict)
+    loss: float | None = None
+    """The training loss when the model was saved: its run's ``train/loss`` at ``step``, or the last one before it.
+    None for the base model, or when unknown."""
     created_at: datetime
 
 
@@ -643,7 +641,8 @@ class WhoAmI(_View):
     key_id: str | None = None
     limits: dict[str, int | float] = Field(default_factory=dict)
     """The org's limits by name, for example ``max_projects_per_org`` or ``max_active_runs``. A count limit raises
-    ``LimitReachedError`` once reached; a rate (``decisions_per_second``, ``..._per_minute``) ``RateLimitError``."""
+    ``LimitReachedError`` once reached; a rate raises ``RateLimitError``: ``decisions_per_minute`` (60 by default,
+    for the whole org) and the other ``..._per_minute``."""
 
 
 class FutureInfo(_View):

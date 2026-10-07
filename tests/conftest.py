@@ -123,7 +123,7 @@ DECIDE_BASE = "jev-9b"
 
 @pytest.fixture
 def decider(client: endor.EndorClient) -> str:
-    """The name of a new project with a base model: ``model=decider`` answers with its live model (the base)."""
+    """The name of a new project with a base model: ``model=decider`` answers with its base model."""
     return client.projects.create(unique("decide"), base_model=DECIDE_BASE).name
 
 

@@ -5,6 +5,19 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-07
+
+Breaking: there is no live model any more, as in the API.
+
+- Removed `project.set_live`, `ProjectInfo.live_model` and `ModelInfo.live`. Call each saved model by its id,
+  `"<project>/<name>"`. The bare `"<project>"` answers with a managed project's newest version (the base until one
+  exists) and with a custom project's base model, like `"<project>/base"`.
+- `client.models.list()`: the `"<project>"` entry's `kind` is `project` (was `live`).
+- `ModelInfo.loss`: the training loss when the model was saved (its run's `train/loss` at the model's step, or the
+  last one before it).
+- `WhoAmI.limits` has `decisions_per_minute` (60 by default, shared by all keys of the organization) instead of
+  `decisions_per_second` and `decisions_burst`.
+
 ## [0.2.3] - 2026-10-07
 
 - `Score` explains its `criteria`: the levels of one scale, lowest first, not a list of things to check.
