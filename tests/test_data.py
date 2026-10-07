@@ -107,6 +107,7 @@ class TestLabels:
         assert data.label_target(URGENT, "no") == Target(label="false")
         assert data.label_target(DEPT, "billing") == Target(label="billing")
         assert data.label_target(ANGER, 2) == Target(label="2")
+        assert data.label_target(ANGER, "2") == Target(label="2")  # the option id, as answers use it
 
     def test_soft_labels(self) -> None:
         assert data.label_target(URGENT, 0.75) == Target(probs={"false": 0.25, "true": 0.75})
@@ -121,7 +122,8 @@ class TestLabels:
             (DEPT, "nope"),
             (DEPT, 1),
             (ANGER, 7),
-            (ANGER, "2"),
+            (ANGER, "7"),
+            (ANGER, "high"),
             (URGENT, 2),
             (URGENT, "maybe"),
             (DEPT, {"billing": 0.7}),

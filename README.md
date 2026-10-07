@@ -33,11 +33,14 @@ export ENDOR_API_KEY=edk_...
 
 Python 3.10 and up. Dependencies: `httpx` and `pydantic`.
 
+The SDK calls production (`https://api.endor.thetokencompany.com`). For another environment, such as staging, set
+`ENDOR_BASE_URL=https://staging.api.endor.thetokencompany.com` or pass `EndorClient(base_url=...)`.
+
 API keys belong to an organization (`edk_...`, created in the dashboard); everything you create belongs to that org.
 
 ## Decisions
 
-Every decision goes through a project, which records it (continuous learning trains on that history). Create one
+Every decision goes through a project, which records it (for continuous learning, coming soon). Create one
 with a base model and it answers at once:
 
 ```python
@@ -67,7 +70,7 @@ res.model, res.usage.input_tokens         # the model that answered, e.g. "ticke
 
 | `model` | The model that answers |
 |---|---|
-| `"tickets"` | the project's live model: its base model, until you promote a saved model on the dashboard's Models tab or continuous learning makes a new one |
+| `"tickets"` | the project's live model: its base model, until you make a saved model live with `project.set_live("v1")` (or Make live on the dashboard's Models tab) |
 | `"tickets/base"` | the project's base model, without an adapter |
 | `"tickets/v1"` | one saved model |
 
@@ -96,8 +99,10 @@ triage = client.system_one(state, questions, model="tickets", response_model=Tri
 triage.department.choice, triage.urgent.noul
 ```
 
-**The catalog.** `client.models.list()` returns the base models and your saved models; `client.base_models()`
-returns the base models with their option limits and prices (`price_per_mtok_decide`, `price_per_gpu_hour`). Call a
+**The catalog.** `client.models.list()` returns every name you can pass as `model` (`GET /v1/models`):
+`"<project>"` and `"<project>/base"` for each project with a base model, then `"<project>/<name>"` for each saved
+model (`.kind` is `live`, `base` or `model`). `client.base_models()` returns the base models (`GET /v1/base_models`)
+with their option limits, `hf_repo`, `contract` and prices (`price_per_mtok_decide`, `price_per_gpu_hour`). Call a
 base model through a project: `"<project>/base"`.
 
 **Async.** `await client.system_one_async(...)` and `await client.models.list_async()`; `async with EndorClient()`
@@ -117,12 +122,13 @@ baseline = project.evaluate("base", "heldout").result()   # names resolve in the
 
 Without `base_model`, the project's first run sets it. `project.info_` has `base_model`, `live_model` (what
 `"tickets"` serves), `auto_promote` and `base_keep_warm`; change them with
-`project.update(base_model=..., auto_promote=..., base_keep_warm=...)`. A different base model makes `"tickets"`
+`project.update(base_model=..., auto_promote=..., base_keep_warm=...)`. `project.set_live("v1")` makes a saved model
+the live model (`"base"` goes back to the base model) and turns `auto_promote` off. A different base model makes `"tickets"`
 serve the new base again; saved models stay in the project. `project.models.list()` starts with the base model
 (`name == "base"`, `source == "base"`); each model has `source` (`base`, `sdk` or `continuous`) and `live`.
 
-**Continuous learning.** Turn it on when you create a project, or later, and Endor keeps fine-tuning a model on the
-project's decisions, from its base model:
+**Continuous learning** (coming soon). A project setting for Endor to keep fine-tuning a model on the project's
+decisions, from its base model. The setting exists today; the training pipeline behind it is not available yet.
 
 ```python
 project = client.projects.create("tickets", base_model="decider-2b", continuous_learning={"enabled": True})
@@ -130,8 +136,9 @@ project.update(continuous_learning={"enabled": False})            # pause it
 project.info_.continuous_learning   # ContinuousLearning(enabled, base_model, model): model is the newest one
 ```
 
-Its models are named `YYYY-MM-DD-N` (`source == "continuous"`). With `auto_promote` on (the default), each new one
-becomes the live model, so `"tickets"` follows it; promoting a model by hand on the dashboard turns it off.
+Its versions will be named `YYYY-MM-DD-N` (`source == "continuous"`). With `auto_promote` on (the default), each new
+version becomes the live model, so `"tickets"` follows it. `auto_promote` never applies to models saved from the SDK;
+`set_live` (or Make live on the dashboard) turns it off.
 
 **Keep a model warm.** `project.models.set_keep_warm("v1")` keeps a model loaded on the decision servers, so even
 its first request answers without a load time (free; `set_keep_warm("v1", False)` releases it). At most 3 models can
@@ -166,7 +173,7 @@ the `criteria` keys for a choice, `"0"`…`"n-1"` (the level index) for a score.
 |---|---|---|
 | `noul` | `true` / `false` | `0.8` (P(true)) or `{"true": 0.8, "false": 0.2}` |
 | `choice` | `"billing"` | `{"billing": 0.7, "technical": 0.2, "sales": 0.1}` |
-| `score` | `2` (level index) | `[0.1, 0.6, 0.3]` or `{"0": 0.1, "1": 0.6, "2": 0.3}` |
+| `score` | `2` (level index) or `"2"` (its option id) | `[0.1, 0.6, 0.3]` or `{"0": 0.1, "1": 0.6, "2": 0.3}` |
 
 `endor.data.load_rows(path)` reads `.jsonl` or a `.json` array and also accepts single-question rows,
 `{"state", "question", "expected"}` or `{"state", "question", "label"?, "target"?}`, each becoming one question named
@@ -177,7 +184,7 @@ the `criteria` keys for a choice, `"0"`…`"n-1"` (the level index) for a score.
 ```python
 from endor.recipes import SupervisedConfig, supervised
 
-cfg = SupervisedConfig(project="tickets", base_model="decider-2b", model_name="v1")
+cfg = SupervisedConfig(project="tickets", model_name="v1")   # base_model="decider-2b" by default
 result = supervised.train(cfg, endor.data.load_rows("train.jsonl"))
 
 result.base_metrics["accuracy"], result.final_metrics["accuracy"]   # held-out: "tickets/base", then yours
@@ -197,7 +204,7 @@ learning rate and schedule, batch size, epochs, loss, how often to evaluate.
   `client.base_models()` shows the prices; `client.usage(starting_on, ending_before)` returns hourly `decide` rows (input tokens)
   and `train` rows (GPU-seconds) with their cost.
 - **Idle timeout.** After 15 minutes without calls, a run saves its state and releases its GPU (status `idle`).
-  The next call restarts it on a new GPU, which just takes a few minutes longer.
+  The next call restarts it on a new GPU, which takes a little longer (usually under a minute).
 - **4 open runs per org.** Every run that isn't closed counts, idle ones included. A fifth `runs.create` raises
   `LimitReachedError` (409, code `limit_reached`), whose message lists the open runs; close one (`run.close()` or
   `endor runs close RUN_ID`). It is not retried.
@@ -239,7 +246,7 @@ fresh run defaults to rank 16, alpha 32, attention and MLP layers, no readout.
   question of a row becomes one datum.
 - `forward`, `forward_backward`, `optim_step` and `save_checkpoint` return futures. Call `.result()`, `await` them,
   or wait for several with `endor.gather(...)`. Each has an `_async` variant that submits without blocking. A future
-  can stay pending for minutes while a GPU starts; `.result()` keeps waiting.
+  can stay pending while a GPU starts (usually under a minute); `.result()` keeps waiting.
 - Gradients are the weighted mean over every datum since the last `optim_step`, so splitting a batch across calls
   changes nothing. `optim_step` with nothing accumulated fails with `no_gradients`. Batches over 1,024 datums are
   split for you; every datum is checked locally before any chunk is sent, so a bad datum never leaves half a batch
@@ -251,8 +258,8 @@ fresh run defaults to rank 16, alpha 32, attention and MLP layers, no readout.
   scores a saved model on a stored dataset server-side.
 - `run.close()` releases the trainer (a `with` block does it for you). Unsaved progress is lost; the SDK warns when
   you close with optimizer steps newer than your last save.
-- Creating a run provisions a trainer, which can take minutes. `runs.create(wait=True)` (the default) blocks and
-  logs progress on the `endor` logger; with `wait=False` the run returns at once and `run.ready` is the future.
+- Creating a run provisions a trainer, usually in under a minute. `runs.create(wait=True)` (the default) blocks
+  and logs progress on the `endor` logger; with `wait=False` the run returns at once and `run.ready` is the future.
 - If the trainer's GPU dies, pending calls fail with `trainer_lost` and the run becomes `failed` (`run.info().failure`
   says why). Start a new run with `from_model=` your last saved model.
 
@@ -366,7 +373,7 @@ continuous_learning_cost_usd, cost_usd`.
 |---|---|
 | `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(starting_on, ending_before, project=None)`, `close()`, `aclose()`, context managers |
 | `client.projects` | `create(name, description=None, continuous_learning=None, *, base_model=None)`, `get(name)`, `get_or_create(name, description=None, continuous_learning=None, *, base_model=None)`, `list(limit=None, offset=0)` (all pages) |
-| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `update(*, description=None, base_model=None, auto_promote=None, base_keep_warm=None, continuous_learning=None)`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
+| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `update(*, description=None, base_model=None, auto_promote=None, base_keep_warm=None, continuous_learning=None)`, `set_live(model)`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
 | `project.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
 | `project.runs` | `create(base_model=None, *, rank, alpha, seed, train_attn, train_mlp, train_readout, from_model, include_optimizer, name, tags, config, user_metadata, wait)` → `Run`, `get(run_id)`, `list(tag=None, limit=None, offset=0)` |
 | `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `set_keep_warm(model, on=True)`, `download(model, path, include_optimizer=False)`, `delete(model)`; `model` is a name or `<project>/<name>`, `base` for the base model |

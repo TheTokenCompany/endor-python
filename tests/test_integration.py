@@ -37,15 +37,21 @@ def base_model(live: endor.EndorClient) -> str:
 
 
 def test_whoami_and_catalog(live: endor.EndorClient, base_model: str) -> None:
-    assert live.whoami().org_id
-    assert base_model in {m.name for m in live.models.list().models}
+    me = live.whoami()
+    assert me.org_id and me.limits["max_active_runs"] >= 1
+    assert base_model not in {m.name for m in live.models.list().models}  # bases are called through a project
 
 
 def test_decision(live: endor.EndorClient, base_model: str) -> None:
-    res = live.system_one({"body": "I was charged twice"}, {"dept": DEPT, "urgent": URGENT}, model=base_model)
-    assert res.model == base_model
-    assert abs(sum(res.choices["dept"].probabilities.values()) - 1) < 1e-3
-    assert 0 <= res.nouls["urgent"].noul <= 1
+    project = live.projects.create(f"sdk-it-{uuid.uuid4().hex[:8]}", base_model=base_model)
+    try:
+        res = live.system_one({"body": "I was charged twice"}, {"dept": DEPT, "urgent": URGENT}, model=project.name)
+        assert res.model == f"{project.name}/base"
+        assert abs(sum(res.choices["dept"].probabilities.values()) - 1) < 1e-3
+        assert 0 <= res.nouls["urgent"].noul <= 1
+        assert {project.name, f"{project.name}/base"} <= {m.name for m in live.models.list().models}
+    finally:
+        project.delete()
 
 
 def test_tiny_training_loop(live: endor.EndorClient, base_model: str) -> None:
@@ -74,7 +80,9 @@ def test_tiny_training_loop(live: endor.EndorClient, base_model: str) -> None:
         res = live.system_one(rows[0]["state"], {"dept": DEPT}, model=model)
         assert res.model == model
         assert any(m.name == "v1" for m in project.models.list())
-        ev = project.evaluate(model, "train").result()
+        assert project.set_live("v1").live_model == model
+        ev = project.evaluate("v1", "train").result()
+        assert ev.status == "completed" and ev.model == model
         assert ev.status == "completed"
         project.models.delete("v1")
     finally:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import httpx
 import pytest
@@ -20,7 +21,7 @@ from endor import (
 )
 
 from .conftest import ANGER, API_KEY, BASE_URL, DECIDE_BASE, DEPT, URGENT, unique
-from .fake_api import FakeEndor
+from .fake_api import FakeEndor, HTTPError
 
 
 class TestConstructor:
@@ -200,7 +201,7 @@ class TestDecisions:
         res = await client.system_one_async("x", {"u": URGENT}, model=decider)
         assert res.nouls["u"].noul == 0.5
         models = await client.models.list_async()
-        assert any(m.name == "decider-2b" for m in models.models)
+        assert any(m.name == decider and m.kind == "live" for m in models.models)
 
 
 class TestCatalogAndAccount:
@@ -209,7 +210,9 @@ class TestCatalogAndAccount:
             run.save_checkpoint("v1").result()
         listed = client.models.list()
         by_name = {m.name: m for m in listed.models}
-        assert by_name["jev-9b"].kind == "base" and by_name["jev-9b"].endor["max_options"] == 16
+        assert "jev-9b" not in by_name  # a bare base model id is not a name a decision can send
+        assert by_name[project.name].kind == "live" and by_name[project.name].endor["model"] == f"{project.name}/base"
+        assert by_name[f"{project.name}/base"].kind == "base"
         saved = by_name[f"{project.name}/v1"]
         assert saved.kind == "model" and saved.endor["base_model"] == "jev-9b" and saved.release_date
         assert saved.endor["source"] == "sdk"
@@ -225,6 +228,28 @@ class TestCatalogAndAccount:
     def test_base_model_prices(self, client: EndorClient, fake: FakeEndor) -> None:
         jevk = next(b for b in client.base_models() if b.id == "jev-9b")
         assert jevk.price_per_gpu_hour == 3.0 and jevk.price_per_mtok_decide == 0.5
+        assert jevk.price_per_mtok_decide_continuous_learning == 0.75
+        assert jevk.hf_repo == "org/jev-9b" and jevk.hf_revision and jevk.contract and jevk.params
+
+    def test_base_models_from_an_older_api(self, client: EndorClient, fake: FakeEndor) -> None:
+        """An API without /v1/base_models listed the catalog in /v1/models."""
+        old = {
+            "name": "jev-9b",
+            "description": "",
+            "release_date": "2026-10-01",
+            "endor": {"kind": "base", "id": "jev-9b", "max_options": 16, "price_per_mtok_decide": 0.1},
+        }
+        real = fake.route
+
+        def route(method: str, path: str, body: Any, params: dict[str, str]) -> tuple[int, Any]:
+            if path == "/v1/base_models":
+                raise HTTPError(404, "not_found", "no route")
+            if path == "/v1/models":
+                return 200, {"models": [old]}
+            return real(method, path, body, params)
+
+        fake.route = route  # type: ignore[method-assign]
+        assert [(b.id, b.max_options) for b in client.base_models()] == [("jev-9b", 16)]
 
     def test_whoami(self, client: EndorClient) -> None:
         me = client.whoami()

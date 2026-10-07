@@ -123,7 +123,7 @@ def label_target(question: Question, label: Label) -> Target:
 
     noul: ``True``/``False``, or P(true) as a float, or ``{"true": p, "false": 1-p}``.
     choice: an option key, or ``{key: p, ...}`` over every option.
-    score: a level index, or ``[p0, p1, ...]`` or ``{"0": p0, ...}``.
+    score: a level index (``2``) or its option id (``"2"``), or ``[p0, p1, ...]`` or ``{"0": p0, ...}``.
     """
     keys, qtype = option_keys(question), question_dict(question)["type"]
     if isinstance(label, dict):
@@ -143,9 +143,11 @@ def label_target(question: Question, label: Label) -> Target:
             return Target(probs={"false": 1 - float(label), "true": float(label)})
         if isinstance(label, str) and label.lower() in ("true", "false", "yes", "no"):
             return Target(label="true" if label.lower() in ("true", "yes") else "false")
-    if qtype == "score" and isinstance(label, int) and not isinstance(label, bool):
-        if not 0 <= label < len(keys):
-            raise ValueError(f"score level {label} is out of range 0..{len(keys) - 1}")
+    if qtype == "score" and (
+        (isinstance(label, int) and not isinstance(label, bool)) or (isinstance(label, str) and label.isdigit())
+    ):
+        if str(label) not in keys:
+            raise ValueError(f"score level {label!r} is not an option of this question (0 to {len(keys) - 1})")
         return Target(label=str(label))
     if qtype == "choice" and isinstance(label, str):
         if label not in keys:
