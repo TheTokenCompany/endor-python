@@ -10,7 +10,7 @@ import pytest
 
 import endor
 from endor import EndorClient, cli
-from endor._headers import RUNTIME, sdk_context, user_agent
+from endor._headers import RUNTIME, RUNTIME_HEADER, sdk_context, user_agent
 from endor._log import redact_headers
 from endor.recipes import SupervisedConfig, supervised
 
@@ -20,10 +20,13 @@ from .fake_api import FakeEndor, HTTPError
 UA = f"endor-python/{endor.__version__} ({RUNTIME})"
 IDENTITY = {
     "user-agent": UA,
+    "x-endor-sdk": "endor-python",
+    "x-endor-sdk-version": endor.__version__,
+    "x-endor-runtime": RUNTIME_HEADER,
+    "x-endor-sdk-interface": "python",
     "accept": "application/json",
     "authorization": f"Bearer {API_KEY}",
 }
-DROPPED = ("x-endor-sdk", "x-endor-sdk-version", "x-endor-runtime", "x-endor-sdk-interface")
 
 
 def test_every_request_carries_identity(client: EndorClient, fake: FakeEndor) -> None:
@@ -36,11 +39,10 @@ def test_every_request_carries_identity(client: EndorClient, fake: FakeEndor) ->
     for req in fake.requests:
         for k, v in IDENTITY.items():
             assert req.headers[k] == v, (req.path, k)
-        for k in DROPPED:
-            assert k not in req.headers
         uuid.UUID(req.headers["x-endor-client-request-id"])
         assert "x-endor-retry-count" not in req.headers
     assert RUNTIME.startswith("python 3.") and RUNTIME.count(";") == 2
+    assert RUNTIME_HEADER.startswith("python/3.") and RUNTIME_HEADER.endswith(")")
 
 
 def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor) -> None:
@@ -147,18 +149,23 @@ def test_user_headers_pass_through_but_cannot_override_identity(fake: FakeEndor)
         api_key=API_KEY,
         base_url=BASE_URL,
         transport=httpx.MockTransport(fake.handler),
-        headers={"X-Team": "search", "X-Endor-SDK-Method": "forged", "User-Agent": "mine"},
+        headers={"X-Team": "search", "X-Endor-SDK": "forged", "X-Endor-SDK-Method": "forged", "User-Agent": "mine"},
     )
     c.whoami()
     h = fake.requests[-1].headers
     assert h["x-team"] == "search" and h["x-endor-sdk-method"] == "client.whoami" and h["user-agent"] == UA
+    assert h["x-endor-sdk"] == "endor-python"
 
 
 def test_cli_is_named_in_the_user_agent(client: EndorClient, fake: FakeEndor) -> None:
     assert cli.main(["whoami"], client=client) == 0
-    assert fake.requests[-1].headers["user-agent"] == f"endor-python/{endor.__version__} ({RUNTIME}; cli)"
+    h = fake.requests[-1].headers
+    assert (
+        h["user-agent"] == f"endor-python/{endor.__version__} ({RUNTIME}; cli)" and h["x-endor-sdk-interface"] == "cli"
+    )
     client.whoami()
-    assert fake.requests[-1].headers["user-agent"] == UA
+    h = fake.requests[-1].headers
+    assert h["user-agent"] == UA and h["x-endor-sdk-interface"] == "python"
 
 
 def test_recipe_header(client: EndorClient, fake: FakeEndor) -> None:

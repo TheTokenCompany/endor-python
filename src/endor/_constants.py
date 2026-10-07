@@ -14,7 +14,11 @@ LOG_LEVEL_ENV = "ENDOR_LOG_LEVEL"
 SDK_NAME = "endor-python"
 LOGGER_NAME = "endor"
 
-# Request headers the SDK sends (see docs/REQUEST_HEADERS.md). SDK version and runtime go in User-Agent.
+# Request headers the SDK sends on every call (see docs/REQUEST_HEADERS.md).
+HEADER_SDK = "X-Endor-SDK"
+HEADER_SDK_VERSION = "X-Endor-SDK-Version"
+HEADER_RUNTIME = "X-Endor-Runtime"
+HEADER_SDK_INTERFACE = "X-Endor-SDK-Interface"
 HEADER_SDK_METHOD = "X-Endor-SDK-Method"
 HEADER_SDK_RECIPE = "X-Endor-SDK-Recipe"
 HEADER_RETRY_COUNT = "X-Endor-Retry-Count"

@@ -120,6 +120,27 @@ class TestRunsResource:
         assert run.info_.lora.rank == 8 and run.info_.status == "ready"
         run.close()
 
+    def test_from_model_sends_only_explicit_lora_settings(self, project: endor.Project, fake: FakeEndor) -> None:
+        with project.runs.create("jevk5-4b", rank=8) as run:
+            run.save_checkpoint("v1").result()
+        with project.runs.create(from_model="v1") as resumed:
+            assert requests_to(fake, "/runs", "POST")[-1].body["lora"] == {}
+            assert resumed.info_.lora.rank == 8  # inherited
+        with project.runs.create(from_model="v1", rank=8, seed=7):
+            assert requests_to(fake, "/runs", "POST")[-1].body["lora"] == {"rank": 8, "seed": 7}
+        with pytest.raises(UnprocessableEntityError):
+            project.runs.create(from_model="v1", rank=4)
+        with project.runs.create("jevk5-4b"):
+            lora = requests_to(fake, "/runs", "POST")[-1].body["lora"]
+        assert lora == {
+            "rank": 16,
+            "alpha": 32.0,
+            "seed": None,
+            "train_attn": True,
+            "train_mlp": True,
+            "train_readout": False,
+        }
+
     def test_capture_off(self, fake: FakeEndor) -> None:
         import httpx
 

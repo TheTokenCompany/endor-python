@@ -625,15 +625,21 @@ class FakeEndor:
             base_model, parent = m["base_model"], mid
         if base_model not in BASE_MODELS:
             raise HTTPError(422, "unknown_model", f"not a trainable base model: {base_model}", "base_model")
-        lora = {
+        defaults = {
             "rank": 16,
             "alpha": 32.0,
             "seed": None,
             "train_attn": True,
             "train_mlp": True,
             "train_readout": False,
-            **(body.get("lora") or {}),
         }
+        if parent:  # a run from a saved model inherits its LoRA settings; explicit conflicting values are a 422
+            inherited = self.runs[self.models[parent]["training_run_id"]]["lora"]
+            for k, v in (body.get("lora") or {}).items():
+                if k != "seed" and v != inherited[k]:
+                    raise HTTPError(422, "invalid_input", f"{parent} was trained with {k}={inherited[k]}", f"lora.{k}")
+            defaults = inherited
+        lora = {**defaults, **(body.get("lora") or {})}
         if not 1 <= lora["rank"] <= 256:
             raise HTTPError(422, "invalid_input", "rank 1..256", "lora.rank")
         run_id = self.new_id("run")

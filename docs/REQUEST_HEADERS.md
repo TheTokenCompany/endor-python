@@ -10,23 +10,27 @@ own logs back to the SDK call that made it, and they let Endor support you and s
 | `Content-Type` | `application/json` | requests with a body |
 | `Content-Encoding` | `gzip` | bodies over 32 KB (on by default; `EndorClient(gzip=False)` turns it off) |
 | `User-Agent` | `endor-python/0.1.0 (python 3.12.1; darwin; arm64)`, with `; cli` added for the `endor` command | every request |
+| `X-Endor-SDK` | `endor-python` | every request |
+| `X-Endor-SDK-Version` | `0.1.0` | every request |
+| `X-Endor-Runtime` | `python/3.12.1 (darwin; arm64)` | every request |
+| `X-Endor-SDK-Interface` | `python` or `cli` | every request |
 | `X-Endor-SDK-Method` | `run.forward_backward` | every request: the public SDK method that caused it (list below) |
 | `X-Endor-SDK-Recipe` | `supervised` or `distill` | requests made inside a recipe |
 | `X-Endor-Client-Request-Id` | a UUID4 | every request; the same value on every retry of one logical call |
 | `X-Endor-Retry-Count` | `1`, `2`, … | retries only |
 | `Idempotency-Key` | a UUID4 | resource-creating POSTs (see below); the same value on every retry |
 
-The `User-Agent` holds the SDK version, the Python version, the operating system and the CPU architecture. Nothing
-else about your machine is sent.
+The SDK version, the Python version, the operating system and the CPU architecture are all that is sent about your
+machine.
 
-Headers you pass through `EndorClient(headers=...)` or `extra_headers=` are sent too. `User-Agent`,
-`X-Endor-SDK-Method`, `Authorization` and `Accept` cannot be overridden.
+Headers you pass through `EndorClient(headers=...)` or `extra_headers=` are sent too. The identity headers above
+(`User-Agent`, `X-Endor-SDK*`, `X-Endor-Runtime`), `Authorization` and `Accept` cannot be overridden.
 
 **What Endor keeps.** For every request, the API stores the request id, your org, the calling key, the route, the
-status and the latency, plus a `client` record with the user agent, SDK, SDK version, runtime, interface, SDK method,
-recipe, client request id and retry count (each cut to 200 characters). It also keeps the request body, and the
-response body when it is JSON and at most 256 KB, in object storage (S3). The secret API key itself is never
-stored.
+status and the latency, plus a `client` record with one field per header: `user_agent`, `sdk`, `sdk_version`,
+`runtime`, `interface`, `method`, `recipe`, `client_request_id` and `retry_count` (each cut to 200 characters). It
+also keeps the request body, and the response body when it is JSON and at most 256 KB, in object storage (S3). The
+secret API key itself is never stored.
 
 **In the body.** `project.runs.create` also sends the run's settings and, unless you create the client with
 `capture=False`, the current git commit of your working directory (`<sha>` or `<sha>+dirty`; never file contents),

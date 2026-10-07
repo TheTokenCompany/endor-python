@@ -165,6 +165,10 @@ with project.runs.create(base_model="pplx-decider-v1-27b", rank=16) as run:
 resumed = project.runs.create(from_model="v2", include_optimizer=True)   # continue exactly where v2 stopped
 ```
 
+A run created with `from_model` inherits that model's base model and LoRA settings (rank, alpha, which layers are
+trained); the SDK sends only the settings you pass explicitly, and one that conflicts with the model is a 422. A
+fresh run defaults to rank 16, alpha 32, attention and MLP layers, no readout.
+
 - A `Datum` is one state, one question, a `Target` (a hard `label` or soft `probs`) and a weight. Each labeled
   question of a row becomes one datum.
 - `forward`, `forward_backward`, `optim_step` and `save_checkpoint` return futures. Call `.result()`, `await` them,
@@ -242,6 +246,8 @@ transport.
 Besides your API key and the request itself, every request carries:
 
 - `User-Agent: endor-python/<version> (python <version>; <os>; <cpu>)`, with `; cli` added for the `endor` command;
+- `X-Endor-SDK: endor-python`, `X-Endor-SDK-Version: <version>`, `X-Endor-Runtime: python/<version> (<os>; <cpu>)`
+  and `X-Endor-SDK-Interface: python` or `cli`;
 - `X-Endor-SDK-Method` (the SDK call, e.g. `run.forward_backward`), `X-Endor-SDK-Recipe` (inside a recipe),
   `X-Endor-Client-Request-Id` (the same on every retry of one call) and `X-Endor-Retry-Count` (on retries).
 
@@ -249,8 +255,8 @@ Besides your API key and the request itself, every request carries:
 (never file contents).
 
 For every request, the API stores the request id, your org, the calling key, the route, the status and the latency,
-plus a `client` record with the user agent, SDK, SDK version, runtime, interface, SDK method, recipe, client request
-id and retry count (each cut to 200 characters). It also keeps the request body, and the response body when it is
+plus a `client` record with one field per header: `user_agent`, `sdk`, `sdk_version`, `runtime`, `interface`,
+`method`, `recipe`, `client_request_id` and `retry_count` (each cut to 200 characters). It also keeps the request body, and the response body when it is
 JSON and at most 256 KB, in object storage (S3). Details: [docs/REQUEST_HEADERS.md](docs/REQUEST_HEADERS.md).
 
 ## CLI

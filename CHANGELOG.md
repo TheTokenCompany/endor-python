@@ -17,11 +17,12 @@ Matches the current API (org API keys, GPU-hour billing, balances).
   context manager too, a `with` block that fails still closes the run, and `supervised.train` closes on errors.
 - `forward` and `forward_backward` validate every datum locally before sending any chunk; if the server refuses a
   later chunk, the accepted ones are cancelled.
+- `runs.create(from_model=...)` inherits the saved model's LoRA settings: only LoRA arguments you pass are sent.
 - `run.log()` without a step logs at the run's current step on the server.
 - List calls (`projects.list`, `datasets.list`, `runs.list`, `models.list`, `evaluations`) page through everything.
 - `EndorClient(timeout=...)` is used as given; it is no longer raised to 30 s.
-- Identification: SDK version and runtime are in `User-Agent`; `X-Endor-SDK`, `X-Endor-SDK-Version`,
-  `X-Endor-Runtime` and `X-Endor-SDK-Interface` are gone.
+- Identification: `User-Agent` is now `endor-python/<version> (python <version>; <os>; <cpu>[; cli])`, next to the
+  existing `X-Endor-SDK`, `X-Endor-SDK-Version`, `X-Endor-Runtime` and `X-Endor-SDK-Interface` headers.
 - `usage()` takes datetimes without a timezone as UTC.
 
 ## [0.1.0] - 2026-10-06

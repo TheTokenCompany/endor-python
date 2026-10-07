@@ -181,12 +181,12 @@ class Runs:
         self,
         base_model: str | None = None,
         *,
-        rank: int = 16,
-        alpha: float = 32.0,
+        rank: int | None = None,
+        alpha: float | None = None,
         seed: int | None = None,
-        train_attn: bool = True,
-        train_mlp: bool = True,
-        train_readout: bool = False,
+        train_attn: bool | None = None,
+        train_mlp: bool | None = None,
+        train_readout: bool | None = None,
         from_model: str | None = None,
         include_optimizer: bool = False,
         name: str | None = None,
@@ -197,6 +197,10 @@ class Runs:
     ) -> Run:
         """Start a run: a fresh adapter on ``base_model``, or one warm-started from ``from_model`` (a model of this
         project, as ``"name"`` or ``"<project>/name"``; with ``include_optimizer=True`` training resumes exactly).
+
+        LoRA settings left as None default to rank 16, alpha 32, attention and MLP, no readout for a fresh run. With
+        ``from_model`` they are inherited from the saved model, and only the ones you pass are sent (a value that
+        conflicts with the model is a 422).
 
         Provisioning a trainer can take minutes, and the GPU is billed from the moment it is requested. With
         ``wait=True`` this blocks until the run is ready and logs progress on the ``endor`` logger; if the wait is
@@ -210,19 +214,23 @@ class Runs:
         """
         if not base_model and not from_model:
             raise ValueError("pass base_model or from_model")
-        lora = LoraConfig(
-            rank=rank,
-            alpha=alpha,
-            seed=seed,
-            train_attn=train_attn,
-            train_mlp=train_mlp,
-            train_readout=train_readout,
-        )
+        given = {
+            "rank": rank,
+            "alpha": alpha,
+            "seed": seed,
+            "train_attn": train_attn,
+            "train_mlp": train_mlp,
+            "train_readout": train_readout,
+        }
+        given = {k: v for k, v in given.items() if v is not None}
+        # A fresh run gets the defaults (rank 16, alpha 32, attention and MLP); a run from a saved model inherits
+        # that model's settings, so only what the caller set explicitly is sent.
+        lora = given if from_model else LoraConfig(**given).model_dump()
         body: dict[str, Any] = {
             "base_model": base_model,
             "from_model": from_model,
             "include_optimizer": include_optimizer,
-            "lora": lora.model_dump(),
+            "lora": lora,
             "name": name,
             "tags": tags or [],
             "config": dict(config or {}),
@@ -233,7 +241,7 @@ class Runs:
                 **body["config"],
                 "base_model": base_model,
                 "from_model": from_model,
-                "lora": lora.model_dump(),
+                "lora": lora,
             }
             body["code_hash"] = git_identity()
         r = self._t.request(
