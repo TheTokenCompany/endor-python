@@ -193,6 +193,9 @@ class TestCatalogAndAccount:
         start = datetime(2026, 10, 1, tzinfo=timezone.utc)
         decide, train = client.usage(start, start + timedelta(days=3), project="tickets")
         assert decide.kind == "decide" and decide.input_tokens == 120 and decide.gpu_seconds is None
+        assert decide.continuous_learning is True and decide.price_per_mtok == 0.3
+        assert decide.base_cost_usd == 0.000024 and decide.continuous_learning_cost_usd == 0.000012
+        assert train.continuous_learning is None and train.price_per_mtok is None and train.base_cost_usd is None
         assert train.kind == "train" and train.gpu_seconds == 360 and train.training_run_id == "run_0001"
         assert fake.requests[-1].params == {
             "starting_on": start.isoformat(),

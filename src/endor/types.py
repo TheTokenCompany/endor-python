@@ -607,6 +607,14 @@ class UsageRow(_View):
     """Decisions only."""
     gpu_seconds: float | None = None
     """Training only: seconds of the run's reserved GPU, from request to release."""
+    continuous_learning: bool | None = None
+    """Decisions only: whether the project had continuous learning on (on and off usage come as separate rows)."""
+    price_per_mtok: float | None = None
+    """Decisions only: the price per 1M input tokens applied."""
+    base_cost_usd: float | None = None
+    """Decisions only: the cost at the base price."""
+    continuous_learning_cost_usd: float | None = None
+    """Decisions only: the continuous-learning extra (0 when off). ``cost_usd`` is the total."""
     cost_usd: float | None = None
 
 

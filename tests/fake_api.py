@@ -330,7 +330,11 @@ class FakeEndor:
                     "training_run_id": None,
                     "input_tokens": 120,
                     "gpu_seconds": None,
-                    "cost_usd": 0.00006,
+                    "continuous_learning": True,
+                    "price_per_mtok": 0.3,
+                    "base_cost_usd": 0.000024,
+                    "continuous_learning_cost_usd": 0.000012,
+                    "cost_usd": 0.000036,
                 },
                 {
                     **common,
@@ -339,6 +343,10 @@ class FakeEndor:
                     "training_run_id": "run_0001",
                     "input_tokens": None,
                     "gpu_seconds": 360,
+                    "continuous_learning": None,
+                    "price_per_mtok": None,
+                    "base_cost_usd": None,
+                    "continuous_learning_cost_usd": None,
                     "cost_usd": 0.3,
                 },
             ]

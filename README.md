@@ -308,7 +308,8 @@ endor usage --start 2026-10-01 --end 2026-10-06 [--project P] [--csv]
 
 `MODEL` is `<project>/<name>`. Every command takes `-f json`. Training itself happens in Python. `endor runs close`
 frees a slot when a script left a run open. `usage --csv` columns are `hour, kind, project, base_model, model,
-training_run_id, input_tokens, gpu_seconds, cost_usd`.
+training_run_id, input_tokens, gpu_seconds, continuous_learning, price_per_mtok, base_cost_usd,
+continuous_learning_cost_usd, cost_usd`.
 
 ## Reference
 

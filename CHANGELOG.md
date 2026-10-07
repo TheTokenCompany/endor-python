@@ -10,6 +10,7 @@ Matches the current API (org API keys, GPU-hour billing, balances).
 - `InsufficientBalanceError` (402 `insufficient_balance`), never retried; `quota_exceeded` is no longer retried.
 - `whoami()` returns `org_id`; `user_id` is None for an org API key.
 - `usage()` rows: `kind` is `decide` or `train`, with `model`, `input_tokens` and `gpu_seconds`; `tokens` is gone.
+  Decide rows also carry `continuous_learning`, `price_per_mtok`, `base_cost_usd` and `continuous_learning_cost_usd`.
   The CLI's `usage --csv` columns follow.
 - New fields: `BaseModelInfo.price_per_gpu_hour` (and `contract`, `hf_repo`, `trainer_gpu`; `price_per_mtok_train`
   is gone), `ModelInfo.parent_model` and `contract`, `RunInfo.contract`. Responses are parsed tolerantly.

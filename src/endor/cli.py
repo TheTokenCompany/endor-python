@@ -188,6 +188,10 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
                 "training_run_id",
                 "input_tokens",
                 "gpu_seconds",
+                "continuous_learning",
+                "price_per_mtok",
+                "base_cost_usd",
+                "continuous_learning_cost_usd",
                 "cost_usd",
             ]
             w.writerow(cols)

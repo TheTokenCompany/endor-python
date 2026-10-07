@@ -57,7 +57,11 @@ def test_projects_datasets_runs_models(capsys: pytest.CaptureFixture[str], clien
 def test_usage(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
     out = run(capsys, client, "usage", "--start", "2026-10-01", "--end", "2026-10-03", "--csv")
     lines = out.splitlines()
-    assert lines[0] == "hour,kind,project,base_model,model,training_run_id,input_tokens,gpu_seconds,cost_usd"
+    assert lines[0] == (
+        "hour,kind,project,base_model,model,training_run_id,input_tokens,gpu_seconds,continuous_learning,"
+        "price_per_mtok,base_cost_usd,continuous_learning_cost_usd,cost_usd"
+    )
+    assert lines[1].split(",")[8:12] == ["True", "0.3", "2.4e-05", "1.2e-05"]
     rows_json = run_json(capsys, client, "usage", "--start", "2026-10-01", "--end", "2026-10-03")
     assert isinstance(rows_json, list) and len(rows_json) == len(lines) - 1
 
