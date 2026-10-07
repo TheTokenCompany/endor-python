@@ -55,6 +55,7 @@ __all__ = [
     "AdamParams",
     "ForwardOutput",
     "OptimStepOutput",
+    "ContinuousLearning",
     "ProjectInfo",
     "RunInfo",
     "ModelInfo",
@@ -482,12 +483,30 @@ class OptimStepOutput(_View):
     learning_rate: float
 
 
+class ContinuousLearning(_View):
+    """A project's continuous-learning setting: Endor keeps fine-tuning a model on the project's decisions.
+
+    Pass it (or a dict with the same keys) to ``projects.create`` or ``project.update``; ``model`` is read-only.
+    """
+
+    enabled: bool = False
+    base_model: str | None = None
+    """The base model continuous learning trains on. Changing it starts continuous learning again from scratch."""
+    model: str | None = None
+    """The current continuously learned model (``"<project>/<name>"``), once there is one."""
+
+    def to_wire(self) -> dict[str, Any]:
+        """The fields a request sends: ``enabled`` and ``base_model`` when set."""
+        return {k: v for k, v in {"enabled": self.enabled, "base_model": self.base_model}.items() if v is not None}
+
+
 class ProjectInfo(_View):
     name: str
     description: str | None = None
     n_datasets: int = 0
     n_runs: int = 0
     n_models: int = 0
+    continuous_learning: ContinuousLearning | None = None
     created_at: datetime
 
 
@@ -526,6 +545,8 @@ class ModelInfo(_View):
     """The model the training run started from (``from_model``), if any."""
     step: int = 0
     has_optimizer: bool = False
+    keep_warm: bool = False
+    """Kept loaded on the decision servers, so even its first request answers without a load time."""
     size_bytes: int | None = None
     expires_at: datetime | None = None
     user_metadata: dict[str, Any] = Field(default_factory=dict)

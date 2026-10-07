@@ -18,6 +18,11 @@ Matches the current API (org API keys, GPU-hour billing, balances).
 - `forward` and `forward_backward` validate every datum locally before sending any chunk; if the server refuses a
   later chunk, the accepted ones are cancelled.
 - `runs.create(from_model=...)` inherits the saved model's LoRA settings: only LoRA arguments you pass are sent.
+- Base models are now `pplx-decider-v1.1-27b` (the default), `gev-26b`, `jev-9b`, `decider-2b` and
+  `gliner2.5-decide`.
+- `project.models.set_keep_warm(model, on)`; `ModelInfo.keep_warm`.
+- Continuous learning settings: `projects.create(..., continuous_learning=...)`, `project.update(...)`,
+  `ProjectInfo.continuous_learning`.
 - `run.log()` without a step logs at the run's current step on the server.
 - List calls (`projects.list`, `datasets.list`, `runs.list`, `models.list`, `evaluations`) page through everything.
 - `EndorClient(timeout=...)` is used as given; it is no longer raised to 30 s.

@@ -12,7 +12,7 @@ from endor.recipes import SupervisedConfig, supervised
 
 rows = endor.data.load_rows(sys.argv[1] if len(sys.argv) > 1 else "rows.jsonl")
 
-cfg = SupervisedConfig(project="tickets", model_name="v1", base_model="pplx-decider-v1-27b", eval_every=10)
+cfg = SupervisedConfig(project="tickets", model_name="v1", base_model="pplx-decider-v1.1-27b", eval_every=10)
 result = supervised.train(cfg, rows)
 
 print("model:", result.model)

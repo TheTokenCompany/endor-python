@@ -1,6 +1,6 @@
 """Run: one adapter on one base model inside a project, driven step by step.
 
-    run = project.runs.create(base_model="pplx-decider-v1-27b", rank=16)
+    run = project.runs.create(base_model="pplx-decider-v1.1-27b", rank=16)
     fb = run.forward_backward(datums)                 # gradients accumulate
     opt = run.optim_step(learning_rate=1e-4)          # AdamW step, then zero gradients
     fb.result(); opt.result()                         # submit both, then wait: no idle round trip
@@ -54,7 +54,7 @@ class Run:
     A run holds a GPU, billed per GPU-hour, until it is closed or idle for 15 minutes, and an org can have at most
     4 runs that aren't closed (idle ones included). Use it as a context manager so it is closed even on errors::
 
-        with project.runs.create(base_model="jevk5-4b") as run:
+        with project.runs.create(base_model="jev-9b") as run:
             ...
     """
 

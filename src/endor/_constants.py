@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DEFAULT_BASE_URL = "https://api.endor.thetokencompany.com"
-DEFAULT_MODEL = "pplx-decider-v1-27b"
+DEFAULT_MODEL = "pplx-decider-v1.1-27b"
 DEFAULT_TIMEOUT = 30.0  # seconds per HTTP operation (a future poll adds its server-side wait on top)
 
 API_KEY_ENV = "ENDOR_API_KEY"

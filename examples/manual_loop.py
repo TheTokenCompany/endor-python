@@ -21,7 +21,7 @@ project = client.projects.get_or_create("tickets")
 if "heldout" not in {d.name for d in project.datasets.list()}:
     project.datasets.upload("heldout", heldout_rows)
 
-with project.runs.create(base_model="pplx-decider-v1-27b", rank=16, tags=["manual"]) as run:
+with project.runs.create(base_model="pplx-decider-v1.1-27b", rank=16, tags=["manual"]) as run:
     steps = 0
     for epoch in range(2):
         for batch in endor.data.batches(train, 16, seed=epoch):

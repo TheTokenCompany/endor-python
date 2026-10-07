@@ -70,7 +70,7 @@ def test_lr_schedule() -> None:
 
 
 def test_evaluate_model(client: EndorClient) -> None:
-    m = supervised.evaluate_model(client, "jevk5-4b", rows(3))
+    m = supervised.evaluate_model(client, "jev-9b", rows(3))
     assert m["n"] == 6 and m["accuracy"] in (0.0, 0.5, 1.0) or 0 <= m["accuracy"] <= 1
 
 

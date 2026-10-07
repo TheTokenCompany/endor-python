@@ -15,7 +15,7 @@ def datums(n: int = 2) -> list[endor.Datum]:
 
 def test_long_poll_until_completed(project: endor.Project, fake: FakeEndor) -> None:
     fake.future_polls = 3
-    run = project.runs.create("jevk5-4b")
+    run = project.runs.create("jev-9b")
     fut = run.forward(datums())
     assert not fut.done() and fut.info is None
     out = fut.result()
@@ -29,7 +29,7 @@ def test_long_poll_until_completed(project: endor.Project, fake: FakeEndor) -> N
 
 def test_timeout_leaves_the_operation_running(project: endor.Project, fake: FakeEndor) -> None:
     fake.future_polls = 10**6
-    run = project.runs.create("jevk5-4b")
+    run = project.runs.create("jev-9b")
     fut = run.forward(datums())
     with pytest.raises(TimeoutError, match=str(fut.id)):
         fut.result(timeout=0.01)
@@ -41,7 +41,7 @@ def test_timeout_leaves_the_operation_running(project: endor.Project, fake: Fake
 
 def test_cancel(project: endor.Project, fake: FakeEndor) -> None:
     fake.future_polls = 5
-    run = project.runs.create("jevk5-4b")
+    run = project.runs.create("jev-9b")
     fut = run.forward(datums())
     fut.cancel()
     assert fake.requests[-1].path == f"/v1/futures/{fut.id}/cancel"
@@ -58,7 +58,7 @@ def test_cancel(project: endor.Project, fake: FakeEndor) -> None:
 
 def test_gather_uses_one_retrieve_per_round(project: endor.Project, fake: FakeEndor) -> None:
     fake.future_polls = 2
-    run = project.runs.create("jevk5-4b")
+    run = project.runs.create("jev-9b")
     fb = run.forward_backward(datums(3))
     opt = run.optim_step(learning_rate=1e-3)
     out, step = endor.gather(fb, opt)
@@ -72,7 +72,7 @@ def test_gather_uses_one_retrieve_per_round(project: endor.Project, fake: FakeEn
 
 def test_gather_reports_the_first_failure_after_all_settle(project: endor.Project, fake: FakeEndor) -> None:
     fake.future_polls = 1
-    run = project.runs.create("jevk5-4b")
+    run = project.runs.create("jev-9b")
     a = run.forward_backward(datums())
     b = run.optim_step()
     fake.fail_future(a.id or "", "oom", "out of memory")
@@ -84,7 +84,7 @@ def test_gather_reports_the_first_failure_after_all_settle(project: endor.Projec
 
 async def test_await_and_gather_async(project: endor.Project, fake: FakeEndor) -> None:
     fake.future_polls = 2
-    run = project.runs.create("jevk5-4b")
+    run = project.runs.create("jev-9b")
     fb = await run.forward_backward_async(datums())
     opt = await run.optim_step_async()
     out = await fb
@@ -111,7 +111,7 @@ def test_missing_future_is_not_found(client: endor.EndorClient) -> None:
 
 def test_many_leaves_are_chunked(project: endor.Project, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(endor.futures, "MAX_FUTURES_PER_RETRIEVE", 2)
-    run = project.runs.create("jevk5-4b")
+    run = project.runs.create("jev-9b")
     futs = [run.forward(datums(1)) for _ in range(5)]
     outs = endor.gather(*futs)
     assert [o.metrics["n"] for o in outs] == [2] * 5

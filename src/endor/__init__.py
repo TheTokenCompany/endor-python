@@ -10,7 +10,7 @@ res = client.system_one({"body": "charged twice"},
 res.choices["dept"].choice, res.nouls["urgent"].noul
 
 project = client.projects.get_or_create("tickets")
-with project.runs.create(base_model="pplx-decider-v1-27b", rank=16) as run:   # closed on exit, even on errors
+with project.runs.create(base_model="pplx-decider-v1.1-27b", rank=16) as run:   # closed on exit, even on errors
     for batch in endor.data.batches(endor.data.rows_to_datums(rows), 16):
         fb = run.forward_backward(batch)
         opt = run.optim_step(learning_rate=1e-4)
@@ -51,6 +51,7 @@ from .types import (
     BaseModelInfo,
     Choice,
     ChoiceAnswer,
+    ContinuousLearning,
     DatasetInfo,
     Datum,
     DecisionRow,
@@ -116,6 +117,7 @@ __all__ = [
     "ForwardOutput",
     "OptimStepOutput",
     # resources
+    "ContinuousLearning",
     "ProjectInfo",
     "RunInfo",
     "ModelInfo",

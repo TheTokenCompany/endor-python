@@ -108,7 +108,7 @@ class TestRetries:
 
     async def test_async_retries(self, client: EndorClient, fake: FakeEndor) -> None:
         fake.fail_next += [HTTPError(502, "bad_gateway", "x"), httpx.ConnectError("y")]
-        res = await client.system_one_async("x", {"u": endor.Noul()}, model="jevk5-4b")
+        res = await client.system_one_async("x", {"u": endor.Noul()}, model="jev-9b")
         assert res.nouls["u"].noul == 0.5 and len(fake.requests) == 3
 
 

@@ -40,7 +40,7 @@ class SupervisedConfig:
 
     project: str
     """The project that gets the run and the model (created if missing)."""
-    base_model: str = "pplx-decider-v1-27b"
+    base_model: str = "pplx-decider-v1.1-27b"
     model_name: str | None = None
     """The saved model's name in the project; default ``"<name or sft>-<timestamp>"``."""
     rank: int = 16

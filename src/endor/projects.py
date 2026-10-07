@@ -2,7 +2,7 @@
 
 project = client.projects.get_or_create("tickets")
 project.datasets.upload("train", rows)
-run = project.runs.create(base_model="pplx-decider-v1-27b")
+run = project.runs.create(base_model="pplx-decider-v1.1-27b")
 project.models.list()                      # every saved model: "tickets/<name>"
 project.evaluate("tickets/v1", "heldout").result()
 """
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import subprocess
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from typing import Any
 
 from . import _constants as C
@@ -21,7 +21,24 @@ from ._log import logger
 from .errors import NotFoundError
 from .futures import APIFuture
 from .runs import Run
-from .types import ArchiveInfo, DatasetInfo, DecisionRow, Evaluation, LoraConfig, ModelInfo, ProjectInfo
+from .types import (
+    ArchiveInfo,
+    ContinuousLearning,
+    DatasetInfo,
+    DecisionRow,
+    Evaluation,
+    LoraConfig,
+    ModelInfo,
+    ProjectInfo,
+)
+
+ContinuousLearningArg = ContinuousLearning | Mapping[str, Any]
+"""``ContinuousLearning(enabled=True, base_model="decider-2b")``, or a dict with the same keys."""
+
+
+def _cl_wire(cl: ContinuousLearningArg) -> dict[str, Any]:
+    return (cl if isinstance(cl, ContinuousLearning) else ContinuousLearning.model_validate(dict(cl))).to_wire()
+
 
 __all__ = ["Projects", "Project", "Datasets", "Runs", "Models", "MAX_UPLOAD_ROWS"]
 
@@ -34,10 +51,20 @@ class Projects:
     def __init__(self, transport: Transport, capture: bool) -> None:
         self._t, self._capture = transport, capture
 
-    def create(self, name: str, description: str | None = None) -> Project:
+    def create(
+        self,
+        name: str,
+        description: str | None = None,
+        continuous_learning: ContinuousLearningArg | None = None,
+    ) -> Project:
         """A new project. Names are lowercase, ``[a-z0-9._-]``, up to 63 characters, and permanent (they are part
-        of every model id). Raises ``ConflictError`` if you already have one with that name."""
-        body = {"name": name, "description": description}
+        of every model id). Raises ``ConflictError`` if you already have one with that name.
+
+        ``continuous_learning`` (``{"enabled": True, "base_model": "decider-2b"}``) turns on continuous learning
+        on the project's decisions."""
+        body: dict[str, Any] = {"name": name, "description": description}
+        if continuous_learning is not None:
+            body["continuous_learning"] = _cl_wire(continuous_learning)
         r = self._t.request("POST", "/v1/projects", json=body, method_name="projects.create", idempotent=True)
         return Project(self._t, r, self._capture)
 
@@ -47,12 +74,18 @@ class Projects:
             self._t, self._t.request("GET", f"/v1/projects/{name}", method_name="projects.get"), self._capture
         )
 
-    def get_or_create(self, name: str, description: str | None = None) -> Project:
-        """The project called ``name``, created if missing. Safe to call at the top of every script."""
+    def get_or_create(
+        self,
+        name: str,
+        description: str | None = None,
+        continuous_learning: ContinuousLearningArg | None = None,
+    ) -> Project:
+        """The project called ``name``, created if missing (with these settings). Safe to call at the top of every
+        script; an existing project's settings are left as they are."""
         try:
             return self.get(name)
         except NotFoundError:
-            return self.create(name, description)
+            return self.create(name, description, continuous_learning)
 
     def list(self, limit: int | None = None, offset: int = 0) -> list[Project]:
         """Your projects, newest first: all of them, or at most ``limit`` starting at ``offset``."""
@@ -79,6 +112,28 @@ class Project:
         """Refresh the project's counts."""
         self.info_ = ProjectInfo.model_validate(
             self._t.request("GET", f"/v1/projects/{self.name}", method_name="project.info")
+        )
+        return self.info_
+
+    def update(
+        self,
+        *,
+        description: str | None = None,
+        continuous_learning: ContinuousLearningArg | None = None,
+    ) -> ProjectInfo:
+        """Change the description or the continuous-learning setting; arguments left as None are unchanged.
+
+        Changing ``continuous_learning``'s ``base_model`` starts continuous learning again from scratch on the new
+        base; the models it learned so far stay in the project. ``{"enabled": False}`` pauses it."""
+        body: dict[str, Any] = {}
+        if description is not None:
+            body["description"] = description
+        if continuous_learning is not None:
+            body["continuous_learning"] = _cl_wire(continuous_learning)
+        if not body:
+            raise ValueError("nothing to update: pass description or continuous_learning")
+        self.info_ = ProjectInfo.model_validate(
+            self._t.request("PATCH", f"/v1/projects/{self.name}", json=body, method_name="project.update")
         )
         return self.info_
 
@@ -301,6 +356,18 @@ class Models:
             f"{self._base}/{self._name(model)}",
             json={"ttl_seconds": ttl_seconds},
             method_name="project.models.set_ttl",
+        )
+        return ModelInfo.model_validate(r)
+
+    def set_keep_warm(self, model: str, on: bool = True) -> ModelInfo:
+        """Keep the model loaded on the decision servers (``on=True``), so even its first request answers without a
+        load time, or release it (``on=False``). Free. At most 3 models per base model can be kept warm in an org:
+        a fourth raises ``ConflictError`` with ``param == "keep_warm"``; turn one off first."""
+        r = self._t.request(
+            "PATCH",
+            f"{self._base}/{self._name(model)}",
+            json={"keep_warm": on},
+            method_name="project.models.set_keep_warm",
         )
         return ModelInfo.model_validate(r)
 

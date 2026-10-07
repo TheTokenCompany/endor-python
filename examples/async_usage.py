@@ -25,7 +25,7 @@ async def main() -> None:
         datums = endor.data.rows_to_datums(
             [{"state": s, "questions": {"b": Noul(instructions="Billing?")}, "labels": {"b": True}} for s in states]
         )
-        async with project.runs.create(base_model="pplx-decider-v1-27b") as run:  # closed even on errors
+        async with project.runs.create(base_model="pplx-decider-v1.1-27b") as run:  # closed even on errors
             fb = await run.forward_backward_async(datums)
             opt = await run.optim_step_async(learning_rate=1e-4)
             out, step = await endor.gather_async(fb, opt)

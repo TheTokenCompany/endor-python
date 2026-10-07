@@ -98,6 +98,21 @@ project.datasets.upload("train", endor.data.load_rows("train.jsonl"))   # rows: 
 project.datasets.upload("heldout", endor.data.load_rows("heldout.jsonl"))
 ```
 
+**Continuous learning.** Turn it on when you create a project, or later, and Endor keeps fine-tuning a model on the
+project's decisions:
+
+```python
+project = client.projects.create("tickets", continuous_learning={"enabled": True, "base_model": "decider-2b"})
+project.update(continuous_learning={"enabled": False})            # pause it
+project.info_.continuous_learning   # ContinuousLearning(enabled, base_model, model): model is the current one
+```
+
+Changing `base_model` starts continuous learning again from scratch on the new base.
+
+**Keep a model warm.** `project.models.set_keep_warm("v1")` keeps a model loaded on the decision servers, so even
+its first request answers without a load time (free; `set_keep_warm("v1", False)` releases it). At most 3 models per
+base model can be kept warm in an org; a fourth raises `ConflictError` with `param == "keep_warm"`.
+
 A dataset row is a decision request with labels:
 
 ```json
@@ -148,7 +163,7 @@ learning rate and schedule, batch size, epochs, loss, how often to evaluate.
 
 - **Billing.** Training is billed per GPU-hour, one price for every GPU type, from when a run's GPU is requested
   (start-up and model loading count) until it is released. Decisions are billed per 1M input tokens, per base model.
-  `client.base_models()` shows the prices; `client.usage(start, end)` returns hourly `decide` rows (input tokens)
+  `client.base_models()` shows the prices; `client.usage(starting_on, ending_before)` returns hourly `decide` rows (input tokens)
   and `train` rows (GPU-seconds) with their cost.
 - **Idle timeout.** After 15 minutes without calls, a run saves its state and releases its GPU (status `idle`).
   The next call restarts it on a new GPU, which just takes a few minutes longer.
@@ -170,7 +185,7 @@ rows = endor.data.load_rows("train.jsonl")
 train, heldout = endor.data.split(rows, holdout=0.1)
 train, heldout = endor.data.rows_to_datums(train), endor.data.rows_to_datums(heldout)
 
-with project.runs.create(base_model="pplx-decider-v1-27b", rank=16) as run:
+with project.runs.create(base_model="pplx-decider-v1.1-27b", rank=16) as run:
     for batch in endor.data.batches(train, 16):
         fb = run.forward_backward(batch)            # gradients accumulate on the trainer
         opt = run.optim_step(learning_rate=1e-4)    # AdamW step, then zero gradients
@@ -299,19 +314,19 @@ training_run_id, input_tokens, gpu_seconds, cost_usd`.
 
 | Object | Members |
 |---|---|
-| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(start, end, project=None)`, `close()`, `aclose()`, context managers |
-| `client.projects` | `create(name, description=None)`, `get(name)`, `get_or_create(name, description=None)`, `list(limit=None, offset=0)` (all pages) |
-| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
+| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(starting_on, ending_before, project=None)`, `close()`, `aclose()`, context managers |
+| `client.projects` | `create(name, description=None, continuous_learning=None)`, `get(name)`, `get_or_create(name, description=None, continuous_learning=None)`, `list(limit=None, offset=0)` (all pages) |
+| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `update(*, description=None, continuous_learning=None)`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
 | `project.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
 | `project.runs` | `create(base_model=None, *, rank, alpha, seed, train_attn, train_mlp, train_readout, from_model, include_optimizer, name, tags, config, user_metadata, wait)` → `Run`, `get(run_id)`, `list(tag=None, limit=None, offset=0)` |
-| `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `archive_url(model)`, `delete(model)`; `model` is a name or `<project>/<name>` |
+| `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `set_keep_warm(model, on=True)`, `archive_url(model)`, `delete(model)`; `model` is a name or `<project>/<name>` |
 | `Run` | `.id`, `.project`, `.info_`, `.ready`, `.next_seq_id`, `forward(data, loss_fn)`, `forward_backward(data, loss_fn)`, `optim_step(adam_params=None, *, learning_rate=None)`, `save_checkpoint(name, *, include_optimizer, ttl_seconds, user_metadata)` → `APIFuture[str]`, the `_async` variants of those four, `close(*, wait=False, timeout=None)`, `close_async(...)`, `info()`, `log(metrics, step=None)`, `metrics(keys=None, since_step=None)`, `log_eval(model, results, *, step, name)`, sync and async context manager |
 | `APIFuture[T]` | `result(timeout=None)`, `await f`, `result_async(timeout)`, `done()`, `info`, `cancel()`, `cancel_async()`, `APIFuture.completed(value)`; `endor.gather(*futures)`, `endor.gather_async(*futures)` |
 | `endor.data` | `to_row`, `load_rows(path)`, `save_rows(path, rows)`, `label_target(question, label)`, `row_to_datums(row)`, `rows_to_datums(rows)`, `split(rows, holdout=0.1, seed=0)`, `batches(items, size, *, shuffle=True, seed=0)` |
 | `endor.metrics` | `decision_metrics(probs, targets, bins=10)` → `{n, accuracy, nll, brier, ece, mean_confidence, selective}` |
 | `endor.recipes.supervised` | `SupervisedConfig`, `SupervisedResult`, `train(cfg, rows, eval_rows=None, client=None)`, `evaluate_run(run, datums)`, `evaluate_model(client, model, rows)`, `lr_at(cfg, step, total)` |
 | `endor.recipes.distill` | `Teacher` (protocol), `DistillConfig(supervised, teacher, budget, seed)`, `label_with_teacher(rows, cfg)`, `distill(cfg, unlabeled_rows, eval_rows, client=None)` |
-| Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `ProjectInfo`, `RunInfo`, `LoraInfo`, `ModelInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `ArchiveInfo`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
+| Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `ProjectInfo`, `ContinuousLearning`, `RunInfo`, `LoraInfo`, `ModelInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `ArchiveInfo`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
 | Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError`, `ConflictError`, `PayloadTooLargeError`, `UnprocessableEntityError`, `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
 
 Every public member has a docstring with the details.

@@ -24,7 +24,7 @@ def run_json(capsys: pytest.CaptureFixture[str], client: EndorClient, *args: str
 def test_whoami_and_base_models(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
     assert "org_id=" in run(capsys, client, "whoami")
     bases = run_json(capsys, client, "base-models")
-    assert isinstance(bases, list) and {b["id"] for b in bases} >= {"jevk5-4b"}
+    assert isinstance(bases, list) and {b["id"] for b in bases} >= {"jev-9b"}
 
 
 def test_projects_datasets_runs_models(capsys: pytest.CaptureFixture[str], client: EndorClient, tmp_path: Path) -> None:
@@ -37,7 +37,7 @@ def test_projects_datasets_runs_models(capsys: pytest.CaptureFixture[str], clien
     assert ds["n_rows"] == 4  # type: ignore[index]
     assert [d["name"] for d in run_json(capsys, client, "datasets", "list", name)] == ["train"]  # type: ignore[union-attr]
     project = client.projects.get(name)
-    r = project.runs.create("jevk5-4b", name="cli-run")
+    r = project.runs.create("jev-9b", name="cli-run")
     r.save_checkpoint("v1").result()
     assert "cli-run" in run(capsys, client, "runs", "list", name)
     assert run_json(capsys, client, "runs", "show", r.id)["name"] == "cli-run"  # type: ignore[index]
@@ -87,7 +87,7 @@ def test_download(
     import httpx
 
     project = client.projects.create(unique("dl"))
-    with project.runs.create("jevk5-4b") as r:
+    with project.runs.create("jev-9b") as r:
         r.save_checkpoint("v1").result()
 
     class FakeStream:

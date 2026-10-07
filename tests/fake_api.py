@@ -26,25 +26,38 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
 MAX_ACTIVE_RUNS = 4
 BASE_MODELS: dict[str, dict[str, Any]] = {
-    "pplx-decider-v1-27b": {
+    "pplx-decider-v1.1-27b": {
         "max_options": 255,
         "trainable": True,
         "default_rank": 16,
         "lora_targets": ["attn", "mlp"],
     },
-    "jevk5-4b": {
+    "jev-9b": {
         "max_options": 16,
         "trainable": True,
         "default_rank": 16,
         "lora_targets": ["attn", "mlp"],
     },
-    "bosun-v3.1-1.7b": {
+    "decider-2b": {
         "max_options": 255,
         "trainable": True,
         "default_rank": 16,
         "lora_targets": ["attn", "mlp"],
     },
+    "gev-26b": {
+        "max_options": 16,
+        "trainable": True,
+        "default_rank": 16,
+        "lora_targets": ["attn", "mlp"],
+    },
+    "gliner2.5-decide": {
+        "max_options": 64,
+        "trainable": True,
+        "default_rank": 16,
+        "lora_targets": ["attn", "mlp"],
+    },
 }
+MAX_WARM_PER_BASE = 3
 
 
 class HTTPError(Exception):
@@ -227,6 +240,7 @@ class FakeEndor:
             "n_datasets": sum(1 for (pr, _) in self_.datasets if pr == p["name"]),
             "n_runs": sum(1 for r in self_.runs.values() if r["project"] == p["name"]),
             "n_models": sum(1 for m in self_.models.values() if m["project"] == p["name"]),
+            "continuous_learning": p["continuous_learning"],
         }
 
     def project(self, name: str) -> dict:
@@ -307,7 +321,7 @@ class FakeEndor:
             if end - start > timedelta(days=14):
                 raise HTTPError(422, "invalid_input", "at most 14 days per call", "ending_before")
             hour = start.replace(minute=0, second=0, microsecond=0).isoformat()
-            common = {"hour": hour, "project": params.get("project"), "base_model": "jevk5-4b"}
+            common = {"hour": hour, "project": params.get("project"), "base_model": "jev-9b"}
             return 200, [
                 {
                     **common,
@@ -337,6 +351,12 @@ class FakeEndor:
         if len(p) == 2 and p[0] == "projects":
             if m == "GET":
                 return 200, self.project_view(self.project(p[1]), self)
+            if m == "PATCH":
+                proj = self.project(p[1])
+                if "description" in body:
+                    proj["description"] = body["description"]
+                self.set_continuous_learning(proj, body.get("continuous_learning"))
+                return 200, self.project_view(proj, self)
             if m == "DELETE":
                 self.project(p[1])
                 if any(r["project"] == p[1] and r["status"] in ("provisioning", "ready") for r in self.runs.values()):
@@ -535,9 +555,29 @@ class FakeEndor:
             raise HTTPError(422, "invalid_input", "bad name", "name")
         if name in self.projects:
             raise HTTPError(409, "conflict", f"project {name} already exists")
-        p = {"name": name, "description": body.get("description"), "created_at": now().isoformat()}
+        p = {
+            "name": name,
+            "description": body.get("description"),
+            "continuous_learning": {"enabled": False, "base_model": None, "model": None},
+            "created_at": now().isoformat(),
+        }
+        self.set_continuous_learning(p, body.get("continuous_learning"))
         self.projects[name] = p
         return self.project_view(p, self)
+
+    @staticmethod
+    def set_continuous_learning(p: dict, cl: dict | None) -> None:
+        if cl is None:
+            return
+        cur = p["continuous_learning"]
+        base = cl.get("base_model", cur["base_model"])
+        if base is not None and base not in BASE_MODELS:
+            raise HTTPError(422, "unknown_model", f"not a base model: {base}", "continuous_learning.base_model")
+        if base != cur["base_model"]:
+            cur["model"] = None  # a new base starts continuous learning from scratch
+        cur.update(enabled=cl.get("enabled", cur["enabled"]), base_model=base)
+        if cur["enabled"] and cur["base_model"] is None:
+            raise HTTPError(422, "invalid_input", "base_model is required", "continuous_learning.base_model")
 
     def datasets_route(self, m: str, project: str, tail: list[str], body: Any, params: dict) -> tuple[int, Any]:
         if not tail and m == "POST":
@@ -777,6 +817,7 @@ class FakeEndor:
                 "parent_model": run["parent_model"],
                 "step": run["step"],
                 "has_optimizer": bool(body.get("include_optimizer")),
+                "keep_warm": False,
                 "size_bytes": 1024,
                 "expires_at": (now() + timedelta(seconds=ttl)).isoformat() if ttl else None,
                 "user_metadata": body.get("user_metadata") or {},
@@ -809,10 +850,23 @@ class FakeEndor:
         if len(tail) == 1 and m == "GET":
             return 200, self.model_view(mod)
         if len(tail) == 1 and m == "PATCH":
-            ttl = body.get("ttl_seconds")
-            if ttl is not None and not 3600 <= ttl <= 10 * 365 * 86400:
-                raise HTTPError(422, "invalid_input", "ttl 1h..10y", "ttl_seconds")
-            mod["expires_at"] = (now() + timedelta(seconds=ttl)).isoformat() if ttl else None
+            if "ttl_seconds" in body:
+                ttl = body["ttl_seconds"]
+                if ttl is not None and not 3600 <= ttl <= 10 * 365 * 86400:
+                    raise HTTPError(422, "invalid_input", "ttl 1h..10y", "ttl_seconds")
+                mod["expires_at"] = (now() + timedelta(seconds=ttl)).isoformat() if ttl else None
+            if body.get("keep_warm") is not None:
+                if body["keep_warm"] and not mod["keep_warm"]:
+                    warm = [x for x in self.models.values() if x["keep_warm"] and x["base_model"] == mod["base_model"]]
+                    if len(warm) >= MAX_WARM_PER_BASE:
+                        raise HTTPError(
+                            409,
+                            "conflict",
+                            f"At most {MAX_WARM_PER_BASE} models per base model can be "
+                            "kept warm in an org. Turn one off first.",
+                            "keep_warm",
+                        )
+                mod["keep_warm"] = body["keep_warm"]
             return 200, self.model_view(mod)
         if len(tail) == 1 and m == "DELETE":
             del self.models[mid]

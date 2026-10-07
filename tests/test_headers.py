@@ -33,7 +33,7 @@ def test_every_request_carries_identity(client: EndorClient, fake: FakeEndor) ->
     client.whoami()
     client.system_one("x", {"d": DEPT})
     project = client.projects.create(unique("hdr"))
-    with project.runs.create("jevk5-4b") as run:
+    with project.runs.create("jev-9b") as run:
         run.forward(endor.data.rows_to_datums(rows(2))).result()
     assert len(fake.requests) >= 6
     for req in fake.requests:
@@ -54,7 +54,7 @@ def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor) 
     project = client.projects.get_or_create(name)
     project.datasets.upload("d", rows(2))
     list(project.datasets.rows("d"))
-    run = project.runs.create("jevk5-4b")
+    run = project.runs.create("jev-9b")
     run.forward_backward(endor.data.rows_to_datums(rows(1))).result()
     run.optim_step().result()
     run.save_checkpoint("v1").result()
@@ -107,10 +107,10 @@ def test_idempotency_key_on_creates_only(client: EndorClient, fake: FakeEndor) -
     name = unique("idem")
     project = client.projects.create(name)
     project.datasets.upload("d", rows(1))
-    with project.runs.create("jevk5-4b") as run:
+    with project.runs.create("jev-9b") as run:
         run.forward(endor.data.rows_to_datums(rows(1)))
         run.log_eval("x", {})
-    project.evaluate("jevk5-4b", "d")
+    project.evaluate("jev-9b", "d")
     client.whoami()
     with_key = {(r.method, r.path) for r in fake.requests if "idempotency-key" in r.headers}
     assert with_key == {
