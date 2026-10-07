@@ -5,7 +5,7 @@
     endor projects list | create NAME | delete NAME
     endor datasets list PROJECT | upload PROJECT NAME FILE | delete PROJECT NAME
     endor runs list PROJECT | show RUN_ID | close RUN_ID
-    endor models list PROJECT | info MODEL | download MODEL [-o FILE] | set-ttl MODEL SECONDS|none | delete MODEL
+    endor models list PROJECT | info MODEL | download MODEL [-o DIR] | set-ttl MODEL SECONDS|none | delete MODEL
     endor eval PROJECT MODEL DATASET
     endor usage --start 2026-10-01 --end 2026-10-06 [--project P] [--csv]
 
@@ -85,7 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
     md.add_parser("info").add_argument("model")
     dl = md.add_parser("download")
     dl.add_argument("model")
-    dl.add_argument("-o", "--output")
+    dl.add_argument("-o", "--output", help="folder to write the files into (default: <project>-<name>)")
+    dl.add_argument("--include-optimizer", action="store_true", help="also optimizer.pt, to resume training")
     ttl = md.add_parser("set-ttl")
     ttl.add_argument("model")
     ttl.add_argument("seconds", help="seconds, or 'none' to keep the model")
@@ -164,15 +165,8 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
             elif a.action == "delete":
                 models.delete(a.model)
             elif a.action == "download":
-                import httpx
-
-                info = models.archive_url(a.model)
-                target = a.output or a.model.replace("/", "-") + ".tar"
-                with httpx.stream("GET", info.url, follow_redirects=True) as r, open(target, "wb") as fh:
-                    r.raise_for_status()
-                    for chunk in r.iter_bytes():
-                        fh.write(chunk)
-                print(target)
+                target = a.output or a.model.replace("/", "-")
+                _out(models.download(a.model, target, include_optimizer=a.include_optimizer), f)
     elif a.cmd == "eval":
         _out(client.projects.get(a.project).evaluate(a.model, a.dataset).result(), f)
     elif a.cmd == "usage":

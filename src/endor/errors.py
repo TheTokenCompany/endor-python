@@ -43,6 +43,7 @@ __all__ = [
     "APIConnectionError",
     "APITimeoutError",
     "OperationFailedError",
+    "DownloadError",
     "api_error",
 ]
 
@@ -211,6 +212,11 @@ class OperationFailedError(EndorError):
 
     def __str__(self) -> str:
         return f"{self.code}: {self.message}" if self.code else self.message
+
+
+class DownloadError(EndorError):
+    """A model file could not be downloaded, or failed its size or SHA-256 check. The message names the file, never
+    the link."""
 
 
 _STATUS_ERRORS: dict[int, type[APIError]] = {
