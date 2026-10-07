@@ -1,5 +1,5 @@
-"""Ask a model named questions about a state. Every decision goes through a project: "tickets" is its live model,
-"tickets/base" its base model and "tickets/v1" a saved model.
+"""Ask a model named questions about a state. Every decision goes through a project: "tickets/v1" is a saved model,
+"tickets/base" the base model, and "tickets" a managed project's newest version (a custom project's base model).
 
 ENDOR_API_KEY=edk_... python examples/decisions.py
 """
@@ -20,7 +20,7 @@ questions = {
 }
 
 res = client.system_one(state, questions)  # the client's default model, "tickets"
-print(res.model)  # the model that answered: "tickets/base" until a saved model is live
+print(res.model)  # the model that answered: "tickets/base" in a custom project
 print(res.choices["department"].choice, res.choices["department"].probabilities)
 print(res.nouls["urgent"].noul)
 print(res.scores["frustration"].score, res.scores["frustration"].probabilities)

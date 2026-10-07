@@ -57,21 +57,21 @@ res = client.system_one(
         "urgent": Noul(instructions="Does the customer need an answer today?"),
         "frustration": Score(instructions="How frustrated is the customer?", criteria=["Calm", "Annoyed", "Angry"]),
     },
-    model="tickets",             # the project's live model; "tickets/base" or "tickets/v1" for a specific one
+    model="tickets/v1",          # a saved model; "tickets/base" for the base model
 )
 
 res.choices["department"].choice          # "billing"
 res.choices["department"].probabilities   # {"billing": 0.91, "technical": 0.07, "sales": 0.02}
 res.nouls["urgent"].noul                  # 0.83
 res.scores["frustration"].score           # 1.4 (expected level), plus .probabilities and .legend
-res.model, res.usage.input_tokens         # the model that answered, e.g. "tickets/base"
+res.model, res.usage.input_tokens         # the model that answered, e.g. "tickets/v1"
 ```
 
 | `model` | The model that answers |
 |---|---|
-| `"tickets"` | the project's live model. Custom project: its base model, until you make a saved model live with `project.set_live("v1")` (or Make live on the dashboard). Managed project: its newest version, or the base until there is one |
-| `"tickets/base"` | the project's base model, without an adapter |
 | `"tickets/v1"` | one saved model |
+| `"tickets/base"` | the project's base model, without an adapter |
+| `"tickets"` | managed project: its newest version, or the base until there is one. Custom project: its base model |
 
 A bare base model id such as `"decider-2b"` raises `ModelRequiresProjectError` (422 `model_requires_project`). There is no default model: pass
 `model=` or set one with `EndorClient(model="tickets")` or `ENDOR_DEFAULT_MODEL`, else `system_one` raises
@@ -99,7 +99,7 @@ triage.department.choice, triage.urgent.noul
 
 **The catalog.** `client.models.list()` returns every name you can pass as `model` (`GET /v1/models`):
 `"<project>"` and `"<project>/base"` for each project with a base model, then `"<project>/<name>"` for each saved
-model (`.kind` is `live`, `base` or `model`). `client.base_models()` returns the base models (`GET /v1/base_models`)
+model (`.kind` is `project`, `base` or `model`). `client.base_models()` returns the base models (`GET /v1/base_models`)
 with their option limits, `hf_repo`, `contract` and prices (`price_per_mtok_decide`,
 `price_per_mtok_decide_continuous_learning` for managed projects, `price_per_gpu_hour`). Call a
 base model through a project: `"<project>/base"`.
@@ -115,7 +115,7 @@ both set at creation and never changed:
 | | Custom (`kind="custom"`, the default) | Managed (`kind="managed"`) |
 |---|---|---|
 | Who trains | you, with the SDK | Endor, from the project's own decisions (coming soon) |
-| `"tickets"` serves | the model you make live with `set_live`, else the base | the newest version, else the base |
+| `"tickets"` serves | the base model; call each saved model by its id | the newest version, else the base |
 | Datasets, runs, saves, evaluations | yes | no (`WrongProjectKindError`, 409 `wrong_project_kind`) |
 | Decision price | the base model's price | +50% (`price_per_mtok_decide_continuous_learning`), paused or not |
 
@@ -128,10 +128,9 @@ project.datasets.upload("heldout", endor.data.load_rows("heldout.jsonl"))
 baseline = project.evaluate("base", "heldout").result()   # names resolve in the project: "base" is "tickets/base"
 ```
 
-`project.info_` has `kind`, `base_model`, `live_model` (what `"tickets"` serves) and `paused` (managed projects
-only). `project.update(description=...)` changes the description. `project.set_live("v1")` makes a saved model the
-live model (`"base"` goes back to the base model). `project.models.list()` starts with the base model
-(`name == "base"`); each model has `live`. Runs always train on the project's base model: `runs.create()` can leave
+`project.info_` has `kind`, `base_model` and `paused` (managed projects only). `project.update(description=...)`
+changes the description. `project.models.list()` starts with the base model (`name == "base"`); each saved model has
+`loss`, its training loss when it was saved. Runs always train on the project's base model: `runs.create()` can leave
 `base_model` out, and another base raises `UnprocessableEntityError`. `get_or_create` raises `ValueError` when the
 existing project has another kind or base model.
 
@@ -371,7 +370,7 @@ continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a man
 |---|---|
 | `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(starting_on, ending_before, project=None)`, `close()`, `aclose()`, context managers |
 | `client.projects` | `create(name, description=None, *, base_model, kind="custom")`, `get(name)`, `get_or_create(name, description=None, *, base_model, kind="custom")`, `list(limit=None, offset=0)` (all pages) |
-| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `update(*, description=None, paused=None)`, `set_live(model)`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
+| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `update(*, description=None, paused=None)`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
 | `project.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
 | `project.runs` | `create(base_model=None, *, rank, alpha, seed, train_attn, train_mlp, train_readout, from_model, include_optimizer, name, tags, config, user_metadata, wait)` → `Run`, `get(run_id)`, `list(tag=None, limit=None, offset=0)` |
 | `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `download(model, path, include_optimizer=False)`, `delete(model)`; `model` is a name or `<project>/<name>`, `base` for the base model |

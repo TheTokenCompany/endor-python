@@ -4,7 +4,6 @@ project = client.projects.get_or_create("tickets", base_model="decider-2b")   # 
 project.datasets.upload("train", rows)
 run = project.runs.create(base_model="decider-2b")
 project.models.list()                      # "tickets/base", then every saved model: "tickets/<name>"
-project.set_live("v1")                     # model="tickets" now answers with "tickets/v1"
 project.evaluate("base", "heldout").result()   # names resolve in the project: "base" is "tickets/base"
 """
 
@@ -129,17 +128,6 @@ class Project:
         )
         return self.info_
 
-    def set_live(self, model: str) -> ProjectInfo:
-        """Make ``model`` the live model: what ``model="<project>"`` answers with. ``model`` is a saved model's name,
-        ``"<project>/<name>"``, or ``"base"`` for the project's base model. Custom projects only: a managed project
-        always serves its newest version (``WrongProjectKindError``). Raises ``NotFoundError`` for an unknown model."""
-        self.info_ = ProjectInfo.model_validate(
-            self._t.request(
-                "POST", f"/v1/projects/{self.name}/live", json={"model": model}, method_name="project.set_live"
-            )
-        )
-        return self.info_
-
     def update(
         self,
         *,
@@ -165,9 +153,10 @@ class Project:
 
     def evaluate(self, model: str, dataset: str, run_id: str | None = None) -> APIFuture[Evaluation]:
         """Score a model on one of this project's datasets, server-side. ``model`` is ``"base"`` (this project's
-        base model), a model name of this project, this project's name (its live model) or a full model id
-        (``"<project>"``, ``"<project>/base"``, ``"<project>/<name>"``). A bare base model id is refused. The
-        evaluation records the full id of the model that answered: ``"base"`` becomes ``"<project>/base"``.
+        base model), a model name of this project, this project's name (a managed project's newest version, else
+        the base) or a full model id (``"<project>"``, ``"<project>/base"``, ``"<project>/<name>"``). A bare base
+        model id is refused. The evaluation records the full id of the model that answered: ``"base"`` becomes
+        ``"<project>/base"``.
 
         The result's ``results`` has ``n``, then ``overall``, ``by_type`` and ``by_question``, each with accuracy,
         NLL, Brier, ECE, mean confidence and ``selective`` (``{"0.5": {"accuracy", "coverage"}, ...}`` for the

@@ -150,7 +150,7 @@ class NoBaseModelError(ConflictError):
 
 class WrongProjectKindError(ConflictError):
     """409 ``wrong_project_kind``: the call doesn't apply to this kind of project. Managed projects refuse datasets,
-    training runs, saved models, evaluations and ``set_live`` (Endor trains them); custom projects refuse
+    training runs, saved models and evaluations (Endor trains them); custom projects refuse
     ``paused``. The message says what the project is."""
 
 
@@ -164,7 +164,8 @@ class UnprocessableEntityError(APIError):
 
 class ModelRequiresProjectError(UnprocessableEntityError):
     """422 ``model_requires_project``: ``model`` is a bare base model id. Every decision names a project:
-    ``"<project>"`` (its live model), ``"<project>/base"`` (its base model) or ``"<project>/<name>"``."""
+    ``"<project>/<name>"`` (a saved model), ``"<project>/base"`` (its base model) or ``"<project>"`` (a managed
+    project's newest version, else its base model)."""
 
 
 class RateLimitError(APIError):
