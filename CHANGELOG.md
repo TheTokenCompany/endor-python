@@ -5,6 +5,10 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-07
+
+- `Score` explains its `criteria`: the levels of one scale, lowest first, not a list of things to check.
+
 ## [0.2.2] - 2026-10-07
 
 - A custom project may be created without `base_model`: its first `runs.create(base_model=...)` sets it, for good.
