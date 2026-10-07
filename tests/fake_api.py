@@ -734,13 +734,15 @@ class FakeEndor:
         kind = body.get("kind", "custom")
         if kind not in ("custom", "managed"):
             raise HTTPError(422, "invalid_input", "kind is custom or managed", "kind")
-        if body.get("base_model") not in BASE_MODELS:
+        if body.get("base_model") is None and kind == "managed":
+            raise HTTPError(422, "invalid_input", "A managed project needs a base_model.", "base_model")
+        if body.get("base_model") is not None and body["base_model"] not in BASE_MODELS:
             raise HTTPError(422, "unknown_model", f"Not a base model: {body.get('base_model')!r}.", "base_model")
         p = {
             "name": name,
             "description": body.get("description"),
             "kind": kind,
-            "base_model": body["base_model"],
+            "base_model": body.get("base_model"),
             "live_model": None,
             "paused": False,
             "created_at": now().isoformat(),
@@ -821,6 +823,12 @@ class FakeEndor:
                 "`endor runs close <run_id>`.",
             )
         proj = self.project(project)
+        if proj["base_model"] is None:  # a custom project's first run sets its base
+            if body.get("base_model") is None:
+                raise HTTPError(422, "invalid_input", f"Project {project} has no base model yet.", "base_model")
+            if body["base_model"] not in BASE_MODELS:
+                raise HTTPError(422, "unknown_model", f"Not a base model: {body['base_model']!r}.", "base_model")
+            proj["base_model"] = body["base_model"]
         if body.get("base_model") is not None and body["base_model"] != proj["base_model"]:
             raise HTTPError(
                 422,

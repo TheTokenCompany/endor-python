@@ -366,3 +366,13 @@ class TestEvaluations:
             project.evaluate(model, "nope")
         with pytest.raises(endor.ModelRequiresProjectError):
             project.evaluate("jev-9b", "heldout")
+
+
+def test_custom_project_without_a_base_gets_it_from_its_first_run(client: endor.EndorClient) -> None:
+    p = client.projects.create(unique("nobase"))
+    assert p.info_.kind == "custom" and p.info_.base_model is None
+    with pytest.raises(ValueError):
+        client.projects.create(unique("m"), kind="managed")
+    run = p.runs.create(base_model="jev-9b")
+    run.close()
+    assert p.info().base_model == "jev-9b"
