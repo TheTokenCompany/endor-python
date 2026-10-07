@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 DEFAULT_BASE_URL = "https://api.endor.thetokencompany.com"
-DEFAULT_MODEL = "pplx-decider-v1.1-27b"
 DEFAULT_TIMEOUT = 30.0  # seconds per HTTP operation (a future poll adds its server-side wait on top)
 
 API_KEY_ENV = "ENDOR_API_KEY"
@@ -37,7 +36,12 @@ FUTURE_POLL_WAIT_S = 25.0  # server-side long poll per request (server clamps at
 MAX_ERROR_BODY_LENGTH = 200
 LIST_PAGE_SIZE = 100  # page size when a list call pages through every item
 
+# Model names saved from the SDK: the API's name pattern, starting with a letter (names starting with a digit are
+# continuous learning's, YYYY-MM-DD-N), and never "base" (``<project>/base`` is the project's base model).
+SDK_MODEL_NAME = r"^[a-z][a-z0-9._-]{0,62}$"
+BASE_MODEL_NAME = "base"
+
 # Error codes that are never retried, whatever their status: waiting a few seconds doesn't fix them.
-NON_RETRYABLE_CODES = frozenset({"quota_exceeded", "insufficient_balance"})
+NON_RETRYABLE_CODES = frozenset({"limit_reached", "insufficient_balance"})
 
 SECRET_HEADERS = frozenset({"authorization", "proxy-authorization", "x-api-key", "api-key", "cookie", "set-cookie"})

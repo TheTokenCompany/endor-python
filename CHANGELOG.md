@@ -7,6 +7,25 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 Matches the current API (org API keys, GPU-hour billing, balances).
 
+- Every decision names a project: `model` is `"<project>"` (its live model), `"<project>/base"` (its base model) or
+  `"<project>/<name>"`. A bare base model id raises `ModelRequiresProjectError` (422 `model_requires_project`), a
+  project without a base model `NoBaseModelError` (409 `no_base_model`). `project.evaluate("base", ...)` and bare
+  names resolve in the project.
+- No default model any more (it was `pplx-decider-v1.1-27b`): `ENDOR_DEFAULT_MODEL` is optional, and
+  `system_one` without a model raises `EndorError` before sending. `endor.client.DEFAULT_MODEL` is gone.
+- Projects have a base model: `projects.create(..., base_model=...)` (also `get_or_create`), and
+  `project.update(base_model=..., auto_promote=..., base_keep_warm=...)`. `ProjectInfo` gains `base_model`,
+  `live_model`, `auto_promote` and `base_keep_warm`. `project.models.set_keep_warm("base", on)` sets
+  `base_keep_warm`.
+- `ModelInfo.source` (`base`, `sdk` or `continuous`) and `ModelInfo.live`; `project.models.list()` starts with the
+  base model. `RunInfo.source` (`sdk` or `continuous`).
+- `WhoAmI.limits`: the org's limits by name.
+- `LimitReachedError` (409 `limit_reached`, a `ConflictError`, never retried) for every count limit: 4 open runs
+  (was 429 `quota_exceeded`), 7 projects, 50 models per project, 3 kept-warm models per project (was 409
+  `conflict`, per org and base).
+- `save_checkpoint` checks the model name locally, as the API does: it starts with a letter and is not `base`.
+- The supervised recipe creates its project with `base_model` and scores the baseline as `"<project>/base"`.
+- `endor projects create NAME --base-model BASE`.
 - `InsufficientBalanceError` (402 `insufficient_balance`), never retried; `quota_exceeded` is no longer retried.
 - `whoami()` returns `org_id`; `user_id` is None for an org API key.
 - `usage()` rows: `kind` is `decide` or `train`, with `model`, `input_tokens` and `gpu_seconds`; `tokens` is gone.

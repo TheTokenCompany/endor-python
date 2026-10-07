@@ -10,6 +10,8 @@ from endor import (
     ChoiceAnswer,
     EndorClient,
     EndorError,
+    ModelRequiresProjectError,
+    NoBaseModelError,
     NotFoundError,
     NoulAnswer,
     ScoreAnswer,
@@ -17,7 +19,7 @@ from endor import (
     UnprocessableEntityError,
 )
 
-from .conftest import ANGER, API_KEY, BASE_URL, DEPT, URGENT
+from .conftest import ANGER, API_KEY, BASE_URL, DECIDE_BASE, DEPT, URGENT, unique
 from .fake_api import FakeEndor
 
 
@@ -30,18 +32,24 @@ class TestConstructor:
     def test_reads_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ENDOR_API_KEY", "  edk_env  ")
         monkeypatch.setenv("ENDOR_BASE_URL", "https://env.endor.test/")
-        monkeypatch.setenv("ENDOR_DEFAULT_MODEL", "jev-9b")
+        monkeypatch.setenv("ENDOR_DEFAULT_MODEL", "tickets")
         c = EndorClient()
         assert c.api_key == "edk_env"
         assert c.base_url == "https://env.endor.test"
-        assert c.default_model == "jev-9b"
+        assert c.default_model == "tickets"
         c.close()
 
     def test_explicit_beats_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ENDOR_API_KEY", "edk_env")
-        c = EndorClient(api_key="edk_arg", base_url=BASE_URL)
+        monkeypatch.setenv("ENDOR_DEFAULT_MODEL", "tickets")
+        c = EndorClient(api_key="edk_arg", base_url=BASE_URL, model="tickets/base")
         assert c.api_key == "edk_arg" and c.base_url == BASE_URL
-        assert c.default_model == endor.client.DEFAULT_MODEL
+        assert c.default_model == "tickets/base"
+
+    def test_no_default_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ENDOR_DEFAULT_MODEL", raising=False)
+        c = EndorClient(api_key="edk_x")
+        assert c.default_model is None and not hasattr(endor.client, "DEFAULT_MODEL")
 
     def test_rejects_bad_key_and_timeout(self) -> None:
         with pytest.raises(EndorError):
@@ -70,7 +78,8 @@ class TestConstructor:
         async with EndorClient(
             api_key=API_KEY, base_url=BASE_URL, async_transport=httpx.MockTransport(fake.handler)
         ) as c:
-            res = await c.system_one_async("x", {"u": URGENT}, model="jev-9b")
+            name = fake.create_project({"name": unique("acm"), "base_model": DECIDE_BASE})["name"]
+            res = await c.system_one_async("x", {"u": URGENT}, model=name)
             assert res.nouls["u"].noul == 0.5
 
     def test_user_http_client_is_not_closed(self, fake: FakeEndor) -> None:
@@ -82,10 +91,12 @@ class TestConstructor:
 
 
 class TestDecisions:
-    def test_all_three_types(self, client: EndorClient) -> None:
-        res = client.system_one({"body": "charged twice"}, {"dept": DEPT, "urgent": URGENT, "anger": ANGER})
+    def test_all_three_types(self, client: EndorClient, decider: str) -> None:
+        res = client.system_one(
+            {"body": "charged twice"}, {"dept": DEPT, "urgent": URGENT, "anger": ANGER}, model=decider
+        )
         assert isinstance(res, SystemOneResponse)
-        assert res.model == client.default_model
+        assert res.model == f"{decider}/base"  # the model that answered: a new project's live model is its base
         assert isinstance(res.choices["dept"], ChoiceAnswer) and res.choices["dept"].choice in ("billing", "tech")
         assert isinstance(res.nouls["urgent"], NoulAnswer) and res.nouls["urgent"].noul == 0.5
         s = res.scores["anger"]
@@ -93,64 +104,100 @@ class TestDecisions:
         assert res.usage.input_tokens is not None and res.usage.output_tokens == 0
         assert set(res.answers) == {"dept", "urgent", "anger"}
 
-    def test_dict_questions_and_default_model(self, client: EndorClient, fake: FakeEndor) -> None:
+    def test_dict_questions_and_default_model(self, client: EndorClient, fake: FakeEndor, decider: str) -> None:
+        client.default_model = decider
         res = client.system_one("text", {"q": {"type": "noul", "instructions": "ok?"}})
         assert res.nouls["q"].noul == 0.5
-        assert fake.requests[-1].body["model"] == client.default_model
+        assert fake.requests[-1].body["model"] == decider
         assert fake.requests[-1].body["questions"]["q"] == {"type": "noul", "instructions": "ok?"}
 
-    def test_question_wire_form_omits_unset(self, client: EndorClient, fake: FakeEndor) -> None:
-        client.system_one("t", {"d": endor.Choice(criteria={"a": None})})
+    def test_question_wire_form_omits_unset(self, client: EndorClient, fake: FakeEndor, decider: str) -> None:
+        client.system_one("t", {"d": endor.Choice(criteria={"a": None})}, model=decider)
         assert fake.requests[-1].body["questions"]["d"] == {"type": "choice", "criteria": {"a": None}}
 
-    def test_response_model(self, client: EndorClient) -> None:
+    def test_response_model(self, client: EndorClient, decider: str) -> None:
         class Typed(SystemOneResponse):
             dept: ChoiceAnswer
             urgent: NoulAnswer
 
-        res = client.system_one("x", {"dept": DEPT, "urgent": URGENT}, response_model=Typed)
+        res = client.system_one("x", {"dept": DEPT, "urgent": URGENT}, model=decider, response_model=Typed)
         assert isinstance(res, Typed) and res.dept.choice in ("billing", "tech") and res.urgent.noul == 0.5
 
-    def test_response_model_mismatch(self, client: EndorClient) -> None:
+    def test_response_model_mismatch(self, client: EndorClient, decider: str) -> None:
         class Typed(SystemOneResponse):
             missing: ChoiceAnswer
 
         with pytest.raises(endor.ResponseValidationError, match="missing"):
-            client.system_one("x", {"dept": DEPT}, response_model=Typed)
+            client.system_one("x", {"dept": DEPT}, model=decider, response_model=Typed)
 
-    def test_extra_body_and_headers(self, client: EndorClient, fake: FakeEndor) -> None:
-        client.system_one("x", {"d": DEPT}, extra_body={"trace": "abc"}, extra_headers={"X-Trace": "1"})
+    def test_extra_body_and_headers(self, client: EndorClient, fake: FakeEndor, decider: str) -> None:
+        client.system_one(
+            "x", {"d": DEPT}, extra_body={"trace": "abc", "model": decider}, extra_headers={"X-Trace": "1"}
+        )
         req = fake.requests[-1]
-        assert req.body["trace"] == "abc" and req.headers["x-trace"] == "1"
+        assert req.body["trace"] == "abc" and req.body["model"] == decider and req.headers["x-trace"] == "1"
 
     def test_project_model_id(self, client: EndorClient, project: endor.Project) -> None:
         with project.runs.create("pplx-decider-v1.1-27b") as run:
             model = run.save_checkpoint("v1").result()
         assert client.system_one("x", {"d": DEPT}, model=model).model == f"{project.name}/v1"
 
+    def test_project_base_and_live_model(self, client: EndorClient, fake: FakeEndor, project: endor.Project) -> None:
+        with project.runs.create("pplx-decider-v1.1-27b") as run:  # the first run sets the project's base model
+            run.save_checkpoint("v1").result()
+        assert client.system_one("x", {"d": DEPT}, model=project.name).model == f"{project.name}/base"
+        assert client.system_one("x", {"d": DEPT}, model=f"{project.name}/base").model == f"{project.name}/base"
+        fake.promote(project.name, "v1")
+        assert client.system_one("x", {"d": DEPT}, model=project.name).model == f"{project.name}/v1"
+
+    def test_no_model_fails_before_the_call(self, client: EndorClient, fake: FakeEndor) -> None:
+        assert client.default_model is None
+        with pytest.raises(EndorError, match="no model") as e:
+            client.system_one("x", {"d": DEPT})
+        assert "<project>/base" in str(e.value) and "ENDOR_DEFAULT_MODEL" in str(e.value)
+        assert not fake.requests
+
+    async def test_no_model_fails_before_the_call_async(self, client: EndorClient, fake: FakeEndor) -> None:
+        with pytest.raises(EndorError, match="no model"):
+            await client.system_one_async("x", {"d": DEPT})
+        assert not fake.requests
+
+    def test_bare_base_model_id_needs_a_project(self, client: EndorClient) -> None:
+        with pytest.raises(ModelRequiresProjectError) as e:
+            client.system_one("x", {"d": DEPT}, model="decider-2b")
+        assert isinstance(e.value, UnprocessableEntityError)
+        assert e.value.status == 422 and e.value.code == "model_requires_project" and e.value.param == "model"
+
+    def test_project_without_base_model(self, client: EndorClient, project: endor.Project) -> None:
+        with pytest.raises(NoBaseModelError) as e:
+            client.system_one("x", {"d": DEPT}, model=project.name)
+        assert isinstance(e.value, endor.ConflictError) and e.value.status == 409 and e.value.code == "no_base_model"
+        with pytest.raises(NoBaseModelError):
+            client.system_one("x", {"d": DEPT}, model=f"{project.name}/base")
+
     def test_unknown_model_is_404(self, client: EndorClient) -> None:
         with pytest.raises(NotFoundError) as e:
             client.system_one("x", {"d": DEPT}, model="nope/none")
         assert e.value.code == "unknown_model"
 
-    def test_too_many_options_names_the_question(self, client: EndorClient) -> None:
-        wide = endor.Choice(criteria={f"o{i}": None for i in range(20)})
+    def test_too_many_options_names_the_question(self, client: EndorClient, decider: str) -> None:
+        wide = endor.Choice(criteria={f"o{i}": None for i in range(20)})  # the base, jev-9b, reads 16
         with pytest.raises(UnprocessableEntityError) as e:
-            client.system_one("x", {"wide": wide}, model="jev-9b")
+            client.system_one("x", {"wide": wide}, model=decider)
         assert e.value.code == "invalid_options" and "questions.wide" in str(e.value)
 
     def test_local_validation(self, client: EndorClient) -> None:
         with pytest.raises(ValueError, match="at least one question"):
-            client.system_one("x", {})
+            client.system_one("x", {}, model="t")
         with pytest.raises(ValueError, match="at most 64"):
-            client.system_one("x", {f"q{i}": URGENT for i in range(65)})
+            client.system_one("x", {f"q{i}": URGENT for i in range(65)}, model="t")
         with pytest.raises(ValueError, match="criteria"):
-            client.system_one("x", {"q": {"type": "choice"}})
+            client.system_one("x", {"q": {"type": "choice"}}, model="t")
         with pytest.raises(TypeError):
-            client.system_one("x", {"q": 42})  # type: ignore[dict-item]
+            client.system_one("x", {"q": 42}, model="t")  # type: ignore[dict-item]
 
-    async def test_async(self, client: EndorClient) -> None:
-        res = await client.system_one_async("x", {"u": URGENT}, model="decider-2b")
+    async def test_async(self, client: EndorClient, decider: str) -> None:
+        res = await client.system_one_async("x", {"u": URGENT}, model=decider)
         assert res.nouls["u"].noul == 0.5
         models = await client.models.list_async()
         assert any(m.name == "decider-2b" for m in models.models)
@@ -165,6 +212,7 @@ class TestCatalogAndAccount:
         assert by_name["jev-9b"].kind == "base" and by_name["jev-9b"].endor["max_options"] == 16
         saved = by_name[f"{project.name}/v1"]
         assert saved.kind == "model" and saved.endor["base_model"] == "jev-9b" and saved.release_date
+        assert saved.endor["source"] == "sdk"
 
     def test_base_models(self, client: EndorClient, project: endor.Project) -> None:
         with project.runs.create("jev-9b") as run:
@@ -182,6 +230,7 @@ class TestCatalogAndAccount:
         me = client.whoami()
         assert me.org_id and me.key_id and me.user_id is None  # an org API key has no user
         assert me.key_prefix and me.key_prefix.startswith("edk_")
+        assert me.limits["max_projects_per_org"] >= 1 and me.limits["max_active_runs"] >= 1
 
     def test_usage_rows(self, client: EndorClient) -> None:
         now = datetime.now(timezone.utc)

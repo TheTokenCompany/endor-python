@@ -286,7 +286,7 @@ class Transport:
 
 
 def _final_error(r: httpx.Response) -> bool:
-    """Whether the error body carries a code that retrying can't fix (``quota_exceeded``, ``insufficient_balance``)."""
+    """Whether the error body carries a code that retrying can't fix (``limit_reached``, ``insufficient_balance``)."""
     try:
         err = r.json().get("error")
     except (ValueError, AttributeError):

@@ -12,7 +12,7 @@ from endor.recipes import SupervisedConfig, supervised
 
 rows = endor.data.load_rows(sys.argv[1] if len(sys.argv) > 1 else "rows.jsonl")
 
-cfg = SupervisedConfig(project="tickets", model_name="v1", base_model="pplx-decider-v1.1-27b", eval_every=10)
+cfg = SupervisedConfig(project="tickets", model_name="v1", base_model="decider-2b", eval_every=10)
 result = supervised.train(cfg, rows)
 
 print("model:", result.model)
@@ -22,5 +22,5 @@ print("held-out accuracy, tuned:", round(result.final_metrics["accuracy"], 3))
 
 client = endor.EndorClient()
 row = rows[0]
-res = client.system_one(row.state, row.questions, model=result.model)
+res = client.system_one(row.state, row.questions, model=result.model)  # "tickets/v1"
 print(res.answers)

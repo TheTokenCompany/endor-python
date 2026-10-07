@@ -32,8 +32,8 @@ IDENTITY = {
 
 def test_every_request_carries_identity(client: EndorClient, fake: FakeEndor) -> None:
     client.whoami()
-    client.system_one("x", {"d": DEPT})
-    project = client.projects.create(unique("hdr"))
+    project = client.projects.create(unique("hdr"), base_model="jev-9b")
+    client.system_one("x", {"d": DEPT}, model=project.name)
     with project.runs.create("jev-9b") as run:
         run.forward(endor.data.rows_to_datums(rows(2))).result()
     assert len(fake.requests) >= 6
@@ -48,11 +48,12 @@ def test_every_request_carries_identity(client: EndorClient, fake: FakeEndor) ->
 
 def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor, tmp_path: Path) -> None:
     client.whoami()
-    client.system_one("x", {"d": DEPT})
+    name = unique("m")
+    fake.create_project({"name": name, "base_model": "jev-9b"})  # in the fake directly: no request
+    client.system_one("x", {"d": DEPT}, model=f"{name}/base")
     client.models.list()
     client.base_models()
-    name = unique("m")
-    project = client.projects.get_or_create(name)
+    project = client.projects.get_or_create(name, base_model="jev-9b")
     project.datasets.upload("d", rows(2))
     list(project.datasets.rows("d"))
     run = project.runs.create("jev-9b")
@@ -77,7 +78,6 @@ def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor, 
         ("GET", "/v1/models", "client.models.list"),
         ("GET", "/v1/models", "client.base_models"),
         ("GET", f"/v1/projects/{name}", "projects.get"),
-        ("POST", "/v1/projects", "projects.create"),
         ("POST", f"/v1/projects/{name}/datasets", "project.datasets.upload"),
         ("GET", f"/v1/projects/{name}/datasets/d/rows", "project.datasets.rows"),
         ("POST", f"/v1/projects/{name}/runs", "project.runs.create"),
@@ -111,7 +111,7 @@ def test_idempotency_key_on_creates_only(client: EndorClient, fake: FakeEndor) -
     with project.runs.create("jev-9b") as run:
         run.forward(endor.data.rows_to_datums(rows(1)))
         run.log_eval("x", {})
-    project.evaluate("jev-9b", "d")
+    project.evaluate("base", "d")
     client.whoami()
     with_key = {(r.method, r.path) for r in fake.requests if "idempotency-key" in r.headers}
     assert with_key == {

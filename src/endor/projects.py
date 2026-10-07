@@ -1,10 +1,10 @@
 """Projects: the unit of work. A project, keyed by its name, holds datasets, runs, models and evaluations.
 
-project = client.projects.get_or_create("tickets")
+project = client.projects.get_or_create("tickets", base_model="decider-2b")
 project.datasets.upload("train", rows)
-run = project.runs.create(base_model="pplx-decider-v1.1-27b")
-project.models.list()                      # every saved model: "tickets/<name>"
-project.evaluate("tickets/v1", "heldout").result()
+run = project.runs.create(base_model="decider-2b")
+project.models.list()                      # "tickets/base", then every saved model: "tickets/<name>"
+project.evaluate("base", "heldout").result()   # names resolve in the project: "base" is "tickets/base"
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from .types import (
 )
 
 ContinuousLearningArg = ContinuousLearning | Mapping[str, Any]
-"""``ContinuousLearning(enabled=True, base_model="decider-2b")``, or a dict with the same keys."""
+"""``ContinuousLearning(enabled=True)``, or a dict with the same keys."""
 
 
 def _cl_wire(cl: ContinuousLearningArg) -> dict[str, Any]:
@@ -58,13 +58,19 @@ class Projects:
         name: str,
         description: str | None = None,
         continuous_learning: ContinuousLearningArg | None = None,
+        *,
+        base_model: str | None = None,
     ) -> Project:
         """A new project. Names are lowercase, ``[a-z0-9._-]``, up to 63 characters, and permanent (they are part
-        of every model id). Raises ``ConflictError`` if you already have one with that name.
+        of every model id). Raises ``ConflictError`` if you already have one with that name, and
+        ``LimitReachedError`` (a ``ConflictError``) when the org has as many projects as it may.
 
-        ``continuous_learning`` (``{"enabled": True, "base_model": "decider-2b"}``) turns on continuous learning
-        on the project's decisions."""
+        ``base_model`` (for example ``"decider-2b"``) is the project's base model: ``model="<name>"`` answers with
+        it at once. Without it, the project's first run sets it. ``continuous_learning`` (``{"enabled": True}``)
+        turns on continuous learning on the project's decisions."""
         body: dict[str, Any] = {"name": name, "description": description}
+        if base_model is not None:
+            body["base_model"] = base_model
         if continuous_learning is not None:
             body["continuous_learning"] = _cl_wire(continuous_learning)
         r = self._t.request("POST", "/v1/projects", json=body, method_name="projects.create", idempotent=True)
@@ -81,13 +87,15 @@ class Projects:
         name: str,
         description: str | None = None,
         continuous_learning: ContinuousLearningArg | None = None,
+        *,
+        base_model: str | None = None,
     ) -> Project:
         """The project called ``name``, created if missing (with these settings). Safe to call at the top of every
         script; an existing project's settings are left as they are."""
         try:
             return self.get(name)
         except NotFoundError:
-            return self.create(name, description, continuous_learning)
+            return self.create(name, description, continuous_learning, base_model=base_model)
 
     def list(self, limit: int | None = None, offset: int = 0) -> list[Project]:
         """Your projects, newest first: all of them, or at most ``limit`` starting at ``offset``."""
@@ -121,26 +129,43 @@ class Project:
         self,
         *,
         description: str | None = None,
+        base_model: str | None = None,
+        auto_promote: bool | None = None,
+        base_keep_warm: bool | None = None,
         continuous_learning: ContinuousLearningArg | None = None,
     ) -> ProjectInfo:
-        """Change the description or the continuous-learning setting; arguments left as None are unchanged.
+        """Change the project's settings; arguments left as None are unchanged.
 
-        Changing ``continuous_learning``'s ``base_model`` starts continuous learning again from scratch on the new
-        base; the models it learned so far stay in the project. ``{"enabled": False}`` pauses it."""
+        - ``base_model``: the project's base model. A different base makes ``"<project>"`` serve the new base
+          again, and starts continuous learning again from scratch on it; models saved so far stay in the project.
+        - ``auto_promote``: each new continuous-learning model becomes the live model.
+        - ``base_keep_warm``: keep the base model warm. It takes one of the project's keep-warm slots
+          (``LimitReachedError`` when they are full; ``NoBaseModelError`` without a base model).
+        - ``continuous_learning``: ``{"enabled": True}``; ``{"enabled": False}`` pauses it."""
         body: dict[str, Any] = {}
         if description is not None:
             body["description"] = description
+        if base_model is not None:
+            body["base_model"] = base_model
+        if auto_promote is not None:
+            body["auto_promote"] = auto_promote
+        if base_keep_warm is not None:
+            body["base_keep_warm"] = base_keep_warm
         if continuous_learning is not None:
             body["continuous_learning"] = _cl_wire(continuous_learning)
         if not body:
-            raise ValueError("nothing to update: pass description or continuous_learning")
+            raise ValueError(
+                "nothing to update: pass description, base_model, auto_promote, base_keep_warm or continuous_learning"
+            )
         self.info_ = ProjectInfo.model_validate(
             self._t.request("PATCH", f"/v1/projects/{self.name}", json=body, method_name="project.update")
         )
         return self.info_
 
     def evaluate(self, model: str, dataset: str, run_id: str | None = None) -> APIFuture[Evaluation]:
-        """Score a model (a base id or ``"<project>/<name>"``) on one of this project's datasets, server-side.
+        """Score a model on one of this project's datasets, server-side. ``model`` is ``"base"`` (this project's
+        base model), a model name of this project, this project's name (its live model) or a full model id
+        (``"<project>"``, ``"<project>/base"``, ``"<project>/<name>"``). A bare base model id is refused.
 
         The result's ``results`` has accuracy, NLL, Brier, ECE and selective accuracy overall, per question type and
         per question. With ``run_id``, the evaluation appears on that run's page.
@@ -265,7 +290,8 @@ class Runs:
         once and ``run.ready`` is the future.
 
         Close every run you create (``with project.runs.create(...) as run:``): a run holds its GPU until closed or
-        idle for 15 minutes, and an org can have at most 4 runs that aren't closed, idle ones included.
+        idle for 15 minutes, and an org can have at most 4 runs that aren't closed, idle ones included (a fifth
+        raises ``LimitReachedError``). A project without a base model takes its first run's.
         ``config`` is free-form and shown on the dashboard; when the client was created with ``capture=True`` the
         SDK adds the LoRA settings and the current git commit (never file contents).
         """
@@ -330,18 +356,19 @@ class Runs:
 
 
 class Models:
-    """``project.models``: the models saved by the project's runs. ``model`` arguments take a name or
-    ``"<project>/<name>"``."""
+    """``project.models``: the project's base model (``"base"``) and the models saved by its runs. ``model``
+    arguments take a name or ``"<project>/<name>"``."""
 
     def __init__(self, transport: Transport, project: str) -> None:
-        self._t, self._base = transport, f"/v1/projects/{project}/models"
+        self._t, self._project, self._base = transport, project, f"/v1/projects/{project}/models"
 
     @staticmethod
     def _name(model: str) -> str:
         return model.split("/", 1)[1] if "/" in model else model
 
     def list(self, run_id: str | None = None) -> list[ModelInfo]:
-        """Every saved, unexpired model in the project, newest first, optionally only those saved by ``run_id``."""
+        """The project's models: its base model first (``name == "base"``, ``source == "base"``) once it has one,
+        then every saved, unexpired model, newest first; optionally only those saved by ``run_id``."""
         items = _list_all(self._t, self._base, {"run_id": run_id}, "project.models.list")
         return [ModelInfo.model_validate(m) for m in items]
 
@@ -363,8 +390,18 @@ class Models:
 
     def set_keep_warm(self, model: str, on: bool = True) -> ModelInfo:
         """Keep the model loaded on the decision servers (``on=True``), so even its first request answers without a
-        load time, or release it (``on=False``). Free. At most 3 models per base model can be kept warm in an org:
-        a fourth raises ``ConflictError`` with ``param == "keep_warm"``; turn one off first."""
+        load time, or release it (``on=False``). Free. At most 3 models can be kept warm in a project, the base
+        model included when its keep warm is on: a fourth raises ``LimitReachedError`` with
+        ``param == "keep_warm"``; turn one off first. The live model is always loaded and doesn't count. For the
+        base model (``"base"``), this sets the project's ``base_keep_warm``."""
+        if self._name(model) == C.BASE_MODEL_NAME:
+            self._t.request(
+                "PATCH",
+                f"/v1/projects/{self._project}",
+                json={"base_keep_warm": on},
+                method_name="project.models.set_keep_warm",
+            )
+            return self.get(C.BASE_MODEL_NAME)
         r = self._t.request(
             "PATCH",
             f"{self._base}/{self._name(model)}",
@@ -393,7 +430,7 @@ class Models:
         return fetch_all(r["files"], path, transport=self._t._transport, timeout=max(self._t.timeout, 60.0))
 
     def delete(self, model: str) -> None:
-        """Delete the model's files and record. Permanent."""
+        """Delete the model's files and record. Permanent. The base model can't be deleted."""
         self._t.request("DELETE", f"{self._base}/{self._name(model)}", method_name="project.models.delete")
 
 

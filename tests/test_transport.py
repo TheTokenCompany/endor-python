@@ -20,6 +20,9 @@ from endor import (
     EndorClient,
     InsufficientBalanceError,
     InternalServerError,
+    LimitReachedError,
+    ModelRequiresProjectError,
+    NoBaseModelError,
     NotFoundError,
     OverloadedError,
     PayloadTooLargeError,
@@ -30,8 +33,8 @@ from endor import (
 )
 from endor._retry import retry_after_seconds
 
-from .conftest import API_KEY, BASE_URL, rows
-from .fake_api import FakeEndor, HTTPError
+from .conftest import API_KEY, BASE_URL, rows, unique
+from .fake_api import LIMITS, FakeEndor, HTTPError
 
 
 def make_client(fake: FakeEndor, **kw: object) -> EndorClient:
@@ -107,8 +110,10 @@ class TestRetries:
             client.models.list(retry=RetryPolicy(max_retries=0))
 
     async def test_async_retries(self, client: EndorClient, fake: FakeEndor) -> None:
+        name = client.projects.create(unique("retry"), base_model="jev-9b").name
+        fake.requests.clear()
         fake.fail_next += [HTTPError(502, "bad_gateway", "x"), httpx.ConnectError("y")]
-        res = await client.system_one_async("x", {"u": endor.Noul()}, model="jev-9b")
+        res = await client.system_one_async("x", {"u": endor.Noul()}, model=name)
         assert res.nouls["u"].noul == 0.5 and len(fake.requests) == 3
 
 
@@ -169,15 +174,20 @@ class TestErrors:
 
     def test_rate_limit_retry_after(self, fake: FakeEndor) -> None:
         c = make_client(fake, retry=RetryPolicy(max_retries=0))
-        fake.fail_next.append(HTTPError(429, "quota_exceeded", "wait", headers={"retry-after": "7"}))
+        fake.fail_next.append(HTTPError(429, "rate_limited", "wait", headers={"retry-after": "7"}))
         with pytest.raises(RateLimitError) as e:
             c.whoami()
-        assert e.value.retry_after == 7.0 and e.value.code == "quota_exceeded"
+        assert e.value.retry_after == 7.0 and e.value.code == "rate_limited"
 
-    def test_quota_and_balance_errors_are_not_retried(self, fake: FakeEndor) -> None:
-        c = make_client(fake, retry=RetryPolicy(max_retries=3, backoff_initial=0, backoff_max=0, timeout=None))
-        fake.fail_next.append(HTTPError(429, "quota_exceeded", "close a run", headers={"retry-after": "0"}))
-        with pytest.raises(RateLimitError):
+    def test_limit_and_balance_errors_are_not_retried(self, fake: FakeEndor) -> None:
+        c = make_client(
+            fake,
+            retry=RetryPolicy(
+                max_retries=3, backoff_initial=0, backoff_max=0, timeout=None, http_statuses=frozenset({409, 429})
+            ),
+        )
+        fake.fail_next.append(HTTPError(409, "limit_reached", "close a run", headers={"retry-after": "0"}))
+        with pytest.raises(LimitReachedError):  # never retried, even when 409 is a retried status
             c.whoami()
         fake.fail_next.append(HTTPError(402, "insufficient_balance", "add credit"))
         with pytest.raises(InsufficientBalanceError) as e:
@@ -190,6 +200,28 @@ class TestErrors:
     def test_balance_error_is_mapped_from_its_code(self) -> None:
         err = endor.errors.api_error(400, {"error": {"code": "insufficient_balance", "message": "m"}}, httpx.Headers())
         assert isinstance(err, InsufficientBalanceError)
+
+    @pytest.mark.parametrize(
+        ("status", "code", "cls", "parent"),
+        [
+            (409, "limit_reached", LimitReachedError, ConflictError),
+            (409, "no_base_model", NoBaseModelError, ConflictError),
+            (422, "model_requires_project", ModelRequiresProjectError, UnprocessableEntityError),
+            (409, "conflict", ConflictError, ConflictError),
+        ],
+    )
+    def test_code_mapping(self, status: int, code: str, cls: type[APIError], parent: type[APIError]) -> None:
+        err = endor.errors.api_error(status, {"error": {"code": code, "message": "m"}}, httpx.Headers())
+        assert type(err) is cls and isinstance(err, parent) and err.code == code and err.status == status
+
+    def test_limit_reached_from_the_api(self, client: EndorClient, fake: FakeEndor) -> None:
+        for _ in range(int(LIMITS["max_projects_per_org"]) - len(fake.projects)):
+            client.projects.create(unique("lim"))
+        n = len(fake.requests)
+        with pytest.raises(LimitReachedError) as e:
+            client.projects.create(unique("lim"))
+        assert isinstance(e.value, ConflictError) and e.value.status == 409 and "maximum of 7" in str(e.value)
+        assert len(fake.requests) == n + 1  # not retried
 
     def test_bad_key_is_authentication_error(self, fake: FakeEndor) -> None:
         c = make_client(fake)
