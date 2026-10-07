@@ -635,8 +635,7 @@ class WhoAmI(_View):
     org_id: str | None = None
     user_id: str | None = None
     key_id: str | None = None
-    key_prefix: str | None = None
-    limits: dict[str, float] = Field(default_factory=dict)
+    limits: dict[str, int | float] = Field(default_factory=dict)
     """The org's limits by name, for example ``max_projects_per_org`` or ``max_active_runs``. A count limit raises
     ``LimitReachedError`` once reached; a rate (``decisions_per_second``, ``..._per_minute``) ``RateLimitError``."""
 

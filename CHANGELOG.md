@@ -5,6 +5,11 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-07
+
+- `WhoAmI` no longer has `key_prefix`: the API stores only a hash of each key.
+- `WhoAmI.limits` keeps whole numbers as integers.
+
 ## [0.2.0] - 2026-10-07
 
 Breaking: projects have a kind, and keep warm and auto-promote are gone, as in the API.
