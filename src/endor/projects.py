@@ -123,7 +123,7 @@ class Datasets:
         self._t, self._base = transport, f"/v1/projects/{project}/datasets"
 
     def upload(self, name: str, rows: Iterable[Any]) -> DatasetInfo:
-        """Upload decision rows (docs/DATA_FORMAT.md). Rows may be dicts or ``DecisionRow`` objects; the other
+        """Upload decision rows (README, "Data format"). Rows may be dicts or ``DecisionRow`` objects; the other
         supported row formats are converted. At most 50,000 rows per dataset. Datasets are immutable: to change
         one, upload under a new name."""
         wire = [D.to_row(r).to_wire() for r in rows]

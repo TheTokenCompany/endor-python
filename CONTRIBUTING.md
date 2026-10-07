@@ -35,6 +35,6 @@ org, and the suite fails a test that leaves one open.
 ## Conventions
 
 - Python 3.10 and up. Public functions and classes have docstrings; `mypy --strict` must pass on `src/endor`.
-- Every request goes through `endor._http.Transport`, which adds the headers in `docs/REQUEST_HEADERS.md`. When you
+- Every request goes through `endor._http.Transport`, which adds the headers listed under "What the SDK sends" in the README. When you
   add a public method, pass its name as `method_name` so the header names it.
 - Don't add anything to the SDK that has no API endpoint behind it.

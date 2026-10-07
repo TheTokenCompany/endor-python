@@ -72,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     up = ds.add_parser("upload")
     up.add_argument("project")
     up.add_argument("name")
-    up.add_argument("file", help=".jsonl or .json rows (docs/DATA_FORMAT.md)")
+    up.add_argument("file", help=".jsonl or .json rows (see 'Data format' in the README)")
     dd = ds.add_parser("delete")
     dd.add_argument("project")
     dd.add_argument("name")

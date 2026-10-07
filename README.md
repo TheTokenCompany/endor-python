@@ -94,7 +94,7 @@ runs save (named `<project>/<name>`), and evaluations.
 
 ```python
 project = client.projects.get_or_create("tickets")
-project.datasets.upload("train", endor.data.load_rows("train.jsonl"))   # see docs/DATA_FORMAT.md
+project.datasets.upload("train", endor.data.load_rows("train.jsonl"))   # rows: see "Data format" below
 project.datasets.upload("heldout", endor.data.load_rows("heldout.jsonl"))
 ```
 
@@ -107,8 +107,26 @@ A dataset row is a decision request with labels:
  "labels": {"department": "billing", "urgent": true}}
 ```
 
-Labels can be hard (`"billing"`, `true`, a level index) or soft (a distribution over the options). The full format,
-with the option ids every label and probability is keyed by, is in [docs/DATA_FORMAT.md](docs/DATA_FORMAT.md).
+Labels can be hard (`"billing"`, `true`, a level index) or soft (a distribution over the options).
+
+### Data format
+
+A row has `state` (text or JSON), `questions` (named `Noul`, `Choice` or `Score` objects, as `system_one` takes),
+and optionally `labels` (question name → label), `id` and `weight` (default 1). Up to 50,000 rows per dataset.
+Each labeled question becomes one training example; unlabeled questions are skipped.
+
+Every option has an id, used in labels, training targets and answer probabilities: `"false"`/`"true"` for a noul,
+the `criteria` keys for a choice, `"0"`…`"n-1"` (the level index) for a score.
+
+| Type | Hard label | Soft label (every option, non-negative, summing to 1 ± 0.02) |
+|---|---|---|
+| `noul` | `true` / `false` | `0.8` (P(true)) or `{"true": 0.8, "false": 0.2}` |
+| `choice` | `"billing"` | `{"billing": 0.7, "technical": 0.2, "sales": 0.1}` |
+| `score` | `2` (level index) | `[0.1, 0.6, 0.3]` or `{"0": 0.1, "1": 0.6, "2": 0.3}` |
+
+`endor.data.load_rows(path)` reads `.jsonl` or a `.json` array and also accepts single-question rows,
+`{"state", "question", "expected"}` or `{"state", "question", "label"?, "target"?}`, each becoming one question named
+`decision`. `endor.data.save_rows(path, rows)` writes `.jsonl`.
 
 ## Fine-tune in a few lines
 
@@ -256,8 +274,9 @@ Besides your API key and the request itself, every request carries:
 
 For every request, the API stores the request id, your org, the calling key, the route, the status and the latency,
 plus a `client` record with one field per header: `user_agent`, `sdk`, `sdk_version`, `runtime`, `interface`,
-`method`, `recipe`, `client_request_id` and `retry_count` (each cut to 200 characters). It also keeps the request body, and the response body when it is
-JSON and at most 256 KB, in object storage (S3). Details: [docs/REQUEST_HEADERS.md](docs/REQUEST_HEADERS.md).
+`method`, `recipe`, `client_request_id` and `retry_count` (each cut to 200 characters). It also keeps the request
+body, and the response body when it is JSON and at most 256 KB, in object storage (S3). The secret API key is never
+stored. You can add your own headers with `EndorClient(headers=...)`; the ones above can't be overridden.
 
 ## CLI
 

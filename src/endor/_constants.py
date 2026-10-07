@@ -14,7 +14,7 @@ LOG_LEVEL_ENV = "ENDOR_LOG_LEVEL"
 SDK_NAME = "endor-python"
 LOGGER_NAME = "endor"
 
-# Request headers the SDK sends on every call (see docs/REQUEST_HEADERS.md).
+# Request headers the SDK sends on every call (see "What the SDK sends" in the README).
 HEADER_SDK = "X-Endor-SDK"
 HEADER_SDK_VERSION = "X-Endor-SDK-Version"
 HEADER_RUNTIME = "X-Endor-Runtime"

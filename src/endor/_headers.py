@@ -1,6 +1,6 @@
 """Request headers that identify the SDK and the SDK method behind each request.
 
-Every request carries (see docs/REQUEST_HEADERS.md):
+Every request carries (see "What the SDK sends" in the README):
 
     User-Agent:                endor-python/<version> (python 3.12.1; darwin; arm64)   "; cli" added for the CLI
     X-Endor-SDK:               endor-python

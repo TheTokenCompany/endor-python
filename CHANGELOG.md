@@ -37,4 +37,4 @@ First release.
 - `endor.data` for loading, converting, splitting and batching decision rows; `endor.metrics` for decision metrics.
 - Recipes: `supervised.train` and a teacher `distill`.
 - The `endor` command line.
-- SDK identification headers on every request (see `docs/REQUEST_HEADERS.md`).
+- SDK identification headers on every request (see "What the SDK sends" in the README).

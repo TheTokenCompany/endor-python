@@ -7,7 +7,7 @@ Decisions
 
 Training
     Datum        one state + one question + its Target (+ weight): the unit of ``forward`` / ``forward_backward``
-    DecisionRow  one state + named questions + labels: the unit of datasets (docs/DATA_FORMAT.md)
+    DecisionRow  one state + named questions + labels: the unit of datasets (README, "Data format")
     Target, LoraConfig, AdamParams, ForwardOutput, OptimStepOutput
 
 Resources (read-only views of what the API returns)
@@ -75,7 +75,7 @@ JSONContent = str | dict[str, Any] | list[Any]
 QuestionType = Literal["noul", "choice", "score"]
 LossFn = Literal["cross_entropy", "brier"]
 Label = bool | int | str | float | dict[str, float] | list[float]
-"""A row label in the natural form for its question type (docs/DATA_FORMAT.md)."""
+"""A row label in the natural form for its question type (README, "Data format")."""
 
 MAX_CHOICE_OPTIONS = 255
 MIN_SCORE_LEVELS, MAX_SCORE_LEVELS = 2, 10
@@ -376,7 +376,7 @@ class Datum(_Strict):
 
 
 class DecisionRow(_Strict):
-    """One dataset row: a decision request plus labels (docs/DATA_FORMAT.md)."""
+    """One dataset row: a decision request plus labels (README, "Data format")."""
 
     id: str | None = None
     state: JSONContent
