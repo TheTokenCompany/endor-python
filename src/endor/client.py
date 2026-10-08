@@ -72,8 +72,10 @@ class EndorClient:
             api_key: Your API key (``edk_...``). Defaults to ``ENDOR_API_KEY``.
             model: Default model for ``system_one``, for example ``"tickets"``. Defaults to ``ENDOR_DEFAULT_MODEL``;
                 without either, each ``system_one`` call must pass ``model``.
-            retry: A ``RetryPolicy``; ``RetryPolicy(max_retries=0)`` disables retries.
-            timeout: Seconds per HTTP request. A future poll waits up to 25 s on the server on top of this.
+            retry: A ``RetryPolicy``; ``RetryPolicy(max_retries=0)`` disables retries. Without one, decisions get a
+                total budget of 660 s instead of 60 s, so a cold start and its retry fit.
+            timeout: Seconds per HTTP request (default 30). A future poll waits up to 25 s on the server on top of this.
+                Without one, decisions wait up to 330 s, so a model that has to start (a few minutes) still answers.
             headers: Extra headers for every request.
             base_url: API root. Defaults to ``ENDOR_BASE_URL``, then production.
             capture: Send each run's settings and the current git commit (hash and dirty flag only, never
@@ -102,6 +104,9 @@ class EndorClient:
         if self.timeout <= 0:
             raise ValueError("timeout must be positive")
         self.retry = retry or RetryPolicy()
+        # decisions wait out a cold start, unless the caller chose a timeout or a retry policy
+        self._decision_timeout = C.DECISION_TIMEOUT if timeout is None else self.timeout
+        self._decision_retry = retry or RetryPolicy(timeout=C.DECISION_RETRY_BUDGET)
         self.exclude_from_training = bool(exclude_from_training)
         """The default for ``system_one(exclude_from_training=...)``."""
         self._t = Transport(
@@ -198,8 +203,8 @@ class EndorClient:
             "/v1/systemone",
             json=body,
             method_name="client.system_one",
-            timeout=timeout,
-            retry=retry,
+            timeout=self._decision_timeout if timeout is None else timeout,
+            retry=retry or self._decision_retry,
             extra_headers=extra_headers,
         )
         return _parse_decision(response_model, raw)
@@ -224,8 +229,8 @@ class EndorClient:
             "/v1/systemone",
             json=body,
             method_name="client.system_one",
-            timeout=timeout,
-            retry=retry,
+            timeout=self._decision_timeout if timeout is None else timeout,
+            retry=retry or self._decision_retry,
             extra_headers=extra_headers,
         )
         return _parse_decision(response_model, raw)

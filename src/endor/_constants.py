@@ -4,6 +4,11 @@ from __future__ import annotations
 
 DEFAULT_BASE_URL = "https://api.endor.thetokencompany.com"
 DEFAULT_TIMEOUT = 30.0  # seconds per HTTP operation (a future poll adds its server-side wait on top)
+# A decision on a model scaled to zero waits while it starts (a few minutes). The API waits up to 300 s, then answers
+# 503 warming_up with Retry-After, and the retry is served by the server that started. So a decision waits longer than
+# the API, and its retries get a budget that fits that wait and one retry.
+DECISION_TIMEOUT = 330.0
+DECISION_RETRY_BUDGET = 660.0
 
 API_KEY_ENV = "ENDOR_API_KEY"
 BASE_URL_ENV = "ENDOR_BASE_URL"
