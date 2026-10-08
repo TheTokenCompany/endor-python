@@ -65,6 +65,7 @@ BASE_MODELS: dict[str, dict[str, Any]] = {
         "trainable": True,
         "default_rank": 16,
         "lora_targets": ["attn", "mlp"],
+        "modalities": ["text", "image"],
     },
     "gliner2.5-decide": {
         "max_options": 64,
@@ -143,6 +144,20 @@ def check_datum(d: dict, base: dict, where: str) -> None:
         raise HTTPError(422, "invalid_datum", f"{where}: weight must be >= 0")
     if len(keys) > base["max_options"]:
         raise HTTPError(422, "invalid_datum", f"{where}: more options than the base reads")
+
+
+IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp")
+
+
+def find_images(v: Any, path: str = "state") -> list[tuple[str, dict]]:
+    """The images in a state ({"type": "image", ..., "data": ...}) with their paths, as the API reads them."""
+    if isinstance(v, dict) and v.get("type") == "image" and "data" in v:
+        return [(path, v)]
+    if isinstance(v, dict):
+        return [x for k, item in v.items() for x in find_images(item, f"{path}.{k}")]
+    if isinstance(v, list):
+        return [x for i, item in enumerate(v) for x in find_images(item, f"{path}.{i}")]
+    return []
 
 
 def uniform(q: dict) -> list[float]:
@@ -654,6 +669,12 @@ class FakeEndor:
             raise HTTPError(422, "invalid_input", "send 1..64 questions", "questions")
         base_id, answered = self.resolve_model(body["model"])
         base = BASE_MODELS[base_id]
+        images = find_images(body["state"])
+        if images and "image" not in base.get("modalities", ["text"]):
+            raise HTTPError(422, "unsupported_modality", f"{base_id} reads text only", images[0][0])
+        for path, im in images:
+            if set(im) != {"type", "media_type", "data"} or im["media_type"] not in IMAGE_TYPES:
+                raise HTTPError(422, "invalid_input", f"{path}: not an image", path)
         self.check_balance()
         answers = {}
         for name, q in body["questions"].items():
@@ -664,7 +685,7 @@ class FakeEndor:
         return {
             "model": answered,
             "answers": answers,
-            "usage": {"input_tokens": 7 * len(answers), "output_tokens": 0},
+            "usage": {"input_tokens": (7 + 280 * len(images)) * len(answers), "output_tokens": 0},
         }
 
     def list_models(self) -> dict:
@@ -723,6 +744,7 @@ class FakeEndor:
                     "contract_version": 1,
                     "max_rank": 64,
                     "trainer_gpu": "H100",
+                    "modalities": ["text"],
                     **v,
                     "price_per_mtok_decide": 0.5,
                     "price_per_mtok_decide_continuous_learning": 0.75,

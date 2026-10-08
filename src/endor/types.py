@@ -314,6 +314,8 @@ class BaseModelInfo(BaseModel):
     default_rank: int = 16
     max_rank: int | None = None
     lora_targets: list[str] = Field(default_factory=list)
+    modalities: list[str] = Field(default_factory=lambda: ["text"])
+    """What a decision's state may hold: ``"text"``, and ``"image"`` on bases that read images (``endor.Image``)."""
     contract: str | None = None
     """How a decision becomes the model's input and which outputs give the probabilities."""
     contract_version: int | None = None
