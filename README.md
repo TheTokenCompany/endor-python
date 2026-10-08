@@ -202,17 +202,18 @@ progress line (`step 37/120 (31%) · loss 0.4120 · ~3 min left`; `progress=Fals
 
 ## Training costs and limits
 
-- **Billing.** Training is billed per GPU-hour, one price for every GPU type, from when a run's GPU is requested
-  (start-up and model loading count) until it is released. Decisions are billed per 1M input tokens, per base model.
+- **Billing.** Training is billed by the second for the GPU time your training calls use, one price per GPU-hour for
+  every base model; start-up, model loading and the time between calls are free, and each run session costs at least
+  60 GPU-seconds. Decisions are billed per 1M input tokens, per base model.
   `client.base_models()` shows the prices; `client.usage(starting_on, ending_before)` returns hourly `decide` rows (input tokens)
   and `train` rows (GPU-seconds) with their cost.
-- **Idle timeout.** After 15 minutes without calls, a run saves its state and releases its GPU (status `idle`).
-  The next call restarts it on a new GPU, which takes a little longer (usually under a minute).
-- **4 open runs per org.** Every run that isn't closed counts, idle ones included. A fifth `runs.create` raises
+- **Idle timeout.** After 2 minutes without calls, a run saves its state and frees its GPU (status `idle`). The next
+  call resumes it in a few seconds. After 1 hour without calls, the run is closed; saved models are kept.
+- **5 open runs per org.** Every run that isn't closed counts, idle ones included. A sixth `runs.create` raises
   `LimitReachedError` (409, code `limit_reached`), whose message lists the open runs; close one (`run.close()` or
   `endor runs close RUN_ID`). It is not retried.
-- **Other limits.** 7 projects per org, 20 API keys, 50 models per project and 3 kept-warm models per project also
-  raise `LimitReachedError` once reached. `client.whoami().limits` lists every limit with its value.
+- **Other limits.** 7 projects per org, 20 API keys and 50 models per project also raise `LimitReachedError` once
+  reached. `client.whoami().limits` lists every limit with its value.
 - **Close your runs.** Use `with project.runs.create(...) as run:` (or `async with`): the run is closed when the
   block ends, also on errors. `runs.create(wait=True)` closes the run if you interrupt it while it provisions, and the
   recipes close their run whatever happens. `run.close()` refuses later calls, lets calls already accepted finish
@@ -328,6 +329,10 @@ client = endor.EndorClient(retry=endor.RetryPolicy(max_retries=5, timeout=120))
 client = endor.EndorClient(retry=endor.RetryPolicy(max_retries=0))      # no retries
 ```
 
+A base model that has been idle starts cold: its first decision waits a few minutes while the model starts. The SDK
+waits up to 330 s for a decision (30 s for other calls). If the model is still not ready after 5 minutes, the API
+answers `503 warming_up` with `Retry-After`, and the SDK retries after that wait.
+
 Retries are safe: creates carry an `Idempotency-Key`, and a run's compute calls carry a sequence number the server
 checks, so a retried request never runs twice.
 
@@ -338,7 +343,7 @@ checks, so a retried request never runs twice.
 | `api_key` | `ENDOR_API_KEY` | required |
 | `base_url` | `ENDOR_BASE_URL` | production |
 | `model` | `ENDOR_DEFAULT_MODEL` | none: pass `model=` to `system_one`, e.g. `"tickets"` |
-| `timeout` | | 30 s per request (a future poll also waits up to 25 s on the server) |
+| `timeout` | | 30 s per request, 330 s for a decision (a future poll also waits up to 25 s on the server) |
 | | `ENDOR_LOG_LEVEL` | unset; `info` logs one line per request on the `endor` logger |
 
 `EndorClient` also takes `headers` for every request, `retry`, `gzip=False` to stop compressing large bodies, `capture=False`

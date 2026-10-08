@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import json
 import time
+import types
 
 import httpx
 import pytest
@@ -103,6 +104,32 @@ class TestRetries:
         with pytest.raises(InternalServerError):
             c.whoami()
         assert time.monotonic() - t0 < 0.5 and len(fake.requests) == 1
+
+    def test_decisions_wait_out_a_cold_start(self, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A decision waits up to 330 s per request (other calls 30 s), and the API's 503 warming_up after its own
+        300 s wait is retried after Retry-After. A timeout you choose applies to decisions too."""
+        clock, timeouts = [0.0], []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            timeouts.append(request.extensions["timeout"]["read"])
+            if request.url.path == "/v1/systemone":
+                clock[0] += 300  # the API waited for the model to start
+            return fake.handler(request)
+
+        def sleep(s: float) -> None:
+            clock[0] += s
+
+        fake_time = types.SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep)
+        monkeypatch.setattr("endor._http.time", fake_time)
+        monkeypatch.setattr("endor._retry.time", fake_time)
+        c = EndorClient(api_key=API_KEY, base_url=BASE_URL, transport=httpx.MockTransport(handler))
+        name = c.projects.create(unique("cold"), base_model="jev-9b").name
+        fake.fail_next.append(HTTPError(503, "warming_up", "the model is starting", headers={"retry-after": "30"}))
+        assert c.system_one("x", {"u": endor.Noul()}, model=name).nouls["u"].noul == 0.5
+        assert timeouts == [30.0, 330.0, 330.0] and clock[0] == 630
+        c = EndorClient(api_key=API_KEY, base_url=BASE_URL, transport=httpx.MockTransport(handler), timeout=10)
+        c.system_one("x", {"u": endor.Noul()}, model=name)
+        assert timeouts[-1] == 10.0
 
     def test_per_call_retry_override(self, client: EndorClient, fake: FakeEndor) -> None:
         fake.fail_next.append(HTTPError(500, "internal", "bug"))

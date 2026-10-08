@@ -5,6 +5,14 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-07
+
+- Decisions wait out a cold start. A base model that has been idle takes a few minutes to start, and the API waits up
+  to 300 s before it answers `503 warming_up` with `Retry-After`. `system_one` and `system_one_async` now wait up to
+  330 s per request (other calls keep 30 s) and retry within 660 s instead of 60 s, so the first decision is answered
+  instead of timing out and being sent (and billed) twice. A `timeout` or `retry` you give the client or the call
+  still wins.
+
 ## [0.4.0] - 2026-10-07
 
 - Training progress: `runs.create(total_steps=N)` and `run.set_total_steps(N)` tell Endor how many optimizer steps

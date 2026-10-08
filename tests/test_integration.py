@@ -54,7 +54,7 @@ def test_decision(live: endor.EndorClient, base_model: str) -> None:
         project.delete()
 
 
-def test_tiny_training_loop(live: endor.EndorClient, base_model: str) -> None:
+def test_tiny_training_loop(live: endor.EndorClient) -> None:
     project = live.projects.create(f"sdk-it-{uuid.uuid4().hex[:8]}", base_model="jev-9b")
     try:
         rows = [
@@ -66,7 +66,7 @@ def test_tiny_training_loop(live: endor.EndorClient, base_model: str) -> None:
             for i in range(8)
         ]
         project.datasets.upload("train", rows)
-        with project.runs.create(base_model, rank=4) as run:
+        with project.runs.create(rank=4) as run:  # on the project's base model
             datums = endor.data.rows_to_datums(rows)
             before = run.forward(datums).result()
             fb = run.forward_backward(datums)
