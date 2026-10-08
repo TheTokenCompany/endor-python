@@ -49,6 +49,7 @@ from .errors import (
     WrongProjectKindError,
 )
 from .futures import APIFuture, gather, gather_async
+from .images import Image
 from .projects import Project
 from .runs import Run
 from .types import (
@@ -101,6 +102,7 @@ __all__ = [
     "gather_async",
     "RetryPolicy",
     # questions and answers
+    "Image",
     "Noul",
     "Choice",
     "Score",

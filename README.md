@@ -101,10 +101,21 @@ triage.department.choice, triage.urgent.noul
 for every call) to keep decisions out of a managed project's continuous learning, for example a benchmark or an
 evaluation. They are still answered, billed and logged.
 
+**Images.** On a base model that reads images (`client.base_models()`: `modalities` includes `"image"`), put
+`endor.Image` objects anywhere in the state. PNG, JPEG or WebP, at most 8 per decision and 5 MB each; their tokens
+are billed like text. Other base models answer `422 unsupported_modality`.
+
+```python
+state = {"screenshot": endor.Image.from_path("checkout.png"), "goal": "Pay for the order"}
+client.system_one(state, {"pay": Noul(instructions="Is the Pay button visible?")}, model="shop")
+```
+
+`Image.from_bytes(data, media_type=None)` and `Image.from_pil(image, format="PNG")` (needs Pillow) build one too.
+
 **The catalog.** `client.models.list()` returns every name you can pass as `model` (`GET /v1/models`):
 `"<project>"` and `"<project>/base"` for each project with a base model, then `"<project>/<name>"` for each saved
 model (`.kind` is `project`, `base` or `model`). `client.base_models()` returns the base models (`GET /v1/base_models`)
-with their option limits, `hf_repo`, `contract` and prices (`price_per_mtok_decide`,
+with their option limits, `modalities`, `hf_repo`, `contract` and prices (`price_per_mtok_decide`,
 `price_per_mtok_decide_continuous_learning` for managed projects, `price_per_gpu_hour`). Call a
 base model through a project: `"<project>/base"`.
 

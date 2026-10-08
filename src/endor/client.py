@@ -176,7 +176,8 @@ class EndorClient:
         """Answer named questions about a state with one forward pass per question.
 
         Args:
-            state: Text, a JSON object or an array: the data the decisions are about.
+            state: Text, a JSON object or an array: the data the decisions are about. On a base that reads images,
+                it may hold ``endor.Image`` objects (as the state, a list item or an object value).
             questions: 1 to 64 named questions (``Noul``, ``Choice``, ``Score`` or dicts in the same shape).
             model: ``"<project>/<name>"`` (a saved model), ``"<project>/base"`` (its base model) or ``"<project>"``
                 (a managed project's newest version, else its base model). Defaults to the client's model.

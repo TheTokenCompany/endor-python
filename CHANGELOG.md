@@ -5,6 +5,14 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-08
+
+- Images in decisions: `endor.Image.from_path(path)`, `Image.from_bytes(data, media_type=None)` and
+  `Image.from_pil(image, format="PNG")` (Pillow, not installed by the SDK) build the state object
+  `{"type": "image", "media_type": ..., "data": <base64>}`; put it anywhere in a state on a base model that reads
+  images. `BaseModelInfo.modalities` says which do (`["text", "image"]`); the others answer
+  `422 unsupported_modality` (`UnprocessableEntityError`).
+
 ## [0.4.1] - 2026-10-07
 
 - Decisions wait out a cold start. A base model that has been idle takes a few minutes to start, and the API waits up
