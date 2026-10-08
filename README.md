@@ -97,6 +97,10 @@ triage = client.system_one(state, questions, model="tickets", response_model=Tri
 triage.department.choice, triage.urgent.noul
 ```
 
+**Benchmarks.** Pass `exclude_from_training=True` to `system_one` (or `EndorClient(exclude_from_training=True)`
+for every call) to keep decisions out of a managed project's continuous learning, for example a benchmark or an
+evaluation. They are still answered, billed and logged.
+
 **The catalog.** `client.models.list()` returns every name you can pass as `model` (`GET /v1/models`):
 `"<project>"` and `"<project>/base"` for each project with a base model, then `"<project>/<name>"` for each saved
 model (`.kind` is `project`, `base` or `model`). `client.base_models()` returns the base models (`GET /v1/base_models`)
@@ -192,7 +196,9 @@ The recipe holds out 10% of the rows, scores the untuned base model (`"<project>
 `base_model` as its base, and one without a base gets it) on them, trains one epoch (learning rate `1e-4`
 with warmup then linear decay, batches of 16), scores the held-out rows during and after training, and saves the
 final model. Every number appears on the run's dashboard page. `SupervisedConfig` has the knobs: base model, rank,
-learning rate and schedule, batch size, epochs, loss, how often to evaluate.
+learning rate and schedule, batch size, epochs, loss, how often to evaluate. The recipe sets the run's
+`total_steps` from the data size and epochs, so the dashboard shows a progress bar with an ETA, and it prints a
+progress line (`step 37/120 (31%) · loss 0.4120 · ~3 min left`; `progress=False` turns it off).
 
 ## Training costs and limits
 
@@ -259,6 +265,18 @@ fresh run defaults to rank 16, alpha 32, attention and MLP layers, no readout.
   and logs progress on the `endor` logger; with `wait=False` the run returns at once and `run.ready` is the future.
 - If the trainer's GPU dies, pending calls fail with `trainer_lost` and the run becomes `failed` (`run.info().failure`
   says why). Start a new run with `from_model=` your last saved model.
+- Progress: pass `runs.create(total_steps=N)` (or later `run.set_total_steps(N)`) and the dashboard shows a progress
+  bar with an ETA; without it, the step count and steps per minute. `run.info()` has `step`, `total_steps`,
+  `seconds_per_step` (median over the last 20 steps), `progress` (0 to 1) and `eta_seconds`.
+
+## Weights & Biases
+
+Endor logs runs to Weights & Biases from its servers; your training code doesn't change. Connect W&B once in the
+dashboard (Settings > Integrations, with a W&B API key that Endor keeps in AWS Secrets Manager), then turn logging on
+per project (its Settings tab, or `project.update(wandb={"enabled": True, "project": "tickets"})`). Override it per
+run with `project.runs.create(wandb=True)` or `wandb=False`. Each run becomes a W&B run with the same id, with the
+base model, LoRA settings and your `config`, and every run metric (`train/loss`, `train/accuracy`, `train/grad_norm`,
+`train/lr`, `run.log`) against the Endor step; it is finished when the run closes. `run.info().wandb_url` links to it.
 
 ## Teacher distillation
 

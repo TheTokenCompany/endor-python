@@ -5,6 +5,22 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-07
+
+- Training progress: `runs.create(total_steps=N)` and `run.set_total_steps(N)` tell Endor how many optimizer steps
+  you plan, so the dashboard shows a progress bar and an ETA. `RunInfo` has `total_steps`, `seconds_per_step` (the
+  median over the last 20 steps), `progress` (0 to 1) and `eta_seconds`. The supervised recipe (and distill) sets
+  `total_steps` from the data size and epochs and prints a progress line (`SupervisedConfig(progress=False)` turns
+  it off).
+- Weights & Biases, logged by Endor's servers through the organization's W&B connection (dashboard: Settings >
+  Integrations): `project.update(wandb={"enabled": True, "entity": ..., "project": ...})` turns it on for a
+  project's new runs, `runs.create(wandb=True|False)` overrides it per run. `ProjectInfo.wandb` (`WandbSettings`:
+  `enabled`, `entity`, `project`); `RunInfo.wandb` and `wandb_url`.
+- `RunInfo.ready_at` (the run's GPU was ready) and `closed_at`.
+- `exclude_from_training`: `system_one(..., exclude_from_training=True)` (or `EndorClient(exclude_from_training=True)`
+  for every call) keeps a decision out of continuous learning, for benchmarks and evaluations; it is still answered,
+  billed and logged. Sent only when on, so other requests are exactly TypeSafe's.
+
 ## [0.3.0] - 2026-10-07
 
 Breaking: there is no live model any more, as in the API.

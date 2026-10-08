@@ -57,6 +57,7 @@ __all__ = [
     "ForwardOutput",
     "OptimStepOutput",
     "ProjectInfo",
+    "WandbSettings",
     "RunInfo",
     "ModelInfo",
     "DatasetInfo",
@@ -504,6 +505,18 @@ class OptimStepOutput(_View):
     learning_rate: float
 
 
+class WandbSettings(_View):
+    """A project's Weights & Biases logging, set in its Settings tab or with ``project.update(wandb=...)``. Endor logs
+    runs from its servers through the organization's W&B connection (dashboard: Settings > Integrations)."""
+
+    enabled: bool = False
+    """New runs log to W&B (``runs.create(wandb=...)`` overrides it per run)."""
+    entity: str | None = None
+    """The W&B team or user; None: the connection's default entity."""
+    project: str | None = None
+    """The W&B project; None: the Endor project's name."""
+
+
 class ProjectInfo(_View):
     name: str
     description: str | None = None
@@ -517,6 +530,8 @@ class ProjectInfo(_View):
     n_datasets: int = 0
     n_runs: int = 0
     n_models: int = 0
+    wandb: WandbSettings | None = None
+    """Weights & Biases logging of the project's runs."""
     created_at: datetime
 
 
@@ -532,6 +547,11 @@ class RunInfo(_View):
     ``closing`` (closed, finishing accepted calls), ``closed`` or ``failed``. Treat unknown values as active."""
     ready_future_id: str | None = None
     step: int = 0
+    """Optimizer steps taken."""
+    total_steps: int | None = None
+    """The optimizer steps planned (``runs.create(total_steps=...)`` or ``run.set_total_steps``); None if unknown."""
+    seconds_per_step: float | None = None
+    """The median time per optimizer step over the last 20 steps; None before the second step."""
     next_seq_id: int = 0
     parent_model: str | None = None
     tags: list[str] = Field(default_factory=list)
@@ -541,6 +561,27 @@ class RunInfo(_View):
     failure: dict[str, Any] | None = None
     """``{"code", "message"}`` once the run failed (e.g. ``trainer_lost``)."""
     created_at: datetime
+    ready_at: datetime | None = None
+    """When the run's first GPU was ready (``created_at`` to ``ready_at``: waiting for a GPU)."""
+    closed_at: datetime | None = None
+    wandb: bool = False
+    """The run logs to Weights & Biases."""
+    wandb_url: str | None = None
+    """Its W&B run, once Endor has created it (within about a minute of the first metrics)."""
+
+    @property
+    def progress(self) -> float | None:
+        """``step / total_steps`` (0 to 1), or None without a total."""
+        if not self.total_steps:
+            return None
+        return min(1.0, self.step / self.total_steps)
+
+    @property
+    def eta_seconds(self) -> float | None:
+        """Seconds until ``total_steps`` at the recent pace, or None without a total or a pace."""
+        if not self.total_steps or self.seconds_per_step is None:
+            return None
+        return max(0, self.total_steps - self.step) * self.seconds_per_step
 
 
 class ModelInfo(_View):

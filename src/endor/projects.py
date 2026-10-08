@@ -31,6 +31,7 @@ from .types import (
     LoraConfig,
     ModelInfo,
     ProjectInfo,
+    WandbSettings,
 )
 
 ProjectKind = Literal["custom", "managed"]
@@ -133,19 +134,25 @@ class Project:
         *,
         description: str | None = None,
         paused: bool | None = None,
+        wandb: WandbSettings | dict[str, Any] | None = None,
     ) -> ProjectInfo:
         """Change the project's settings; arguments left as None are unchanged. The kind and base model never change.
 
         - ``description``: free text.
         - ``paused``: managed projects only (``WrongProjectKindError`` for a custom one). A paused project stops
-          learning and keeps serving its newest version; its decisions keep the managed price."""
+          learning and keeps serving its newest version; its decisions keep the managed price.
+        - ``wandb``: ``{"enabled": True, "entity": "acme", "project": "tickets"}`` (keys left out stay as they are):
+          new runs then log to Weights & Biases, from Endor's servers. Needs the organization's W&B connection
+          (dashboard: Settings > Integrations); ``ConflictError`` without it."""
         body: dict[str, Any] = {}
         if description is not None:
             body["description"] = description
         if paused is not None:
             body["paused"] = paused
+        if wandb is not None:
+            body["wandb"] = wandb.model_dump() if isinstance(wandb, WandbSettings) else dict(wandb)
         if not body:
-            raise ValueError("nothing to update: pass description or paused")
+            raise ValueError("nothing to update: pass description, paused or wandb")
         self.info_ = ProjectInfo.model_validate(
             self._t.request("PATCH", f"/v1/projects/{self.name}", json=body, method_name="project.update")
         )
@@ -268,6 +275,8 @@ class Runs:
         tags: list[str] | None = None,
         config: dict[str, Any] | None = None,
         user_metadata: dict[str, Any] | None = None,
+        total_steps: int | None = None,
+        wandb: bool | None = None,
         wait: bool = True,
     ) -> Run:
         """Start a run: a fresh adapter on the project's base model, or one warm-started from ``from_model`` (a model
@@ -290,6 +299,11 @@ class Runs:
         ``WrongProjectKindError`` (Endor trains it).
         ``config`` is free-form and shown on the dashboard; when the client was created with ``capture=True`` the
         SDK adds the LoRA settings and the current git commit (never file contents).
+
+        ``total_steps``: the optimizer steps you plan, so the dashboard shows a progress bar and an ETA (change it
+        later with ``run.set_total_steps``). ``wandb``: log this run to Weights & Biases (True or False); None
+        follows the project's setting (``ProjectInfo.wandb``). Endor logs from its servers through the organization's
+        W&B connection; ``run.info().wandb_url`` links to the W&B run.
         """
         given = {
             "rank": rank,
@@ -313,6 +327,12 @@ class Runs:
             "config": dict(config or {}),
             "user_metadata": user_metadata or {},
         }
+        if total_steps is not None:
+            if total_steps < 1:
+                raise ValueError("total_steps must be at least 1 (or None)")
+            body["total_steps"] = total_steps
+        if wandb is not None:
+            body["wandb"] = wandb
         if self._capture:
             body["config"] = {
                 **body["config"],

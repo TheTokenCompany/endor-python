@@ -228,8 +228,22 @@ class Run:
         return self.info_
 
     def info(self) -> RunInfo:
-        """Refresh and return the run's status, step and ``next_seq_id``."""
+        """Refresh and return the run's status, ``step`` and ``next_seq_id``, with its progress: ``total_steps``,
+        ``seconds_per_step`` (the median over the last 20 steps), ``progress`` (0 to 1) and ``eta_seconds``, and its
+        Weights & Biases link (``wandb_url``) once Endor has logged to it."""
         self.info_ = RunInfo.model_validate(self._t.request("GET", f"/v1/runs/{self.id}", method_name="run.info"))
+        return self.info_
+
+    def set_total_steps(self, total_steps: int | None) -> RunInfo:
+        """Tell Endor how many optimizer steps you plan (None: unknown), so the dashboard shows a progress bar and an
+        ETA for this run. ``runs.create(total_steps=...)`` sets it at the start; the recipes set it for you."""
+        if total_steps is not None and total_steps < 1:
+            raise ValueError("total_steps must be at least 1 (or None)")
+        self.info_ = RunInfo.model_validate(
+            self._t.request(
+                "PATCH", f"/v1/runs/{self.id}", json={"total_steps": total_steps}, method_name="run.set_total_steps"
+            )
+        )
         return self.info_
 
     # ------------------------------------------------------------------ dashboard
