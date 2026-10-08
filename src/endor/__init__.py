@@ -80,6 +80,7 @@ from .types import (
     Target,
     Usage,
     UsageRow,
+    WandbSettings,
     WhoAmI,
     answer_probabilities,
     option_keys,
@@ -124,6 +125,7 @@ __all__ = [
     # resources
     "ProjectInfo",
     "RunInfo",
+    "WandbSettings",
     "ModelInfo",
     "DatasetInfo",
     "Evaluation",

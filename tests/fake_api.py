@@ -199,6 +199,7 @@ class FakeEndor:
     """The org's balance is used up: paid calls answer 402 insufficient_balance."""
 
     projects: dict[str, dict] = field(default_factory=dict)
+    wandb_connected: bool = False  # the org's W&B connection (dashboard only)
     datasets: dict[tuple[str, str], dict] = field(default_factory=dict)
     runs: dict[str, dict] = field(default_factory=dict)
     models: dict[str, dict] = field(default_factory=dict)
@@ -264,6 +265,7 @@ class FakeEndor:
             "n_runs": sum(1 for r in self_.runs.values() if r["project"] == p["name"]),
             "n_models": sum(1 for m in self_.models.values() if m["project"] == p["name"])
             + (p["base_model"] is not None),
+            "wandb": dict(p.get("wandb") or {"enabled": False, "entity": None, "project": None}),
         }
 
     def serves(self, p: dict) -> str | None:
@@ -463,6 +465,15 @@ class FakeEndor:
                     if proj["kind"] != "managed":
                         raise HTTPError(409, "wrong_project_kind", f"Project {p[1]} is custom: only managed pause.")
                     proj["paused"] = body["paused"]
+                if body.get("wandb") is not None:
+                    if body["wandb"].get("enabled") and not self.wandb_connected:
+                        raise HTTPError(409, "invalid_state", "Connect Weights & Biases first.", "wandb")
+                    w = proj.setdefault("wandb", {"enabled": False, "entity": None, "project": None})
+                    if body["wandb"].get("enabled") is not None:
+                        w["enabled"] = body["wandb"]["enabled"]
+                    for k in ("entity", "project"):
+                        if k in body["wandb"]:
+                            w[k] = body["wandb"][k]
                 return 200, self.project_view(proj, self)
             if m == "DELETE":
                 self.project(p[1])
@@ -520,6 +531,13 @@ class FakeEndor:
             run = self.run(p[1])
             tail = p[2:]
             if not tail and m == "GET":
+                return 200, self.run_view(run)
+            if not tail and m == "PATCH":
+                if "total_steps" in body:
+                    t = body["total_steps"]
+                    if t is not None and t < 1:
+                        raise HTTPError(422, "invalid_input", "total_steps >= 1", "total_steps")
+                    run["total_steps"] = t
                 return 200, self.run_view(run)
             if tail == ["forward"] or tail == ["forward_backward"]:
                 return 202, self.forward(run, body, tail[0])
@@ -876,6 +894,12 @@ class FakeEndor:
             "status": "provisioning" if self.provisioning_polls else "ready",
             "ready_future_id": ready["id"],
             "step": 0,
+            "total_steps": body.get("total_steps"),
+            "seconds_per_step": None,
+            "ready_at": now().isoformat(),
+            "closed_at": None,
+            "wandb": body["wandb"] if body.get("wandb") is not None else bool((proj.get("wandb") or {}).get("enabled")),
+            "wandb_url": None,
             "next_seq_id": 0,
             "parent_model": parent,
             "tags": body.get("tags") or [],

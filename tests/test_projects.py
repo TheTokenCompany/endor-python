@@ -72,7 +72,7 @@ class TestProjects:
         assert m.update(paused=True).paused is True
         assert fake.requests[-1].body == {"paused": True}
         assert m.update(paused=False).paused is False
-        with pytest.raises(ValueError, match="description or paused"):
+        with pytest.raises(ValueError, match="nothing to update"):
             p.update()
 
     def test_managed_projects_refuse_training(self, client: EndorClient) -> None:

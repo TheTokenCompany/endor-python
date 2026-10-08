@@ -8,7 +8,8 @@ What it does:
 1. Splits off a held-out set (unless ``eval_rows`` is given) and expands rows into datums, one per labeled question.
 2. Scores the untuned base model (``"<project>/base"``) on the held-out rows, so every later number has a baseline.
 3. Trains one run: batches of ``batch_size``, a learning rate with linear warmup then linear decay,
-   ``forward_backward`` and ``optim_step`` submitted together each step.
+   ``forward_backward`` and ``optim_step`` submitted together each step. The run's ``total_steps`` is set from the
+   data size and epochs, so the dashboard shows a progress bar and an ETA, and a progress line is printed.
 4. Every ``eval_every`` steps and at the end, scores the held-out datums with the run's current adapter and records
    accuracy, log loss, Brier, ECE and selective accuracy on the run's page.
 5. Saves the final adapter as ``"<project>/<model_name>"`` and closes the run (also when anything fails).
@@ -17,6 +18,9 @@ What it does:
 from __future__ import annotations
 
 import math
+import statistics
+import sys
+import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -68,6 +72,8 @@ class SupervisedConfig:
     """Optional unlabeled rows mixed into every batch with the base model's own answers as soft targets, which keeps
     the tuned model close to the base on everything outside your task. Off unless ``replay_per_batch`` > 0."""
     replay_per_batch: int = 0
+    progress: bool = True
+    """Print a progress line (step, loss, ETA) about 20 times over the run, and at the end."""
 
 
 @dataclass
@@ -90,6 +96,37 @@ def lr_at(cfg: SupervisedConfig, step: int, total: int) -> float:
     warm = min(1.0, (step + 1) / max(1, cfg.warmup_steps))
     decay = (1 - step / total) if cfg.lr_schedule == "linear" else 1.0
     return cfg.learning_rate * warm * decay
+
+
+def fmt_eta(seconds: float) -> str:
+    """A duration as "40s", "12 min" or "2 h 5 min"."""
+    if seconds < 60:
+        return f"{max(1, round(seconds))}s"
+    minutes = round(seconds / 60)
+    if minutes < 60:
+        return f"{minutes} min"
+    return f"{minutes // 60} h {minutes % 60} min" if minutes % 60 else f"{minutes // 60} h"
+
+
+class _Progress:
+    """The recipe's progress line: ``step 37/120 (31%) · loss 0.412 · ~3 min left``, about 20 times per run."""
+
+    def __init__(self, run_id: str, total: int, enabled: bool) -> None:
+        self.run_id, self.total, self.enabled = run_id, total, enabled
+        self.every = max(1, total // 20)
+        self.last = time.monotonic()
+        self.gaps: list[float] = []
+
+    def step(self, step: int, loss: float) -> None:
+        t = time.monotonic()
+        self.gaps = [*self.gaps[-19:], t - self.last]
+        self.last = t
+        if not self.enabled or (step % self.every and step != self.total):
+            return
+        left = (self.total - step) * statistics.median(self.gaps)
+        eta = f" · ~{fmt_eta(left)} left" if step < self.total else ""
+        line = f"run {self.run_id}: step {step}/{self.total} ({step / self.total:.0%}) · loss {loss:.4f}{eta}"
+        print(line, file=sys.stderr, flush=True)
 
 
 def evaluate_run(run: Run, datums: Sequence[Datum]) -> dict[str, Any]:
@@ -153,6 +190,7 @@ def train(
             base = f"{project.name}/base"  # decisions name a project: the untuned base is "<project>/base"
             base_metrics = evaluate_model(client, base, eval_rows) if cfg.eval_base and eval_datums else None
             replay = _replay_datums(client, cfg, base)
+            total = math.ceil(len(train_datums) / cfg.batch_size) * cfg.epochs
             with project.runs.create(
                 cfg.base_model,
                 rank=cfg.rank,
@@ -160,11 +198,12 @@ def train(
                 name=cfg.name,
                 tags=cfg.tags,
                 config={k: v for k, v in asdict(cfg).items() if k != "replay_rows"},
+                total_steps=total,
             ) as run:  # closed on success and on any error, so its GPU is released
                 if base_metrics is not None:
                     run.log_eval(base, base_metrics, step=0, name="heldout")
-                total = math.ceil(len(train_datums) / cfg.batch_size) * cfg.epochs
                 result = SupervisedResult(run.id, "", base_metrics)
+                progress = _Progress(run.id, total, cfg.progress)
 
                 def held_out(step: int) -> None:
                     if eval_datums:
@@ -180,9 +219,10 @@ def train(
                             batch = batch + [replay[(step * k + i) % len(replay)] for i in range(k)]
                         fb = run.forward_backward(batch, cfg.loss_fn)
                         opt = run.optim_step(learning_rate=lr_at(cfg, step, total))
-                        fb.result()
+                        out = fb.result()
                         opt.result()
                         step += 1
+                        progress.step(step, out.loss)
                         if cfg.eval_every and step % cfg.eval_every == 0 and step < total:
                             held_out(step)
                 held_out(step)

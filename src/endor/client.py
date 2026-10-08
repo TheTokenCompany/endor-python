@@ -59,6 +59,7 @@ class EndorClient:
         headers: Mapping[str, str] | None = None,
         base_url: str | None = None,
         capture: bool = True,
+        exclude_from_training: bool = False,
         gzip: bool = True,
         http_client: httpx.Client | None = None,
         async_http_client: httpx.AsyncClient | None = None,
@@ -77,6 +78,8 @@ class EndorClient:
             base_url: API root. Defaults to ``ENDOR_BASE_URL``, then production.
             capture: Send each run's settings and the current git commit (hash and dirty flag only, never
                 file contents) so the dashboard can show how a model was made.
+            exclude_from_training: Keep this client's decisions out of continuous learning by default (benchmarks,
+                evaluations). They are still answered, billed and logged. ``system_one`` can override it per call.
             gzip: Compress request bodies over 32 KB (large dataset uploads and batches). On by default.
             http_client, async_http_client: Your own ``httpx`` clients, if you need one connection pool or
                 custom settings. They are not closed with this client.
@@ -99,6 +102,8 @@ class EndorClient:
         if self.timeout <= 0:
             raise ValueError("timeout must be positive")
         self.retry = retry or RetryPolicy()
+        self.exclude_from_training = bool(exclude_from_training)
+        """The default for ``system_one(exclude_from_training=...)``."""
         self._t = Transport(
             self.api_key,
             self.base_url,
@@ -131,6 +136,7 @@ class EndorClient:
         timeout: float | None = None,
         extra_headers: Mapping[str, str] | None = None,
         extra_body: Mapping[str, Any] | None = None,
+        exclude_from_training: bool | None = None,
         response_model: None = None,
     ) -> SystemOneResponse: ...
 
@@ -145,6 +151,7 @@ class EndorClient:
         timeout: float | None = None,
         extra_headers: Mapping[str, str] | None = None,
         extra_body: Mapping[str, Any] | None = None,
+        exclude_from_training: bool | None = None,
         response_model: type[ResponseT],
     ) -> ResponseT: ...
 
@@ -158,6 +165,7 @@ class EndorClient:
         timeout: float | None = None,
         extra_headers: Mapping[str, str] | None = None,
         extra_body: Mapping[str, Any] | None = None,
+        exclude_from_training: bool | None = None,
         response_model: type[ResponseT] | None = None,
     ) -> SystemOneResponse | ResponseT:
         """Answer named questions about a state with one forward pass per question.
@@ -170,6 +178,8 @@ class EndorClient:
             retry, timeout: Overrides for this call.
             extra_headers: Extra request headers.
             extra_body: Extra top-level request fields, merged last.
+            exclude_from_training: Keep this decision out of continuous learning (a benchmark or an evaluation); it
+                is still answered, billed and logged. None: the client's ``exclude_from_training``.
             response_model: A ``SystemOneResponse`` subclass with one typed attribute per question.
 
         Returns:
@@ -182,7 +192,7 @@ class EndorClient:
                 id, ``NoBaseModelError`` for a project without a base model, ``UnprocessableEntityError`` naming a
                 bad question, ``RateLimitError`` and ``OverloadedError`` when told to wait.
         """
-        body = self._decision_body(state, questions, model, extra_body)
+        body = self._decision_body(state, questions, model, extra_body, exclude_from_training)
         raw = self._t.request(
             "POST",
             "/v1/systemone",
@@ -204,10 +214,11 @@ class EndorClient:
         timeout: float | None = None,
         extra_headers: Mapping[str, str] | None = None,
         extra_body: Mapping[str, Any] | None = None,
+        exclude_from_training: bool | None = None,
         response_model: type[ResponseT] | None = None,
     ) -> SystemOneResponse | ResponseT:
         """``system_one`` for async code."""
-        body = self._decision_body(state, questions, model, extra_body)
+        body = self._decision_body(state, questions, model, extra_body, exclude_from_training)
         raw = await self._t.arequest(
             "POST",
             "/v1/systemone",
@@ -225,6 +236,7 @@ class EndorClient:
         questions: Mapping[str, Question],
         model: str | None,
         extra_body: Mapping[str, Any] | None,
+        exclude_from_training: bool | None = None,
     ) -> dict[str, Any]:
         if not questions:
             raise ValueError("at least one question is required")
@@ -241,6 +253,9 @@ class EndorClient:
             "state": state,
             "questions": {name: question_dict(q) for name, q in questions.items()},
         }
+        exclude = self.exclude_from_training if exclude_from_training is None else exclude_from_training
+        if exclude:  # only when on, so every other body stays exactly TypeSafe's
+            body["exclude_from_training"] = True
         if extra_body:
             body.update(extra_body)
         return body

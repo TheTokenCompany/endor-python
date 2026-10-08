@@ -138,6 +138,23 @@ class TestDecisions:
         req = fake.requests[-1]
         assert req.body["trace"] == "abc" and req.body["model"] == decider and req.headers["x-trace"] == "1"
 
+    async def test_exclude_from_training(self, client: EndorClient, fake: FakeEndor, decider: str) -> None:
+        client.system_one("x", {"u": URGENT}, model=decider)
+        assert "exclude_from_training" not in fake.requests[-1].body  # off by default: the body stays TypeSafe's
+        client.system_one("x", {"u": URGENT}, model=decider, exclude_from_training=True)
+        assert fake.requests[-1].body["exclude_from_training"] is True
+        async with EndorClient(
+            api_key=API_KEY,
+            base_url=BASE_URL,
+            async_transport=httpx.MockTransport(fake.handler),
+            exclude_from_training=True,
+        ) as c:
+            assert c.exclude_from_training is True
+            await c.system_one_async("x", {"u": URGENT}, model=decider)  # the client's default
+            assert fake.requests[-1].body["exclude_from_training"] is True
+            await c.system_one_async("x", {"u": URGENT}, model=decider, exclude_from_training=False)
+            assert "exclude_from_training" not in fake.requests[-1].body
+
     def test_project_model_id(self, client: EndorClient, project: endor.Project) -> None:
         with project.runs.create() as run:
             model = run.save_checkpoint("v1").result()
