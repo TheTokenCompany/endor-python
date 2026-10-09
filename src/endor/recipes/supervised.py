@@ -6,7 +6,8 @@
 What it does:
 
 1. Splits off a held-out set (unless ``eval_rows`` is given) and expands rows into datums, one per labeled question.
-2. Scores the untuned base model (``"<project>/base"``) on the held-out rows, so every later number has a baseline.
+2. Scores the untuned base model (``"<project>/<base_model>"``) on the held-out rows, so every later number has a
+   baseline.
 3. Trains one run: batches of ``batch_size``, a learning rate with linear warmup then linear decay,
    ``forward_backward`` and ``optim_step`` submitted together each step. The run's ``total_steps`` is set from the
    data size and epochs, so the dashboard shows a progress bar and an ETA, and a progress line is printed.
@@ -43,11 +44,10 @@ class SupervisedConfig:
     """Settings for ``train``."""
 
     project: str
-    """The custom project that gets the run and the model (created with ``base_model`` if missing; an existing one
-    must have this base model)."""
+    """The custom project that gets the run and the model (created if missing). ``base_model`` is added to its base
+    models if it doesn't have it yet."""
     base_model: str = "decider-2b"
-    """The base model the run trains on: the project's base model, called as ``"<project>/base"`` by ``eval_base``
-    and replay rows."""
+    """The base model the run trains on, called as ``"<project>/<base_model>"`` by ``eval_base`` and replay rows."""
     model_name: str | None = None
     """The saved model's name in the project; default ``"<name or sft>-<timestamp>"``."""
     rank: int = 16
@@ -186,8 +186,8 @@ def train(
         own = client is None
         client = client or EndorClient()
         try:
-            project = client.projects.get_or_create(cfg.project, base_model=cfg.base_model)
-            base = f"{project.name}/base"  # decisions name a project: the untuned base is "<project>/base"
+            project = client.projects.get_or_create(cfg.project, base_models=[cfg.base_model])
+            base = f"{project.name}/{cfg.base_model}"  # decisions name a project: the untuned base is "<project>/<id>"
             base_metrics = evaluate_model(client, base, eval_rows) if cfg.eval_base and eval_datums else None
             replay = _replay_datums(client, cfg, base)
             total = math.ceil(len(train_datums) / cfg.batch_size) * cfg.epochs

@@ -2,14 +2,15 @@
 
     endor whoami
     endor base-models
-    endor projects list | create NAME --base-model BASE [--kind custom|managed] | delete NAME
+    endor projects list | create NAME [--base-model BASE ...] [--kind custom|managed] | delete NAME
+    endor projects add-base-model NAME BASE | remove-base-model NAME BASE
     endor datasets list PROJECT | upload PROJECT NAME FILE | delete PROJECT NAME
     endor runs list PROJECT | show RUN_ID | close RUN_ID
     endor models list PROJECT | info MODEL | download MODEL [-o DIR] | set-ttl MODEL SECONDS|none | delete MODEL
     endor eval PROJECT MODEL DATASET
     endor usage --start 2026-10-01 --end 2026-10-06 [--project P] [--csv]
 
-MODEL is "<project>/<name>" ("<project>/base" for the project's base model). Every command takes -f json.
+MODEL is "<project>/<name>" ("<project>/<base id>" for one of the project's base models). Every command takes -f json.
 Credentials: ENDOR_API_KEY (and ENDOR_BASE_URL).
 """
 
@@ -52,9 +53,15 @@ def _out(obj: Any, fmt: str) -> None:
     rows = obj if isinstance(obj, list) else [obj]
     for r in rows:
         if isinstance(r, dict):
-            print("  ".join(f"{k}={v}" for k, v in r.items() if not isinstance(v, (dict, list))))
+            cells = {k: _cell(v) for k, v in r.items()}
+            print("  ".join(f"{k}={v}" for k, v in cells.items() if not isinstance(v, (dict, list))))
         else:
             print(r)
+
+
+def _cell(v: Any) -> Any:
+    """A list of strings (a project's base models, a run's tags) as one comma-separated cell."""
+    return ",".join(v) if isinstance(v, list) and all(isinstance(x, str) for x in v) else v
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -68,7 +75,13 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_parser("list")
     pc = pr.add_parser("create")
     pc.add_argument("name")
-    pc.add_argument("--base-model", required=True, help="the project's base model, e.g. decider-2b (never changes)")
+    pc.add_argument(
+        "--base-model",
+        action="append",
+        dest="base_models",
+        metavar="BASE",
+        help="a base model of the project, e.g. decider-2b; repeat for more (a managed project needs one)",
+    )
     pc.add_argument(
         "--kind",
         choices=["custom", "managed"],
@@ -76,6 +89,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="custom: you train models with the SDK; managed: Endor trains from the project's decisions (+50%%)",
     )
     pr.add_parser("delete").add_argument("name")
+    for action in ("add-base-model", "remove-base-model"):
+        pb = pr.add_parser(action)
+        pb.add_argument("name")
+        pb.add_argument("base_model", metavar="BASE", help="a base model id, e.g. decider-2b")
     ds = sub.add_parser("datasets").add_subparsers(dest="action", required=True)
     ds.add_parser("list").add_argument("project")
     up = ds.add_parser("upload")
@@ -143,7 +160,13 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
         if a.action == "list":
             _out(client.projects.list(), f)
         elif a.action == "create":
-            _out(client.projects.create(a.name, base_model=a.base_model, kind=a.kind), f)
+            if a.kind == "managed" and not a.base_models:
+                raise EndorError("a managed project needs a base model: --base-model BASE")
+            _out(client.projects.create(a.name, kind=a.kind, base_models=a.base_models), f)
+        elif a.action == "add-base-model":
+            _out(client.projects.get(a.name).add_base_model(a.base_model), f)
+        elif a.action == "remove-base-model":
+            _out(client.projects.get(a.name).remove_base_model(a.base_model), f)
         else:
             client.projects.get(a.name).delete()
     elif a.cmd == "datasets":

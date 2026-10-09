@@ -115,7 +115,7 @@ def _assert_no_open_runs(c: endor.EndorClient, since: datetime) -> None:
 @pytest.fixture
 def project(client: endor.EndorClient) -> endor.Project:
     """A new custom project on jev-9b."""
-    return client.projects.create(unique("tickets"), base_model="jev-9b")
+    return client.projects.create(unique("tickets"), base_models=["jev-9b"])
 
 
 DECIDE_BASE = "jev-9b"
@@ -123,8 +123,8 @@ DECIDE_BASE = "jev-9b"
 
 @pytest.fixture
 def decider(client: endor.EndorClient) -> str:
-    """The name of a new project with a base model: ``model=decider`` answers with its base model."""
-    return client.projects.create(unique("decide"), base_model=DECIDE_BASE).name
+    """The name of a new project with one base model: ``model=decider`` answers with it."""
+    return client.projects.create(unique("decide"), base_models=[DECIDE_BASE]).name
 
 
 def requests_to(fake: FakeEndor, path_suffix: str, method: str | None = None) -> list:

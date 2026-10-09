@@ -10,7 +10,7 @@ res = client.system_one({"body": "charged twice"},
                         model="tickets/v1")                         # a saved model, by its id
 res.choices["dept"].choice, res.nouls["urgent"].noul
 
-project = client.projects.get_or_create("tickets", base_model="decider-2b")   # "tickets" answers at once
+project = client.projects.get_or_create("tickets", base_models=["decider-2b"])  # "tickets/decider-2b" answers
 with project.runs.create(base_model="decider-2b", rank=16) as run:   # closed on exit, even on errors
     for batch in endor.data.batches(endor.data.rows_to_datums(rows), 16):
         fb = run.forward_backward(batch)

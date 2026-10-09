@@ -5,6 +5,29 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Breaking: a project has any number of base models, each called by its own id. There is no `"<project>/base"` any
+more, as in the API.
+
+- `client.projects.create(name, description=None, *, kind="custom", base_models=None)` and `get_or_create(...)` take
+  `base_models` (a list of ids from `client.base_models()`) instead of `base_model`. A managed project needs at least
+  one. `get_or_create` adds the base models an existing project lacks instead of raising `ValueError`; it still
+  raises one for another `kind`.
+- `project.add_base_model(id)` and `project.remove_base_model(id)` return the updated `ProjectInfo`. Adding one the
+  project already has raises `ConflictError` (409 `conflict`); a managed project keeps at least one. CLI:
+  `endor projects add-base-model NAME BASE`, `remove-base-model NAME BASE`, and `create --base-model` may be
+  repeated (or left out for a custom project).
+- `ProjectInfo.base_models` (in the order they were added) replaces `base_model`. `"<project>/<base id>"` calls one of
+  them; `"<project>"` answers with the first (a managed project: until its first version). `"<project>/base"` and a
+  base the project doesn't have raise `NotFoundError` (404 `unknown_model`).
+- `project.models.list()` starts with one row per base model, named by its id; `ModelInfo.kind` is `"base"` or
+  `"saved"`. `ModelMetadata.kind` (`client.models.list()`) is the API's `kind`, without guessing from the name.
+- `runs.create(base_model=None)` trains on the project's first base model; a base the project doesn't have yet is
+  added to it. `project.evaluate("decider-2b", ...)` evaluates one of the project's base models.
+- A saved model can't be named after a base model (`UnprocessableEntityError`, 422 `invalid_input`); `"base"` is
+  still refused locally.
+- The supervised recipe adds `base_model` to the project and scores the baseline as `"<project>/<base_model>"`.
+- `client.base_models()` no longer falls back to `/v1/models` for an API without `/v1/base_models`.
+
 ## [0.4.2] - 2026-10-08
 
 - Images in decisions: `endor.Image.from_path(path)`, `Image.from_bytes(data, media_type=None)` and

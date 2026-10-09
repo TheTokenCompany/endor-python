@@ -268,8 +268,11 @@ class TestLifecycle:
             assert run.save_checkpoint(name).result() == f"{project.name}/{name}"
 
     def test_api_refuses_reserved_names_too(self, project: endor.Project, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(endor.runs, "check_model_name", lambda name: None)  # the server's own check
         with project.runs.create("jev-9b") as run:
+            with pytest.raises(UnprocessableEntityError) as e:
+                run.save_checkpoint("decider-2b")  # a base model id: "<project>/decider-2b" calls that base
+            assert e.value.code == "invalid_input" and e.value.param == "name"
+            monkeypatch.setattr(endor.runs, "check_model_name", lambda name: None)  # the server's own check
             with pytest.raises(UnprocessableEntityError) as e:
                 run.save_checkpoint("base")
             assert e.value.code == "invalid_input" and e.value.param == "name"

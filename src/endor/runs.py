@@ -170,8 +170,9 @@ class Run:
         ``client.system_one(model=...)`` accepts at once.
 
         ``name``: lowercase letters, digits, ``.``, ``_`` and ``-``, up to 63 characters, starting with a letter or
-        digit, and not ``base`` (the project's base model).
-        Raises ``ValueError`` otherwise, before anything is sent.
+        digit, and not ``base`` (reserved). Raises ``ValueError`` otherwise, before anything is sent. A base model id
+        (``"decider-2b"``) is refused by the API (``UnprocessableEntityError``): ``"<project>/<base id>"`` calls that
+        base model.
 
         ``include_optimizer`` also stores the optimizer state, so
         ``runs.create(from_model=..., include_optimizer=True)``
@@ -412,8 +413,8 @@ class Run:
 
 def check_model_name(name: str) -> None:
     """The API's rule for model names saved from the SDK; raises ValueError naming the problem."""
-    if name == C.BASE_MODEL_NAME:
-        raise ValueError('"base" is reserved for the project\'s base model; pick another model name')
+    if name == C.RESERVED_MODEL_NAME:
+        raise ValueError('"base" is a reserved name; pick another model name')
     if not isinstance(name, str) or not _MODEL_NAME.fullmatch(name):
         raise ValueError(
             f"bad model name {name!r}: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit, "

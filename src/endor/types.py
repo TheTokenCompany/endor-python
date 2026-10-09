@@ -273,7 +273,7 @@ class SystemOneResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     model: str
-    """The model that answered: a base id, or ``"<project>/<name>"``."""
+    """The model that answered: ``"<project>/<base id>"`` (a base model) or ``"<project>/<name>"`` (a saved model)."""
     answers: dict[str, Answer] = Field(default_factory=dict)
     """Every answer, by question name."""
     usage: Usage = Field(default_factory=Usage)
@@ -299,7 +299,8 @@ def answer_probabilities(answer: Answer) -> dict[str, float]:
 
 
 class BaseModelInfo(BaseModel):
-    """A base decision model you can fine-tune and decide with, through a project (``"<project>/base"``)."""
+    """A base decision model you can fine-tune and decide with, through a project: add it with
+    ``project.add_base_model(id)`` and call it as ``"<project>/<id>"``."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -348,12 +349,9 @@ class ModelMetadata(BaseModel):
 
     @property
     def kind(self) -> str:
-        """``"project"`` (``<project>``), ``"base"`` (``<project>/base``) or ``"model"`` (``<project>/<name>``)."""
-        if self.endor.get("kind"):
-            return str(self.endor["kind"])
-        if "/" not in self.name:
-            return "project"
-        return "base" if self.name.endswith("/base") else "model"
+        """``"project"`` (``<project>``), ``"base"`` (``<project>/<base id>``, one of the project's base models) or
+        ``"model"`` (``<project>/<name>``, a saved model), as the API says."""
+        return str(self.endor.get("kind", ""))
 
 
 class ListModelsResponse(BaseModel):
@@ -525,8 +523,10 @@ class ProjectInfo(_View):
     kind: str = "custom"
     """``custom`` (you train models with the SDK) or ``managed`` (Endor trains new versions from the project's
     decisions). Set at creation; it never changes."""
-    base_model: str | None = None
-    """The project's base model (``"<project>/base"``). Set at creation; it never changes."""
+    base_models: list[str] = Field(default_factory=list)
+    """The project's base models, in the order they were added; each answers as ``"<project>/<base id>"``, and the
+    first is what ``"<project>"`` answers with (a managed project: until its first version). Change them with
+    ``project.add_base_model`` and ``project.remove_base_model``."""
     paused: bool | None = None
     """Managed projects: learning is paused (the project keeps serving its newest version). None for custom."""
     n_datasets: int = 0
@@ -591,8 +591,10 @@ class ModelInfo(_View):
     """``"<project>/<name>"``: pass it as ``model`` to ``system_one``."""
     project: str
     name: str
-    """``base`` for the project's base model (listed first). A managed project's versions are named
+    """A base model's id (``"decider-2b"``), or a saved model's name. A managed project's versions are named
     ``YYYY-MM-DD-N``."""
+    kind: str = "saved"
+    """``"base"`` (one of the project's base models, listed first) or ``"saved"`` (a model saved by a run)."""
     training_run_id: str | None = None
     base_model: str
     contract: str | None = None
@@ -605,7 +607,7 @@ class ModelInfo(_View):
     user_metadata: dict[str, Any] = Field(default_factory=dict)
     loss: float | None = None
     """The training loss when the model was saved: its run's ``train/loss`` at ``step``, or the last one before it.
-    None for the base model, or when unknown."""
+    None for a base model, or when unknown."""
     created_at: datetime
 
 

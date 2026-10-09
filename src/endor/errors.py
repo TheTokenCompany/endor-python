@@ -144,8 +144,8 @@ class LimitReachedError(ConflictError):
 
 
 class NoBaseModelError(ConflictError):
-    """409 ``no_base_model``: the project has no base model (only projects made before base models were required).
-    A project's base model can't change: create a new project with ``projects.create(..., base_model=...)``."""
+    """409 ``no_base_model``: ``"<project>"`` was called, but the project has no base model to answer with. Add one
+    with ``project.add_base_model("decider-2b")`` (a custom project's ``runs.create(base_model=...)`` adds one too)."""
 
 
 class WrongProjectKindError(ConflictError):
@@ -164,8 +164,8 @@ class UnprocessableEntityError(APIError):
 
 class ModelRequiresProjectError(UnprocessableEntityError):
     """422 ``model_requires_project``: ``model`` is a bare base model id. Every decision names a project:
-    ``"<project>/<name>"`` (a saved model), ``"<project>/base"`` (its base model) or ``"<project>"`` (a managed
-    project's newest version, else its base model)."""
+    ``"<project>/<name>"`` (a saved model), ``"<project>/<base id>"`` (one of its base models; add one with
+    ``project.add_base_model``) or ``"<project>"`` (a managed project's newest version, else its first base model)."""
 
 
 class RateLimitError(APIError):

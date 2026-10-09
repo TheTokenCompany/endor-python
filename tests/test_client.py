@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 import httpx
 import pytest
@@ -21,7 +20,7 @@ from endor import (
 )
 
 from .conftest import ANGER, API_KEY, BASE_URL, DECIDE_BASE, DEPT, URGENT, unique
-from .fake_api import FakeEndor, HTTPError
+from .fake_api import FakeEndor
 
 
 class TestConstructor:
@@ -43,9 +42,9 @@ class TestConstructor:
     def test_explicit_beats_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ENDOR_API_KEY", "edk_env")
         monkeypatch.setenv("ENDOR_DEFAULT_MODEL", "tickets")
-        c = EndorClient(api_key="edk_arg", base_url=BASE_URL, model="tickets/base")
+        c = EndorClient(api_key="edk_arg", base_url=BASE_URL, model="tickets/decider-2b")
         assert c.api_key == "edk_arg" and c.base_url == BASE_URL
-        assert c.default_model == "tickets/base"
+        assert c.default_model == "tickets/decider-2b"
 
     def test_no_default_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ENDOR_DEFAULT_MODEL", raising=False)
@@ -79,7 +78,7 @@ class TestConstructor:
         async with EndorClient(
             api_key=API_KEY, base_url=BASE_URL, async_transport=httpx.MockTransport(fake.handler)
         ) as c:
-            name = fake.create_project({"name": unique("acm"), "base_model": DECIDE_BASE})["name"]
+            name = fake.create_project({"name": unique("acm"), "base_models": [DECIDE_BASE]})["name"]
             res = await c.system_one_async("x", {"u": URGENT}, model=name)
             assert res.nouls["u"].noul == 0.5
 
@@ -97,7 +96,7 @@ class TestDecisions:
             {"body": "charged twice"}, {"dept": DEPT, "urgent": URGENT, "anger": ANGER}, model=decider
         )
         assert isinstance(res, SystemOneResponse)
-        assert res.model == f"{decider}/base"  # the model that answered: a custom project answers with its base
+        assert res.model == f"{decider}/{DECIDE_BASE}"  # the model that answered: a custom project's first base
         assert isinstance(res.choices["dept"], ChoiceAnswer) and res.choices["dept"].choice in ("billing", "tech")
         assert isinstance(res.nouls["urgent"], NoulAnswer) and res.nouls["urgent"].noul == 0.5
         s = res.scores["anger"]
@@ -163,15 +162,25 @@ class TestDecisions:
     def test_project_base_and_saved_models(self, client: EndorClient, project: endor.Project) -> None:
         with project.runs.create() as run:  # on the project's base model
             run.save_checkpoint("v1").result()
-        assert client.system_one("x", {"d": DEPT}, model=project.name).model == f"{project.name}/base"  # custom
-        assert client.system_one("x", {"d": DEPT}, model=f"{project.name}/base").model == f"{project.name}/base"
+        project.add_base_model("decider-2b")
+        assert client.system_one("x", {"d": DEPT}, model=project.name).model == f"{project.name}/jev-9b"  # the first
+        for base in ("jev-9b", "decider-2b"):
+            assert client.system_one("x", {"d": DEPT}, model=f"{project.name}/{base}").model == f"{project.name}/{base}"
         assert client.system_one("x", {"d": DEPT}, model=f"{project.name}/v1").model == f"{project.name}/v1"
+
+    def test_base_naming(self, client: EndorClient, project: endor.Project) -> None:
+        with pytest.raises(NotFoundError) as e:
+            client.system_one("x", {"d": DEPT}, model=f"{project.name}/base")  # bases are called by their id
+        assert e.value.code == "unknown_model" and f"{project.name}/jev-9b" in str(e.value)
+        with pytest.raises(NotFoundError) as e:
+            client.system_one("x", {"d": DEPT}, model=f"{project.name}/decider-2b")  # not added to the project
+        assert e.value.code == "unknown_model" and "add it" in str(e.value)
 
     def test_no_model_fails_before_the_call(self, client: EndorClient, fake: FakeEndor) -> None:
         assert client.default_model is None
         with pytest.raises(EndorError, match="no model") as e:
             client.system_one("x", {"d": DEPT})
-        assert "<project>/base" in str(e.value) and "ENDOR_DEFAULT_MODEL" in str(e.value)
+        assert "<project>/<base id>" in str(e.value) and "ENDOR_DEFAULT_MODEL" in str(e.value)
         assert not fake.requests
 
     async def test_no_model_fails_before_the_call_async(self, client: EndorClient, fake: FakeEndor) -> None:
@@ -185,13 +194,11 @@ class TestDecisions:
         assert isinstance(e.value, UnprocessableEntityError)
         assert e.value.status == 422 and e.value.code == "model_requires_project" and e.value.param == "model"
 
-    def test_project_without_base_model(self, client: EndorClient, fake: FakeEndor, project: endor.Project) -> None:
-        fake.projects[project.name]["base_model"] = None  # only projects made before base models were required
+    def test_project_without_base_model(self, client: EndorClient) -> None:
+        name = client.projects.create(unique("nobase")).name  # a custom project may start without a base model
         with pytest.raises(NoBaseModelError) as e:
-            client.system_one("x", {"d": DEPT}, model=project.name)
+            client.system_one("x", {"d": DEPT}, model=name)
         assert isinstance(e.value, endor.ConflictError) and e.value.status == 409 and e.value.code == "no_base_model"
-        with pytest.raises(NoBaseModelError):
-            client.system_one("x", {"d": DEPT}, model=f"{project.name}/base")
 
     def test_unknown_model_is_404(self, client: EndorClient) -> None:
         with pytest.raises(NotFoundError) as e:
@@ -229,11 +236,15 @@ class TestCatalogAndAccount:
         by_name = {m.name: m for m in listed.models}
         assert "jev-9b" not in by_name  # a bare base model id is not a name a decision can send
         assert (
-            by_name[project.name].kind == "project" and by_name[project.name].endor["model"] == f"{project.name}/base"
+            by_name[project.name].kind == "project" and by_name[project.name].endor["model"] == f"{project.name}/jev-9b"
         )
-        assert by_name[f"{project.name}/base"].kind == "base"
+        assert by_name[f"{project.name}/jev-9b"].kind == "base" and f"{project.name}/base" not in by_name
         saved = by_name[f"{project.name}/v1"]
         assert saved.kind == "model" and saved.endor["base_model"] == "jev-9b" and saved.release_date
+        project.add_base_model("decider-2b")
+        names = [m.name for m in client.models.list().models if m.endor["project"] == project.name]
+        assert names == [project.name, f"{project.name}/jev-9b", f"{project.name}/decider-2b", f"{project.name}/v1"]
+        assert endor.ModelMetadata(name="x/y", endor={"kind": "base"}).kind == "base"  # the API's kind, not a guess
 
     def test_base_models(self, client: EndorClient, project: endor.Project) -> None:
         with project.runs.create("jev-9b") as run:
@@ -248,26 +259,6 @@ class TestCatalogAndAccount:
         assert jevk.price_per_gpu_hour == 3.0 and jevk.price_per_mtok_decide == 0.5
         assert jevk.price_per_mtok_decide_continuous_learning == 0.75
         assert jevk.hf_repo == "org/jev-9b" and jevk.hf_revision and jevk.contract and jevk.params
-
-    def test_base_models_from_an_older_api(self, client: EndorClient, fake: FakeEndor) -> None:
-        """An API without /v1/base_models listed the catalog in /v1/models."""
-        old = {
-            "name": "jev-9b",
-            "description": "",
-            "release_date": "2026-10-01",
-            "endor": {"kind": "base", "id": "jev-9b", "max_options": 16, "price_per_mtok_decide": 0.1},
-        }
-        real = fake.route
-
-        def route(method: str, path: str, body: Any, params: dict[str, str]) -> tuple[int, Any]:
-            if path == "/v1/base_models":
-                raise HTTPError(404, "not_found", "no route")
-            if path == "/v1/models":
-                return 200, {"models": [old]}
-            return real(method, path, body, params)
-
-        fake.route = route  # type: ignore[method-assign]
-        assert [(b.id, b.max_options) for b in client.base_models()] == [("jev-9b", 16)]
 
     def test_whoami(self, client: EndorClient) -> None:
         me = client.whoami()

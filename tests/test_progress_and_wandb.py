@@ -15,7 +15,7 @@ from .fake_api import FakeEndor
 
 
 def test_total_steps_progress_and_eta(client: EndorClient, fake: FakeEndor) -> None:
-    project = client.projects.create(unique("prog"), base_model="jev-9b")
+    project = client.projects.create(unique("prog"), base_models=["jev-9b"])
     with project.runs.create(total_steps=10) as run:
         assert requests_to(fake, "/runs", "POST")[-1].body["total_steps"] == 10
         assert run.info_.total_steps == 10 and run.info_.progress == 0.0 and run.info_.ready_at is not None
@@ -55,7 +55,7 @@ def test_recipe_sets_total_steps_and_prints_progress(client: EndorClient, fake: 
 
 
 def test_wandb_flags(client: EndorClient, fake: FakeEndor) -> None:
-    project = client.projects.create(unique("wb"), base_model="jev-9b")
+    project = client.projects.create(unique("wb"), base_models=["jev-9b"])
     assert project.info_.wandb is not None and project.info_.wandb.enabled is False
     with pytest.raises(ConflictError):  # the org hasn't connected W&B
         project.update(wandb={"enabled": True})
