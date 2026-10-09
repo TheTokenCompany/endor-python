@@ -328,9 +328,9 @@ class Runs:
         interrupted (Ctrl-C, an error) the run is closed so its GPU is released. With ``wait=False`` it returns at
         once and ``run.ready`` is the future.
 
-        Close every run you create (``with project.runs.create(...) as run:``): a run holds its GPU until closed or
-        idle for 15 minutes, and an org can have at most 4 runs that aren't closed, idle ones included (a fifth
-        raises ``LimitReachedError``). ``base_model`` left out is the project's first base model
+        Close every run you create (``with project.runs.create(...) as run:``): a run is parked after 2 minutes
+        without an op and closed after an hour, and an org can have at most 5 runs that aren't closed, parked ones
+        included (a sixth raises ``LimitReachedError``). ``base_model`` left out is the project's first base model
         (``UnprocessableEntityError`` when it has none), and a base the project doesn't have yet is added to it. With
         ``from_model`` the run trains on that model's base; another ``base_model`` is a 422. Custom projects only: a
         managed project raises ``WrongProjectKindError`` (Endor trains it).

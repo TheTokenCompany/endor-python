@@ -53,8 +53,9 @@ class Run:
     """A training run. Get one from ``project.runs.create(...)``, ``project.runs.get(id)`` or
     ``project.runs.list()``.
 
-    A run holds a GPU, billed per GPU-hour, until it is closed or idle for 15 minutes, and an org can have at most
-    4 runs that aren't closed (idle ones included). Use it as a context manager so it is closed even on errors::
+    A run is billed for the GPU time its ops use. After 2 minutes without an op it is parked (its state saved, its
+    GPU freed; the next op resumes it in seconds), and after an hour without one it is closed. An org can have at
+    most 5 runs that aren't closed (parked ones included). Use it as a context manager so it is closed even on errors::
 
         with project.runs.create(base_model="jev-9b") as run:
             ...

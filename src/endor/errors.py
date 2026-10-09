@@ -138,7 +138,7 @@ class ConflictError(APIError):
 
 
 class LimitReachedError(ConflictError):
-    """409 ``limit_reached``: a count limit of the org or project is reached, for example 7 projects, 4 open runs,
+    """409 ``limit_reached``: a count limit of the org or project is reached, for example 7 projects, 5 open runs,
     or 50 models in a project. The message names the limit and its value
     (``client.whoami().limits`` has them all). Free one first: waiting doesn't help, so it is never retried."""
 
