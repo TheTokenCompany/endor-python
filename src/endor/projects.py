@@ -1,10 +1,11 @@
-"""Projects: the unit of work. A project, keyed by its name, holds datasets, runs, models and evaluations.
+"""Projects: the unit of work. A project, keyed by its name, holds base models, datasets, runs, models and evaluations.
 
-project = client.projects.get_or_create("tickets", base_model="decider-2b")   # kind="custom"
+project = client.projects.get_or_create("tickets", base_models=["decider-2b"])   # kind="custom"
+project.add_base_model("gev-26b")          # "tickets/gev-26b" answers at once
 project.datasets.upload("train", rows)
-run = project.runs.create(base_model="decider-2b")
-project.models.list()                      # "tickets/base", then every saved model: "tickets/<name>"
-project.evaluate("base", "heldout").result()   # names resolve in the project: "base" is "tickets/base"
+run = project.runs.create()                # on the project's first base model, decider-2b
+project.models.list()                      # "tickets/decider-2b", "tickets/gev-26b", then every saved model
+project.evaluate("decider-2b", "heldout").result()   # names resolve in the project: "tickets/decider-2b"
 """
 
 from __future__ import annotations
@@ -13,14 +14,14 @@ import builtins
 import os
 import subprocess
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from typing import Any, Literal
 
 from . import _constants as C
 from . import data as D
 from ._http import Transport
 from ._log import logger
-from .errors import NotFoundError
+from .errors import ConflictError, NotFoundError
 from .futures import APIFuture
 from .runs import Run
 from .types import (
@@ -54,20 +55,25 @@ class Projects:
         name: str,
         description: str | None = None,
         *,
-        base_model: str | None = None,
         kind: ProjectKind = "custom",
+        base_models: Sequence[str] | None = None,
+        **removed: Any,
     ) -> Project:
         """A new project. Names are lowercase, ``[a-z0-9._-]``, up to 63 characters, and permanent (they are part
         of every model id). Raises ``ConflictError`` if you already have one with that name, and
         ``LimitReachedError`` (a ``ConflictError``) when the org has as many projects as it may.
 
         ``kind`` is ``"custom"`` (you train models with the SDK) or ``"managed"`` (Endor trains new versions from the
-        project's decisions; its decisions cost 50% more). ``base_model`` (for example ``"decider-2b"``) is the
-        project's base model, and ``model="<name>"`` answers with it at once. A managed project needs it; a custom
-        project may leave it out, and its first ``runs.create(base_model=...)`` sets it. Neither can change later."""
-        if kind == "managed" and base_model is None:
-            raise ValueError("a managed project needs a base_model")
-        body: dict[str, Any] = {"name": name, "description": description, "kind": kind, "base_model": base_model}
+        project's decisions; its decisions cost 50% more). It never changes.
+
+        ``base_models``: base model ids from ``client.base_models()``, for example ``["decider-2b"]``. Each answers at
+        once as ``"<project>/<base id>"``, and ``"<project>"`` answers with the first. A managed project needs at
+        least one; a custom project may start with none (a run on a base model adds it). Add and remove them later
+        with ``project.add_base_model`` and ``project.remove_base_model``."""
+        bases = _base_list(base_models, removed, "projects.create")
+        if kind == "managed" and not bases:
+            raise ValueError('a managed project needs at least one base model: base_models=["decider-2b"]')
+        body: dict[str, Any] = {"name": name, "description": description, "kind": kind, "base_models": bases}
         r = self._t.request("POST", "/v1/projects", json=body, method_name="projects.create", idempotent=True)
         return Project(self._t, r, self._capture)
 
@@ -82,23 +88,32 @@ class Projects:
         name: str,
         description: str | None = None,
         *,
-        base_model: str | None = None,
         kind: ProjectKind = "custom",
+        base_models: Sequence[str] | None = None,
+        **removed: Any,
     ) -> Project:
         """The project called ``name``, created if missing (with these settings). Safe to call at the top of every
-        script; an existing project's description is left as it is. Raises ``ValueError`` if the existing project
-        has another ``kind``, or another ``base_model`` once both are set: neither can change, so use another project
-        name."""
+        script. An existing project gets the ``base_models`` it doesn't have yet, and keeps its other base models and
+        its description. Raises ``ValueError`` if the existing project has another ``kind``: it can't change, so use
+        another project name."""
+        bases = _base_list(base_models, removed, "projects.get_or_create")
         try:
             p = self.get(name)
         except NotFoundError:
-            return self.create(name, description, base_model=base_model, kind=kind)
-        other_base = base_model is not None and p.info_.base_model is not None and p.info_.base_model != base_model
-        if p.info_.kind != kind or other_base:
+            return self.create(name, description, kind=kind, base_models=bases)
+        if p.info_.kind != kind:
             raise ValueError(
-                f"project {name!r} exists as a {p.info_.kind} project on {p.info_.base_model}, not a {kind} project "
-                f"on {base_model}; a project's kind and base model can't change, so pick another name"
+                f"project {name!r} exists as a {p.info_.kind} project, not a {kind} project; a project's kind can't "
+                "change, so pick another name"
             )
+        for b in bases:
+            if b not in p.info_.base_models:
+                try:
+                    p.add_base_model(b)
+                except ConflictError as e:  # added meanwhile, by another process
+                    if e.code != "conflict":
+                        raise
+                    p.info()
         return p
 
     def list(self, limit: int | None = None, offset: int = 0) -> list[Project]:
@@ -129,6 +144,35 @@ class Project:
         )
         return self.info_
 
+    def add_base_model(self, base_model: str) -> ProjectInfo:
+        """Add a base model (an id from ``client.base_models()``) to the project, after the ones it has. It answers at
+        once as ``"<project>/<base id>"``, and runs can train on it. Raises ``ConflictError`` if the project has it,
+        and ``UnprocessableEntityError`` if the id is not a base model."""
+        self.info_ = ProjectInfo.model_validate(
+            self._t.request(
+                "POST",
+                f"/v1/projects/{self.name}/base_models",
+                json={"base_model": base_model},
+                method_name="project.add_base_model",
+                idempotent=True,
+            )
+        )
+        return self.info_
+
+    def remove_base_model(self, base_model: str) -> ProjectInfo:
+        """Take a base model off the project: ``"<project>/<base id>"`` stops answering, and ``"<project>"`` answers
+        with the next base when this was the first. Saved models trained on it and open runs on it keep working, and
+        a new run on it adds it again. Raises ``NotFoundError`` if the project doesn't have it, and ``ConflictError``
+        for a managed project's last base model."""
+        self.info_ = ProjectInfo.model_validate(
+            self._t.request(
+                "DELETE",
+                f"/v1/projects/{self.name}/base_models/{base_model}",
+                method_name="project.remove_base_model",
+            )
+        )
+        return self.info_
+
     def update(
         self,
         *,
@@ -136,21 +180,22 @@ class Project:
         paused: bool | None = None,
         wandb: WandbSettings | dict[str, Any] | None = None,
     ) -> ProjectInfo:
-        """Change the project's settings; arguments left as None are unchanged. The kind and base model never change.
+        """Change the project's settings; arguments left as None are unchanged. The kind never changes; base models
+        change with ``add_base_model`` and ``remove_base_model``.
 
         - ``description``: free text.
         - ``paused``: managed projects only (``WrongProjectKindError`` for a custom one). A paused project stops
           learning and keeps serving its newest version; its decisions keep the managed price.
-        - ``wandb``: ``{"enabled": True, "entity": "acme", "project": "tickets"}`` (keys left out stay as they are):
-          new runs then log to Weights & Biases, from Endor's servers. Needs the organization's W&B connection
-          (dashboard: Settings > Integrations); ``ConflictError`` without it."""
+        - ``wandb``: ``{"enabled": True}``: new runs then log to Weights & Biases, from Endor's servers, in the W&B
+          project ``endor-<project name>``. Needs the organization's W&B connection (dashboard: Settings >
+          Integrations); ``ConflictError`` without it."""
         body: dict[str, Any] = {}
         if description is not None:
             body["description"] = description
         if paused is not None:
             body["paused"] = paused
         if wandb is not None:
-            body["wandb"] = wandb.model_dump() if isinstance(wandb, WandbSettings) else dict(wandb)
+            body["wandb"] = {"enabled": wandb.enabled} if isinstance(wandb, WandbSettings) else dict(wandb)
         if not body:
             raise ValueError("nothing to update: pass description, paused or wandb")
         self.info_ = ProjectInfo.model_validate(
@@ -159,11 +204,11 @@ class Project:
         return self.info_
 
     def evaluate(self, model: str, dataset: str, run_id: str | None = None) -> APIFuture[Evaluation]:
-        """Score a model on one of this project's datasets, server-side. ``model`` is ``"base"`` (this project's
-        base model), a model name of this project, this project's name (a managed project's newest version, else
-        the base) or a full model id (``"<project>"``, ``"<project>/base"``, ``"<project>/<name>"``). A bare base
-        model id is refused. The evaluation records the full id of the model that answered: ``"base"`` becomes
-        ``"<project>/base"``.
+        """Score a model on one of this project's datasets, server-side. ``model`` is a base model id of this
+        project (``"decider-2b"``), a saved model's name (``"v1"``), this project's name (a managed project's newest
+        version, else its first base model) or a full model id (``"<project>/<base id>"``, ``"<project>/<name>"``).
+        The evaluation records the full id of the model that answered: ``"decider-2b"`` becomes
+        ``"<project>/decider-2b"``.
 
         The result's ``results`` has ``n``, then ``overall``, ``by_type`` and ``by_question``, each with accuracy,
         NLL, Brier, ECE, mean confidence and ``selective`` (``{"0.5": {"accuracy", "coverage"}, ...}`` for the
@@ -279,23 +324,24 @@ class Runs:
         wandb: bool | None = None,
         wait: bool = True,
     ) -> Run:
-        """Start a run: a fresh adapter on the project's base model, or one warm-started from ``from_model`` (a model
-        of this project, as ``"name"`` or ``"<project>/name"``; with ``include_optimizer=True`` training resumes
-        exactly).
+        """Start a run: a fresh adapter on ``base_model``, or one warm-started from ``from_model`` (a model of this
+        project, as ``"name"`` or ``"<project>/name"``; with ``include_optimizer=True`` training resumes exactly).
+
+        ``base_model`` left out: the project's first base model (``UnprocessableEntityError`` if it has none). A base
+        model the project doesn't have yet is added to it. With ``from_model`` the run trains that model's base model,
+        and another ``base_model`` is a 422.
 
         LoRA settings left as None default to rank 16, alpha 32, attention and MLP, no readout for a fresh run. With
         ``from_model`` they are inherited from the saved model, and only the ones you pass are sent (a value that
         conflicts with the model is a 422).
 
-        Provisioning a trainer usually takes under a minute, and the GPU is billed from the moment it is requested. With
-        ``wait=True`` this blocks until the run is ready and logs progress on the ``endor`` logger; if the wait is
-        interrupted (Ctrl-C, an error) the run is closed so its GPU is released. With ``wait=False`` it returns at
-        once and ``run.ready`` is the future.
+        Provisioning a trainer usually takes under a minute. With ``wait=True`` this blocks until the run is ready and
+        logs progress on the ``endor`` logger; if the wait is interrupted (Ctrl-C, an error) the run is closed. With
+        ``wait=False`` it returns at once and ``run.ready`` is the future.
 
-        Close every run you create (``with project.runs.create(...) as run:``): a run holds its GPU until closed or
-        idle for 15 minutes, and an org can have at most 4 runs that aren't closed, idle ones included (a fifth
-        raises ``LimitReachedError``). ``base_model`` may be left out: a run always trains on the project's base model,
-        and another base is a 422 (``UnprocessableEntityError``). Custom projects only: a managed project raises
+        Close every run you create (``with project.runs.create(...) as run:``): an org can have at most 5 runs that
+        aren't closed, idle ones included (a sixth raises ``LimitReachedError``). A run without calls is parked
+        (``idle``) after 2 minutes and closed after an hour. Custom projects only: a managed project raises
         ``WrongProjectKindError`` (Endor trains it).
         ``config`` is free-form and shown on the dashboard; when the client was created with ``capture=True`` the
         SDK adds the LoRA settings and the current git commit (never file contents).
@@ -370,8 +416,8 @@ class Runs:
 
 
 class Models:
-    """``project.models``: the project's base model (``"base"``) and the models saved by its runs. ``model``
-    arguments take a name or ``"<project>/<name>"``."""
+    """``project.models``: the project's base models (by id, e.g. ``"decider-2b"``) and the models saved by its runs.
+    ``model`` arguments take a name (or a base id) or ``"<project>/<name>"``."""
 
     def __init__(self, transport: Transport, project: str) -> None:
         self._t, self._project, self._base = transport, project, f"/v1/projects/{project}/models"
@@ -381,8 +427,9 @@ class Models:
         return model.split("/", 1)[1] if "/" in model else model
 
     def list(self, run_id: str | None = None) -> list[ModelInfo]:
-        """The project's models: its base model first (``name == "base"``), then every saved, unexpired model, newest
-        first; optionally only those saved by ``run_id``."""
+        """The project's models: its base models first, in the order they were added (``kind == "base"``, ``name``
+        the base id), then every saved, unexpired model, newest first (``kind == "saved"``); with ``run_id``, only
+        the models that run saved."""
         items = _list_all(self._t, self._base, {"run_id": run_id}, "project.models.list")
         return [ModelInfo.model_validate(m) for m in items]
 
@@ -422,11 +469,25 @@ class Models:
         return fetch_all(r["files"], path, transport=self._t._transport, timeout=max(self._t.timeout, 60.0))
 
     def delete(self, model: str) -> None:
-        """Delete the model's files and record. Permanent. The base model can't be deleted."""
+        """Delete a saved model's files and record. Permanent. A base model raises ``UnprocessableEntityError``:
+        remove it with ``project.remove_base_model``."""
         self._t.request("DELETE", f"{self._base}/{self._name(model)}", method_name="project.models.delete")
 
 
 # ---------------------------------------------------------------- helpers
+
+
+def _base_list(base_models: Sequence[str] | None, removed: dict[str, Any], method: str) -> list[str]:
+    """``base_models`` as a list; a clear TypeError for ``base_model=`` (replaced by ``base_models``) or a string."""
+    if "base_model" in removed:
+        b = removed.pop("base_model")
+        hint = f"base_models=[{b!r}]" if isinstance(b, str) else "base_models=[...]"
+        raise TypeError(f"{method}: base_model was replaced by base_models (a project can have several): pass {hint}")
+    if removed:
+        raise TypeError(f"{method}() got an unexpected keyword argument {next(iter(removed))!r}")
+    if isinstance(base_models, str):
+        raise TypeError(f"{method}: base_models is a list of base model ids: pass base_models=[{base_models!r}]")
+    return list(base_models or [])
 
 
 def _list_all(

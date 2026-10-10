@@ -4,11 +4,11 @@
     client.system_one(state, questions, model="tickets/v1")    # a decision with one saved model
     client.models.list()                                       # every name you can pass as model
     client.base_models()                                       # the base models, with limits and prices
-    project = client.projects.get_or_create("tickets", base_model="decider-2b")   # datasets, runs, models
+    project = client.projects.get_or_create("tickets", base_models=["decider-2b"])   # datasets, runs, models
 
-``model`` always names a project: ``"<project>/<name>"`` (one saved model), ``"<project>/base"`` (its base model) or
-``"<project>"`` (a managed project's newest version, else its base model). A bare base model id is refused
-(``ModelRequiresProjectError``).
+``model`` always names a project: ``"<project>/<name>"`` (one saved model), ``"<project>/<base id>"`` (one of its base
+models) or ``"<project>"`` (a managed project's newest version, else its first base model). A bare base model id is
+refused (``ModelRequiresProjectError``).
 
 Environment: ``ENDOR_API_KEY``, ``ENDOR_BASE_URL``, ``ENDOR_DEFAULT_MODEL``, ``ENDOR_LOG_LEVEL``.
 """
@@ -179,8 +179,9 @@ class EndorClient:
             state: Text, a JSON object or an array: the data the decisions are about. On a base that reads images,
                 it may hold ``endor.Image`` objects (as the state, a list item or an object value).
             questions: 1 to 64 named questions (``Noul``, ``Choice``, ``Score`` or dicts in the same shape).
-            model: ``"<project>/<name>"`` (a saved model), ``"<project>/base"`` (its base model) or ``"<project>"``
-                (a managed project's newest version, else its base model). Defaults to the client's model.
+            model: ``"<project>/<name>"`` (a saved model), ``"<project>/<base id>"`` (one of its base models) or
+                ``"<project>"`` (a managed project's newest version, else its first base model). Defaults to the
+                client's model.
             retry, timeout: Overrides for this call.
             extra_headers: Extra request headers.
             extra_body: Extra top-level request fields, merged last.
@@ -251,7 +252,7 @@ class EndorClient:
         model = model or self.default_model
         if not model and not (extra_body and extra_body.get("model")):
             raise EndorError(
-                'no model: pass model="<project>/<name>", "<project>/base" or "<project>", '
+                'no model: pass model="<project>/<name>", "<project>/<base id>" or "<project>", '
                 f"or set a default with EndorClient(model=...) or {C.DEFAULT_MODEL_ENV}"
             )
         body: dict[str, Any] = {
@@ -267,8 +268,8 @@ class EndorClient:
         return body
 
     def base_models(self) -> list[BaseModelInfo]:
-        """The base models you can fine-tune and decide with (through a project, as ``"<project>/base"``): option
-        limits, ``hf_repo``, ``contract`` and prices (``GET /v1/base_models``)."""
+        """The base models you can fine-tune and decide with (through a project that has it, as
+        ``"<project>/<id>"``): option limits, ``hf_repo``, ``contract`` and prices (``GET /v1/base_models``)."""
         try:
             r = self._t.request("GET", "/v1/base_models", method_name="client.base_models")
             return [_parse(BaseModelInfo, b, "GET /v1/base_models") for b in r.get("base_models", [])]
@@ -342,10 +343,10 @@ class Models:
         timeout: float | None = None,
         extra_headers: Mapping[str, str] | None = None,
     ) -> ListModelsResponse:
-        """Every name you can pass as ``model``: ``"<project>"`` (a managed project's newest version, else the base)
-        and ``"<project>/base"`` for each project with a base model, then ``"<project>/<name>"`` for each saved,
-        unexpired model. ``.kind`` is ``project``, ``base`` or ``model``. The base model catalog is
-        ``client.base_models()``."""
+        """Every name you can pass as ``model``: for each project with a base model, ``"<project>"`` (a managed
+        project's newest version, else its first base model) and ``"<project>/<base id>"`` for each of its base
+        models; then ``"<project>/<name>"`` for each saved, unexpired model. ``.kind`` is ``project``, ``base`` or
+        ``model``. The base model catalog is ``client.base_models()``."""
         raw = self._t.request(
             "GET",
             "/v1/models",

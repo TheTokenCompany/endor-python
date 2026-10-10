@@ -12,9 +12,9 @@ from endor import Noul
 async def main() -> None:
     async with endor.EndorClient(model="tickets") as client:
         # Projects are synchronous; this one answers with its base model at once.
-        project = client.projects.get_or_create("tickets", base_model="decider-2b")
+        project = client.projects.get_or_create("tickets", base_models=["decider-2b"])
 
-        # Many decisions at once, through the project (a custom project answers with its base model).
+        # Many decisions at once, through the project (a custom project answers with its first base model).
         states = [f"ticket {i}: my invoice is wrong" for i in range(5)]
         results = await asyncio.gather(
             *(client.system_one_async(s, {"billing": Noul(instructions="Is this about billing?")}) for s in states)
@@ -27,7 +27,7 @@ async def main() -> None:
         datums = endor.data.rows_to_datums(
             [{"state": s, "questions": {"b": Noul(instructions="Billing?")}, "labels": {"b": True}} for s in states]
         )
-        async with project.runs.create(base_model="decider-2b") as run:  # closed even on errors
+        async with project.runs.create() as run:  # on the project's first base model; closed even on errors
             fb = await run.forward_backward_async(datums)
             opt = await run.optim_step_async(learning_rate=1e-4)
             out, step = await endor.gather_async(fb, opt)

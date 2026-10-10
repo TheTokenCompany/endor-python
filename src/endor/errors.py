@@ -138,14 +138,14 @@ class ConflictError(APIError):
 
 
 class LimitReachedError(ConflictError):
-    """409 ``limit_reached``: a count limit of the org or project is reached, for example 7 projects, 4 open runs,
+    """409 ``limit_reached``: a count limit of the org or project is reached, for example 7 projects, 5 open runs,
     or 50 models in a project. The message names the limit and its value
     (``client.whoami().limits`` has them all). Free one first: waiting doesn't help, so it is never retried."""
 
 
 class NoBaseModelError(ConflictError):
-    """409 ``no_base_model``: the project has no base model (only projects made before base models were required).
-    A project's base model can't change: create a new project with ``projects.create(..., base_model=...)``."""
+    """409 ``no_base_model``: ``"<project>"`` was called, but the project has no base model to answer with. Add one
+    with ``project.add_base_model("decider-2b")``."""
 
 
 class WrongProjectKindError(ConflictError):
@@ -164,8 +164,9 @@ class UnprocessableEntityError(APIError):
 
 class ModelRequiresProjectError(UnprocessableEntityError):
     """422 ``model_requires_project``: ``model`` is a bare base model id. Every decision names a project:
-    ``"<project>/<name>"`` (a saved model), ``"<project>/base"`` (its base model) or ``"<project>"`` (a managed
-    project's newest version, else its base model)."""
+    ``"<project>/<name>"`` (a saved model), ``"<project>/<base id>"`` (one of its base models) or ``"<project>"`` (a
+    managed project's newest version, else its first base model). Add a base to a project with
+    ``project.add_base_model``."""
 
 
 class RateLimitError(APIError):

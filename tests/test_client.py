@@ -79,7 +79,7 @@ class TestConstructor:
         async with EndorClient(
             api_key=API_KEY, base_url=BASE_URL, async_transport=httpx.MockTransport(fake.handler)
         ) as c:
-            name = fake.create_project({"name": unique("acm"), "base_model": DECIDE_BASE})["name"]
+            name = fake.create_project({"name": unique("acm"), "base_models": [DECIDE_BASE]})["name"]
             res = await c.system_one_async("x", {"u": URGENT}, model=name)
             assert res.nouls["u"].noul == 0.5
 
@@ -97,7 +97,7 @@ class TestDecisions:
             {"body": "charged twice"}, {"dept": DEPT, "urgent": URGENT, "anger": ANGER}, model=decider
         )
         assert isinstance(res, SystemOneResponse)
-        assert res.model == f"{decider}/base"  # the model that answered: a custom project answers with its base
+        assert res.model == f"{decider}/{DECIDE_BASE}"  # the model that answered: a custom project's first base
         assert isinstance(res.choices["dept"], ChoiceAnswer) and res.choices["dept"].choice in ("billing", "tech")
         assert isinstance(res.nouls["urgent"], NoulAnswer) and res.nouls["urgent"].noul == 0.5
         s = res.scores["anger"]
@@ -161,17 +161,25 @@ class TestDecisions:
         assert client.system_one("x", {"d": DEPT}, model=model).model == f"{project.name}/v1"
 
     def test_project_base_and_saved_models(self, client: EndorClient, project: endor.Project) -> None:
-        with project.runs.create() as run:  # on the project's base model
+        with project.runs.create() as run:  # on the project's first base model
             run.save_checkpoint("v1").result()
-        assert client.system_one("x", {"d": DEPT}, model=project.name).model == f"{project.name}/base"  # custom
-        assert client.system_one("x", {"d": DEPT}, model=f"{project.name}/base").model == f"{project.name}/base"
-        assert client.system_one("x", {"d": DEPT}, model=f"{project.name}/v1").model == f"{project.name}/v1"
+        project.add_base_model("decider-2b")
+        name = project.name
+        assert client.system_one("x", {"d": DEPT}, model=name).model == f"{name}/jev-9b"  # custom: its first base
+        assert client.system_one("x", {"d": DEPT}, model=f"{name}/jev-9b").model == f"{name}/jev-9b"
+        assert client.system_one("x", {"d": DEPT}, model=f"{name}/decider-2b").model == f"{name}/decider-2b"
+        assert client.system_one("x", {"d": DEPT}, model=f"{name}/v1").model == f"{name}/v1"
+        with pytest.raises(NotFoundError) as e:  # "<project>/base" is gone
+            client.system_one("x", {"d": DEPT}, model=f"{name}/base")
+        assert e.value.code == "unknown_model"
+        with pytest.raises(NotFoundError):  # a base the project doesn't have
+            client.system_one("x", {"d": DEPT}, model=f"{name}/gev-26b")
 
     def test_no_model_fails_before_the_call(self, client: EndorClient, fake: FakeEndor) -> None:
         assert client.default_model is None
         with pytest.raises(EndorError, match="no model") as e:
             client.system_one("x", {"d": DEPT})
-        assert "<project>/base" in str(e.value) and "ENDOR_DEFAULT_MODEL" in str(e.value)
+        assert "<project>/<base id>" in str(e.value) and "ENDOR_DEFAULT_MODEL" in str(e.value)
         assert not fake.requests
 
     async def test_no_model_fails_before_the_call_async(self, client: EndorClient, fake: FakeEndor) -> None:
@@ -186,12 +194,10 @@ class TestDecisions:
         assert e.value.status == 422 and e.value.code == "model_requires_project" and e.value.param == "model"
 
     def test_project_without_base_model(self, client: EndorClient, fake: FakeEndor, project: endor.Project) -> None:
-        fake.projects[project.name]["base_model"] = None  # only projects made before base models were required
+        project.remove_base_model("jev-9b")
         with pytest.raises(NoBaseModelError) as e:
             client.system_one("x", {"d": DEPT}, model=project.name)
         assert isinstance(e.value, endor.ConflictError) and e.value.status == 409 and e.value.code == "no_base_model"
-        with pytest.raises(NoBaseModelError):
-            client.system_one("x", {"d": DEPT}, model=f"{project.name}/base")
 
     def test_unknown_model_is_404(self, client: EndorClient) -> None:
         with pytest.raises(NotFoundError) as e:
@@ -229,9 +235,9 @@ class TestCatalogAndAccount:
         by_name = {m.name: m for m in listed.models}
         assert "jev-9b" not in by_name  # a bare base model id is not a name a decision can send
         assert (
-            by_name[project.name].kind == "project" and by_name[project.name].endor["model"] == f"{project.name}/base"
+            by_name[project.name].kind == "project" and by_name[project.name].endor["model"] == f"{project.name}/jev-9b"
         )
-        assert by_name[f"{project.name}/base"].kind == "base"
+        assert by_name[f"{project.name}/jev-9b"].kind == "base"
         saved = by_name[f"{project.name}/v1"]
         assert saved.kind == "model" and saved.endor["base_model"] == "jev-9b" and saved.release_date
 
@@ -274,6 +280,7 @@ class TestCatalogAndAccount:
         assert me.org_id and me.key_id and me.user_id is None  # an org API key has no user
         assert not hasattr(me, "key_prefix")
         assert me.limits["max_projects_per_org"] >= 1 and me.limits["max_active_runs"] >= 1
+        assert me.managed_projects is False
 
     def test_usage_rows(self, client: EndorClient) -> None:
         now = datetime.now(timezone.utc)
@@ -285,6 +292,7 @@ class TestCatalogAndAccount:
         start = datetime(2026, 10, 1, tzinfo=timezone.utc)
         decide, train = client.usage(start, start + timedelta(days=3), project="tickets")
         assert decide.kind == "decide" and decide.input_tokens == 120 and decide.gpu_seconds is None
+        assert decide.project_deleted is False
         assert decide.continuous_learning is True and decide.price_per_mtok == 0.3
         assert decide.base_cost_usd == 0.000024 and decide.continuous_learning_cost_usd == 0.000012
         assert train.continuous_learning is None and train.price_per_mtok is None and train.base_cost_usd is None

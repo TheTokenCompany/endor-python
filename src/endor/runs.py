@@ -1,6 +1,6 @@
 """Run: one adapter on one base model inside a project, driven step by step.
 
-    run = project.runs.create(base_model="decider-2b", rank=16)
+    run = project.runs.create(rank=16)               # on the project's first base model
     fb = run.forward_backward(datums)                 # gradients accumulate
     opt = run.optim_step(learning_rate=1e-4)          # AdamW step, then zero gradients
     fb.result(); opt.result()                         # submit both, then wait: no idle round trip
@@ -53,8 +53,9 @@ class Run:
     """A training run. Get one from ``project.runs.create(...)``, ``project.runs.get(id)`` or
     ``project.runs.list()``.
 
-    A run holds a GPU, billed per GPU-hour, until it is closed or idle for 15 minutes, and an org can have at most
-    4 runs that aren't closed (idle ones included). Use it as a context manager so it is closed even on errors::
+    Training is billed for the GPU time its calls use. A run without calls is parked (``idle``) after 2 minutes and
+    closed after an hour, and an org can have at most 5 runs that aren't closed (idle ones included). Use it as a
+    context manager so it is closed even on errors::
 
         with project.runs.create(base_model="jev-9b") as run:
             ...
@@ -413,7 +414,7 @@ class Run:
 def check_model_name(name: str) -> None:
     """The API's rule for model names saved from the SDK; raises ValueError naming the problem."""
     if name == C.BASE_MODEL_NAME:
-        raise ValueError('"base" is reserved for the project\'s base model; pick another model name')
+        raise ValueError('"base" is reserved (base models are called "<project>/<base id>"); pick another model name')
     if not isinstance(name, str) or not _MODEL_NAME.fullmatch(name):
         raise ValueError(
             f"bad model name {name!r}: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit, "
