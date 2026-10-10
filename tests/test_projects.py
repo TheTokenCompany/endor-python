@@ -21,12 +21,12 @@ from .fake_api import FakeEndor
 class TestProjects:
     def test_create_get_list_delete(self, client: EndorClient) -> None:
         name = unique("proj")
-        p = client.projects.create(name, description="tickets", base_model="jev-9b")
+        p = client.projects.create(name, description="tickets", base_models=["jev-9b"])
         assert p.name == name and p.info_.description == "tickets" and repr(p) == f"Project({name!r})"
         assert client.projects.get(name).info_.n_runs == 0
         assert name in [x.name for x in client.projects.list()]
         with pytest.raises(ConflictError) as e:
-            client.projects.create(name, base_model="jev-9b")
+            client.projects.create(name, base_models=["jev-9b"])
         assert e.value.code == "conflict"
         p.delete()
         with pytest.raises(NotFoundError):
@@ -34,41 +34,84 @@ class TestProjects:
 
     def test_get_or_create(self, client: EndorClient, fake: FakeEndor) -> None:
         name = unique("goc")
-        a = client.projects.get_or_create(name, base_model="decider-2b")
-        b = client.projects.get_or_create(name, "ignored", base_model="decider-2b")  # an existing one is left as is
+        a = client.projects.get_or_create(name, base_models=["decider-2b"])
+        assert fake.requests[-1].body["base_models"] == ["decider-2b"]
+        b = client.projects.get_or_create(name, "ignored", base_models=["decider-2b"])  # an existing one is left as is
         assert a.name == b.name and len(fake.projects) == 1 and b.info_.description is None
-        with pytest.raises(ValueError, match="custom project on decider-2b"):
-            client.projects.get_or_create(name, base_model="jev-9b")
-        with pytest.raises(ValueError, match="kind and base model can't change"):
-            client.projects.get_or_create(name, base_model="decider-2b", kind="managed")
+        assert fake.requests[-1].method == "GET"  # nothing to add
+        c = client.projects.get_or_create(name, base_models=["jev-9b", "decider-2b"])  # adds the missing base
+        assert c.info_.base_models == ["decider-2b", "jev-9b"]
+        assert client.projects.get_or_create(name).info_.base_models == ["decider-2b", "jev-9b"]  # none removed
+        with pytest.raises(ValueError, match="kind can't change"):
+            client.projects.get_or_create(name, base_models=["decider-2b"], kind="managed")
 
     def test_create_custom_and_managed(self, client: EndorClient, fake: FakeEndor) -> None:
         name = unique("base")
-        p = client.projects.create(name, base_model="decider-2b")
+        p = client.projects.create(name, base_models=["decider-2b"])
         assert fake.requests[-1].body == {
             "name": name,
             "description": None,
             "kind": "custom",
-            "base_model": "decider-2b",
+            "base_models": ["decider-2b"],
         }
         info = p.info_
-        assert info.kind == "custom" and info.base_model == "decider-2b" and not hasattr(info, "live_model")
+        assert info.kind == "custom" and info.base_models == ["decider-2b"] and not hasattr(info, "live_model")
         assert info.paused is None and info.n_models == 1  # the base model counts
-        m = client.projects.create(unique("man"), base_model="jev-9b", kind="managed")
+        two = client.projects.create(unique("two"), base_models=["decider-2b", "gev-26b"])
+        assert two.info_.base_models == ["decider-2b", "gev-26b"] and two.info_.n_models == 2
+        m = client.projects.create(unique("man"), base_models=["jev-9b"], kind="managed")
         assert fake.requests[-1].body["kind"] == "managed"
         assert m.info_.kind == "managed" and m.info_.paused is False
         with pytest.raises(UnprocessableEntityError) as e:
-            client.projects.create(unique("base"), base_model="gpt-9")
-        assert e.value.code == "unknown_model"
+            client.projects.create(unique("base"), base_models=["gpt-9"])
+        assert e.value.code == "invalid_input" and e.value.param == "base_models"
+
+    def test_base_model_keyword_was_replaced(self, client: EndorClient, fake: FakeEndor) -> None:
+        with pytest.raises(TypeError, match=r"base_model was replaced by base_models.*base_models=\['decider-2b'\]"):
+            client.projects.create(unique("old"), base_model="decider-2b")  # type: ignore[call-arg]
+        with pytest.raises(TypeError, match="base_model was replaced"):
+            client.projects.get_or_create(unique("old"), base_model="decider-2b")  # type: ignore[call-arg]
+        with pytest.raises(TypeError, match="a list of base model ids"):
+            client.projects.create(unique("old"), base_models="decider-2b")
+        with pytest.raises(TypeError, match="unexpected keyword argument 'colour'"):
+            client.projects.create(unique("old"), colour="red")  # type: ignore[call-arg]
+        assert not fake.requests  # refused before sending anything
+
+    def test_add_and_remove_base_models(self, client: EndorClient, fake: FakeEndor) -> None:
+        p = client.projects.create(unique("bases"), base_models=["decider-2b"])
+        info = p.add_base_model("gev-26b")
+        req = fake.requests[-1]
+        assert (req.method, req.path, req.body) == (
+            "POST",
+            f"/v1/projects/{p.name}/base_models",
+            {"base_model": "gev-26b"},
+        )
+        assert "idempotency-key" in req.headers
+        assert info.base_models == ["decider-2b", "gev-26b"] and p.info_ is info
+        assert [m.id for m in p.models.list()] == [f"{p.name}/decider-2b", f"{p.name}/gev-26b"]
+        with pytest.raises(ConflictError) as e:
+            p.add_base_model("gev-26b")
+        assert e.value.code == "conflict"
+        with pytest.raises(UnprocessableEntityError):
+            p.add_base_model("gpt-9")
+        assert p.remove_base_model("decider-2b").base_models == ["gev-26b"]
+        assert fake.requests[-1].method == "DELETE"
+        assert fake.requests[-1].path == f"/v1/projects/{p.name}/base_models/decider-2b"
+        with pytest.raises(NotFoundError):
+            p.remove_base_model("decider-2b")
+        m = client.projects.create(unique("man"), base_models=["jev-9b"], kind="managed")
+        with pytest.raises(ConflictError) as e:
+            m.remove_base_model("jev-9b")  # a managed project keeps one
+        assert e.value.code == "invalid_state"
 
     def test_update_description_and_paused(self, client: EndorClient, fake: FakeEndor) -> None:
-        p = client.projects.create(unique("upd"), base_model="jev-9b")
+        p = client.projects.create(unique("upd"), base_models=["jev-9b"])
         info = p.update(description="tickets")
         assert fake.requests[-1].body == {"description": "tickets"} and info.description == "tickets"
         with pytest.raises(WrongProjectKindError) as e:
             p.update(paused=True)  # only managed projects pause
         assert isinstance(e.value, ConflictError) and e.value.code == "wrong_project_kind"
-        m = client.projects.create(unique("man"), base_model="jev-9b", kind="managed")
+        m = client.projects.create(unique("man"), base_models=["jev-9b"], kind="managed")
         assert m.update(paused=True).paused is True
         assert fake.requests[-1].body == {"paused": True}
         assert m.update(paused=False).paused is False
@@ -76,25 +119,25 @@ class TestProjects:
             p.update()
 
     def test_managed_projects_refuse_training(self, client: EndorClient) -> None:
-        m = client.projects.create(unique("man"), base_model="jev-9b", kind="managed")
+        m = client.projects.create(unique("man"), base_models=["jev-9b"], kind="managed")
         with pytest.raises(WrongProjectKindError):
             m.datasets.upload("d", rows(1))
         with pytest.raises(WrongProjectKindError):
             m.runs.create(wait=False)
         with pytest.raises(WrongProjectKindError):
-            m.evaluate("base", "d")
+            m.evaluate("jev-9b", "d")
         assert not hasattr(m, "set_live")
 
     def test_project_limit(self, client: EndorClient, fake: FakeEndor) -> None:
         for _ in range(7):
-            client.projects.create(unique("lim"), base_model="jev-9b")
+            client.projects.create(unique("lim"), base_models=["jev-9b"])
         with pytest.raises(LimitReachedError) as e:
-            client.projects.create(unique("lim"), base_model="jev-9b")
+            client.projects.create(unique("lim"), base_models=["jev-9b"])
         assert isinstance(e.value, ConflictError) and e.value.code == "limit_reached"
 
     def test_bad_name(self, client: EndorClient) -> None:
         with pytest.raises(UnprocessableEntityError) as e:
-            client.projects.create("Bad Name", base_model="jev-9b")
+            client.projects.create("Bad Name", base_models=["jev-9b"])
         assert e.value.param == "name"
 
     def test_delete_with_active_run_conflicts(self, project: endor.Project) -> None:
@@ -211,17 +254,17 @@ class TestRunsResource:
             transport=httpx.MockTransport(fake.handler),
             capture=False,
         )
-        p = c.projects.create("nocap", base_model="jev-9b")
+        p = c.projects.create("nocap", base_models=["jev-9b"])
         with p.runs.create("jev-9b", config={"lr": 1}):
             body = fake.requests[-1].body
         assert body["config"] == {"lr": 1} and "code_hash" not in body
 
-    def test_trains_on_the_projects_base(self, project: endor.Project, fake: FakeEndor) -> None:
-        with project.runs.create() as run:  # base_model left out: the project's
-            assert run.info_.base_model == "jev-9b" and fake.requests[-1].body is not None
-        with pytest.raises(UnprocessableEntityError) as e:
-            project.runs.create("decider-2b")  # another base than the project's
-        assert e.value.param == "base_model"
+    def test_trains_on_the_projects_first_base(self, project: endor.Project, fake: FakeEndor) -> None:
+        with project.runs.create() as run:  # base_model left out: the project's first
+            assert run.info_.base_model == "jev-9b" and fake.requests[-1].body["base_model"] is None
+        with project.runs.create("decider-2b") as other:  # another base joins the project
+            assert other.info_.base_model == "decider-2b"
+        assert project.info().base_models == ["jev-9b", "decider-2b"]
 
     def test_resume_from_model(self, project: endor.Project) -> None:
         with project.runs.create("jev-9b") as run:
@@ -303,7 +346,8 @@ class TestModels:
         with project.runs.create("jev-9b") as other:
             other.save_checkpoint("v2").result()
         listed = project.models.list()
-        assert [m.name for m in listed][0] == "base" and {m.name for m in listed} == {"base", "v1", "v2"}
+        assert [(m.name, m.kind) for m in listed][0] == ("jev-9b", "base")
+        assert {m.name for m in listed} == {"jev-9b", "v1", "v2"} and {m.kind for m in listed[1:]} == {"saved"}
         assert [m.name for m in project.models.list(run_id=run.id)] == ["v1"]
         m = project.models.get(mid)
         assert m.id == mid and m.step == 1 and m.training_run_id == run.id and not m.has_optimizer
@@ -314,18 +358,18 @@ class TestModels:
         project.models.delete("v1")
         with pytest.raises(NotFoundError):
             project.models.get("v1")
-        assert [m.name for m in project.models.list()] == ["base", "v2"]
+        assert [m.name for m in project.models.list()] == ["jev-9b", "v2"]
 
     def test_base_model(self, project: endor.Project) -> None:
         with project.runs.create("jev-9b") as run:
             run.save_checkpoint("v1").result()
-        base = project.models.get("base")
-        assert base.id == f"{project.name}/base" and base.name == "base" and base.loss is None
+        base = project.models.get("jev-9b")
+        assert base.id == f"{project.name}/jev-9b" and base.kind == "base" and base.loss is None
         assert base.base_model == "jev-9b" and base.training_run_id is None
-        assert project.models.get(f"{project.name}/base").id == base.id
-        assert [m.name for m in project.models.list()] == ["base", "v1"]
+        assert project.models.get(f"{project.name}/jev-9b").id == base.id
+        assert [m.name for m in project.models.list()] == ["jev-9b", "v1"]
         with pytest.raises(UnprocessableEntityError):
-            project.models.delete("base")
+            project.models.delete("jev-9b")  # remove_base_model takes a base off the project
 
     def test_loss_is_the_one_at_save_time(self, project: endor.Project) -> None:
         with project.runs.create("jev-9b") as run:
@@ -352,24 +396,25 @@ class TestEvaluations:
             and ev.training_run_id == run.id
         )
         assert ev.results and 0 <= ev.results["overall"]["accuracy"] <= 1
-        base_ev = project.evaluate("base", "heldout").result()  # "base" resolves in the project
-        assert base_ev.model == "base"
+        base_ev = project.evaluate("jev-9b", "heldout").result()  # a base id resolves in the project
+        assert base_ev.model == f"{project.name}/jev-9b"  # stored by the model that answered
         assert project.evaluate("v1", "heldout").result().status == "completed"  # so does a bare name
         assert project.evaluate(project.name, "heldout").result().status == "completed"  # its base model
         assert [e.id for e in project.evaluations(run_id=run.id)] == [ev.id]
-        assert [e.id for e in project.evaluations(model="base")] == [base_ev.id]
+        assert len(project.evaluations(model=f"{project.name}/jev-9b")) == 2  # by its base id and by the project
         assert len(project.evaluations()) == 4
         with pytest.raises(NotFoundError):
             project.evaluate(model, "nope")
-        with pytest.raises(endor.ModelRequiresProjectError):
-            project.evaluate("jev-9b", "heldout")
+        with pytest.raises(NotFoundError) as e:
+            project.evaluate("decider-2b", "heldout")  # a base the project doesn't have
+        assert e.value.code == "unknown_model"
 
 
 def test_custom_project_without_a_base_gets_it_from_its_first_run(client: endor.EndorClient) -> None:
     p = client.projects.create(unique("nobase"))
-    assert p.info_.kind == "custom" and p.info_.base_model is None
+    assert p.info_.kind == "custom" and p.info_.base_models == []
     with pytest.raises(ValueError):
         client.projects.create(unique("m"), kind="managed")
     run = p.runs.create(base_model="jev-9b")
     run.close()
-    assert p.info().base_model == "jev-9b"
+    assert p.info().base_models == ["jev-9b"]

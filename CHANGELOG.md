@@ -5,6 +5,33 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-09
+
+Projects have several base models. The API refuses `base_model` on `POST /v1/projects` (422 `invalid_input`), so
+`projects.create` and `get_or_create` failed on 0.4.x; update to 0.5.0.
+
+- `projects.create(name, description=None, *, kind="custom", base_models=None)` and `get_or_create(...)` take
+  `base_models`, a list of base model ids (`["decider-2b"]`). Each answers at once as `"<project>/<base id>"`, and
+  `"<project>"` answers with the first. A managed project needs at least one. `base_model=` raises `TypeError`
+  saying to pass `base_models=[...]`. `get_or_create` adds the `base_models` an existing project doesn't have yet
+  (it removes none, and keeps the description); it raises `ValueError` only for another `kind`.
+- `project.add_base_model(base_model)` and `project.remove_base_model(base_model)` (`POST` and
+  `DELETE /v1/projects/{project}/base_models`); the CLI has `endor projects add-base-model NAME BASE` and
+  `remove-base-model NAME BASE`, and `projects create` takes `--base-model` any number of times (or none).
+- `ProjectInfo.base_models` (in the order they were added) replaces `ProjectInfo.base_model`.
+- Base models are called by their ids: `"<project>/decider-2b"` replaces `"<project>/base"`, which the API now
+  answers with 404 `unknown_model`. `project.evaluate("decider-2b", ...)`, `project.models.get("decider-2b")`; the
+  evaluation records the full id (`"<project>/decider-2b"`). `ModelInfo.kind` is `"base"` or `"saved"`, and a base
+  model's `name` is its id. Saved models can't be named `base` or after a base model.
+- `runs.create()` trains on the project's first base model, or on `base_model=`; a base the project doesn't have yet
+  is added to it (it used to be refused). The supervised recipe adds its `base_model` to the project the same way
+  and scores the base as `"<project>/<base_model>"`.
+- Fields the API returns: `ModelInfo.accuracy`, `WhoAmI.managed_projects`, `UsageRow.project_deleted`,
+  `BaseModelInfo.provider`, `leaderboard_rank` and `max_question_tokens`.
+- `WandbSettings` is `enabled` and `url` (the W&B project page), as the API returns it; the W&B project is
+  `endor-<project name>`. `project.update(wandb={"enabled": True})` sends only `enabled` (`entity` and `project`
+  are gone: the API never took them).
+
 ## [0.4.2] - 2026-10-08
 
 - Images in decisions: `endor.Image.from_path(path)`, `Image.from_bytes(data, media_type=None)` and

@@ -41,8 +41,8 @@ FUTURE_POLL_WAIT_S = 25.0  # server-side long poll per request (server clamps at
 MAX_ERROR_BODY_LENGTH = 200
 LIST_PAGE_SIZE = 100  # page size when a list call pages through every item
 
-# Model names saved from the SDK: the API's name pattern, and never "base" (``<project>/base`` is the project's base
-# model).
+# Model names saved from the SDK: the API's name pattern, and never "base" (reserved by the API, as are the base model
+# ids: ``<project>/<base id>`` calls a base model).
 SDK_MODEL_NAME = r"^[a-z0-9][a-z0-9._-]{0,62}$"
 BASE_MODEL_NAME = "base"
 

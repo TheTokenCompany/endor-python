@@ -273,7 +273,7 @@ class SystemOneResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     model: str
-    """The model that answered: a base id, or ``"<project>/<name>"``."""
+    """The model that answered: ``"<project>/<base id>"`` or ``"<project>/<name>"``."""
     answers: dict[str, Answer] = Field(default_factory=dict)
     """Every answer, by question name."""
     usage: Usage = Field(default_factory=Usage)
@@ -299,7 +299,8 @@ def answer_probabilities(answer: Answer) -> dict[str, float]:
 
 
 class BaseModelInfo(BaseModel):
-    """A base decision model you can fine-tune and decide with, through a project (``"<project>/base"``)."""
+    """A base decision model you can fine-tune and decide with, through a project that has it
+    (``"<project>/<id>"``; add it with ``project.add_base_model(id)``)."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -308,8 +309,14 @@ class BaseModelInfo(BaseModel):
     release_date: str | None = None
     params: str | None = None
     """The model size, for example ``"26B (4B active)"``."""
+    provider: str | None = None
+    """Who published it."""
+    leaderboard_rank: int | None = None
+    """Its rank on the Jev Decision Index, when listed."""
     max_options: int | None = None
     """The most options a Choice (or levels a Score) may have on this base."""
+    max_question_tokens: int | None = None
+    """The most tokens one rendered question (state included) may have."""
     trainable: bool = True
     default_rank: int = 16
     max_rank: int | None = None
@@ -348,12 +355,11 @@ class ModelMetadata(BaseModel):
 
     @property
     def kind(self) -> str:
-        """``"project"`` (``<project>``), ``"base"`` (``<project>/base``) or ``"model"`` (``<project>/<name>``)."""
+        """``"project"`` (``<project>``), ``"base"`` (``<project>/<base id>``) or ``"model"``
+        (``<project>/<name>``)."""
         if self.endor.get("kind"):
             return str(self.endor["kind"])
-        if "/" not in self.name:
-            return "project"
-        return "base" if self.name.endswith("/base") else "model"
+        return "project" if "/" not in self.name else "model"
 
 
 class ListModelsResponse(BaseModel):
@@ -509,14 +515,13 @@ class OptimStepOutput(_View):
 
 class WandbSettings(_View):
     """A project's Weights & Biases logging, set in its Settings tab or with ``project.update(wandb=...)``. Endor logs
-    runs from its servers through the organization's W&B connection (dashboard: Settings > Integrations)."""
+    runs from its servers through the organization's W&B connection (dashboard: Settings > Integrations), to the W&B
+    project ``endor-<project name>`` in the connection's entity."""
 
     enabled: bool = False
     """New runs log to W&B (``runs.create(wandb=...)`` overrides it per run)."""
-    entity: str | None = None
-    """The W&B team or user; None: the connection's default entity."""
-    project: str | None = None
-    """The W&B project; None: the Endor project's name."""
+    url: str | None = None
+    """That W&B project's page, while logging is on and the organization is connected."""
 
 
 class ProjectInfo(_View):
@@ -525,13 +530,16 @@ class ProjectInfo(_View):
     kind: str = "custom"
     """``custom`` (you train models with the SDK) or ``managed`` (Endor trains new versions from the project's
     decisions). Set at creation; it never changes."""
-    base_model: str | None = None
-    """The project's base model (``"<project>/base"``). Set at creation; it never changes."""
+    base_models: list[str] = Field(default_factory=list)
+    """The project's base model ids, in the order they were added. Each answers as ``"<project>/<base id>"``, and the
+    first also as ``"<project>"`` (in a managed project, until its first version). Change them with
+    ``project.add_base_model`` and ``project.remove_base_model``."""
     paused: bool | None = None
     """Managed projects: learning is paused (the project keeps serving its newest version). None for custom."""
     n_datasets: int = 0
     n_runs: int = 0
     n_models: int = 0
+    """Saved models plus base models."""
     wandb: WandbSettings | None = None
     """Weights & Biases logging of the project's runs."""
     created_at: datetime
@@ -545,7 +553,7 @@ class RunInfo(_View):
     contract: str | None = None
     lora: LoraInfo = Field(default_factory=LoraInfo)
     status: str
-    """``provisioning``, ``ready``, ``idle`` (GPU released after 15 idle minutes; the next call restarts it),
+    """``provisioning``, ``ready``, ``idle`` (parked after 2 minutes without calls; the next call resumes it),
     ``closing`` (closed, finishing accepted calls), ``closed`` or ``failed``. Treat unknown values as active."""
     ready_future_id: str | None = None
     step: int = 0
@@ -588,10 +596,13 @@ class RunInfo(_View):
 
 class ModelInfo(_View):
     id: str
-    """``"<project>/<name>"``: pass it as ``model`` to ``system_one``."""
+    """``"<project>/<name>"`` or ``"<project>/<base id>"``: pass it as ``model`` to ``system_one``."""
+    kind: str = "saved"
+    """``"base"`` (one of the project's base models, listed first) or ``"saved"`` (saved by a run, or a managed
+    project's version)."""
     project: str
     name: str
-    """``base`` for the project's base model (listed first). A managed project's versions are named
+    """The base model id for a base model; the saved model's name otherwise. A managed project's versions are named
     ``YYYY-MM-DD-N``."""
     training_run_id: str | None = None
     base_model: str
@@ -605,7 +616,9 @@ class ModelInfo(_View):
     user_metadata: dict[str, Any] = Field(default_factory=dict)
     loss: float | None = None
     """The training loss when the model was saved: its run's ``train/loss`` at ``step``, or the last one before it.
-    None for the base model, or when unknown."""
+    None for a base model, or when unknown."""
+    accuracy: float | None = None
+    """The training accuracy when the model was saved (``train/accuracy``, the same way as ``loss``)."""
     created_at: datetime
 
 
@@ -655,9 +668,11 @@ class UsageRow(_View):
     kind: str
     """``decide`` (billed per 1M input tokens per base model) or ``train`` (billed per GPU-hour)."""
     project: str | None = None
+    project_deleted: bool = False
+    """The project was deleted (``project`` is None when its record is gone)."""
     base_model: str | None = None
     model: str | None = None
-    """Decisions only: the project model that answered (None for a base model)."""
+    """Decisions only: the saved model that answered (None for a base model: see ``base_model``)."""
     training_run_id: str | None = None
     """Training only."""
     input_tokens: int | None = None
@@ -686,6 +701,8 @@ class WhoAmI(_View):
     """The org's limits by name, for example ``max_projects_per_org`` or ``max_active_runs``. A count limit raises
     ``LimitReachedError`` once reached; a rate raises ``RateLimitError``: ``decisions_per_minute`` (60 by default,
     for the whole org) and the other ``..._per_minute``."""
+    managed_projects: bool = False
+    """Whether managed projects can be created here (they are coming soon where they can't)."""
 
 
 class FutureInfo(_View):

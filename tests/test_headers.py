@@ -32,7 +32,7 @@ IDENTITY = {
 
 def test_every_request_carries_identity(client: EndorClient, fake: FakeEndor) -> None:
     client.whoami()
-    project = client.projects.create(unique("hdr"), base_model="jev-9b")
+    project = client.projects.create(unique("hdr"), base_models=["jev-9b"])
     client.system_one("x", {"d": DEPT}, model=project.name)
     with project.runs.create("jev-9b") as run:
         run.forward(endor.data.rows_to_datums(rows(2))).result()
@@ -49,11 +49,13 @@ def test_every_request_carries_identity(client: EndorClient, fake: FakeEndor) ->
 def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor, tmp_path: Path) -> None:
     client.whoami()
     name = unique("m")
-    fake.create_project({"name": name, "base_model": "jev-9b"})  # in the fake directly: no request
-    client.system_one("x", {"d": DEPT}, model=f"{name}/base")
+    fake.create_project({"name": name, "base_models": ["jev-9b"]})  # in the fake directly: no request
+    client.system_one("x", {"d": DEPT}, model=f"{name}/jev-9b")
     client.models.list()
     client.base_models()
-    project = client.projects.get_or_create(name, base_model="jev-9b")
+    project = client.projects.get_or_create(name, base_models=["jev-9b"])
+    project.add_base_model("decider-2b")
+    project.remove_base_model("decider-2b")
     project.datasets.upload("d", rows(2))
     list(project.datasets.rows("d"))
     run = project.runs.create("jev-9b")
@@ -78,6 +80,8 @@ def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor, 
         ("GET", "/v1/models", "client.models.list"),
         ("GET", "/v1/base_models", "client.base_models"),
         ("GET", f"/v1/projects/{name}", "projects.get"),
+        ("POST", f"/v1/projects/{name}/base_models", "project.add_base_model"),
+        ("DELETE", f"/v1/projects/{name}/base_models/decider-2b", "project.remove_base_model"),
         ("POST", f"/v1/projects/{name}/datasets", "project.datasets.upload"),
         ("GET", f"/v1/projects/{name}/datasets/d/rows", "project.datasets.rows"),
         ("POST", f"/v1/projects/{name}/runs", "project.runs.create"),
@@ -106,12 +110,13 @@ def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor, 
 
 def test_idempotency_key_on_creates_only(client: EndorClient, fake: FakeEndor) -> None:
     name = unique("idem")
-    project = client.projects.create(name, base_model="jev-9b")
+    project = client.projects.create(name, base_models=["jev-9b"])
     project.datasets.upload("d", rows(1))
     with project.runs.create("jev-9b") as run:
         run.forward(endor.data.rows_to_datums(rows(1)))
         run.log_eval("x", {})
-    project.evaluate("base", "d")
+    project.evaluate("jev-9b", "d")
+    project.add_base_model("decider-2b")
     client.whoami()
     with_key = {(r.method, r.path) for r in fake.requests if "idempotency-key" in r.headers}
     assert with_key == {
@@ -120,6 +125,7 @@ def test_idempotency_key_on_creates_only(client: EndorClient, fake: FakeEndor) -
         ("POST", f"/v1/projects/{name}/runs"),
         ("POST", "/v1/runs/run_0001/evaluations"),
         ("POST", f"/v1/projects/{name}/evaluations"),
+        ("POST", f"/v1/projects/{name}/base_models"),
     }
     keys = [r.headers["idempotency-key"] for r in fake.requests if "idempotency-key" in r.headers]
     assert len(set(keys)) == len(keys)
@@ -130,7 +136,7 @@ def test_idempotency_key_on_creates_only(client: EndorClient, fake: FakeEndor) -
 def test_idempotency_key_and_request_id_survive_retries(client: EndorClient, fake: FakeEndor) -> None:
     fake.fail_next.append(httpx.ConnectError("reset"))
     fake.fail_next.append(HTTPError(503, "unavailable", "try again"))
-    client.projects.create(unique("retried"), base_model="jev-9b")
+    client.projects.create(unique("retried"), base_models=["jev-9b"])
     reqs = [r for r in fake.requests if r.path == "/v1/projects"]
     assert len(reqs) == 3
     assert len({r.headers["idempotency-key"] for r in reqs}) == 1
@@ -141,7 +147,7 @@ def test_idempotency_key_and_request_id_survive_retries(client: EndorClient, fak
 def test_idempotent_replay_returns_the_same_resource(client: EndorClient, fake: FakeEndor) -> None:
     fake.fail_next.append(httpx.ReadTimeout("slow"))  # the server may have created it before we timed out
     name = unique("once")
-    project = client.projects.create(name, base_model="jev-9b")
+    project = client.projects.create(name, base_models=["jev-9b"])
     assert project.name == name and len(fake.projects) == 1
 
 

@@ -43,19 +43,23 @@ def test_whoami_and_catalog(live: endor.EndorClient, base_model: str) -> None:
 
 
 def test_decision(live: endor.EndorClient, base_model: str) -> None:
-    project = live.projects.create(f"sdk-it-{uuid.uuid4().hex[:8]}", base_model=base_model)
+    project = live.projects.get_or_create(f"sdk-it-{uuid.uuid4().hex[:8]}", base_models=[base_model])
     try:
+        assert project.info_.base_models == [base_model]
+        assert project.name in {p.name for p in live.projects.list()}
+        assert live.projects.get(project.name).info_.base_models == [base_model]
         res = live.system_one({"body": "I was charged twice"}, {"dept": DEPT, "urgent": URGENT}, model=project.name)
-        assert res.model == f"{project.name}/base"
+        assert res.model == f"{project.name}/{base_model}"
         assert abs(sum(res.choices["dept"].probabilities.values()) - 1) < 1e-3
         assert 0 <= res.nouls["urgent"].noul <= 1
-        assert {project.name, f"{project.name}/base"} <= {m.name for m in live.models.list().models}
+        assert {project.name, f"{project.name}/{base_model}"} <= {m.name for m in live.models.list().models}
+        assert [(m.kind, m.name) for m in project.models.list()] == [("base", base_model)]
     finally:
         project.delete()
 
 
 def test_tiny_training_loop(live: endor.EndorClient) -> None:
-    project = live.projects.create(f"sdk-it-{uuid.uuid4().hex[:8]}", base_model="jev-9b")
+    project = live.projects.create(f"sdk-it-{uuid.uuid4().hex[:8]}", base_models=["jev-9b"])
     try:
         rows = [
             {
@@ -66,7 +70,7 @@ def test_tiny_training_loop(live: endor.EndorClient) -> None:
             for i in range(8)
         ]
         project.datasets.upload("train", rows)
-        with project.runs.create(rank=4) as run:  # on the project's base model
+        with project.runs.create(rank=4) as run:  # on the project's first base model
             datums = endor.data.rows_to_datums(rows)
             before = run.forward(datums).result()
             fb = run.forward_backward(datums)
