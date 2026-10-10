@@ -5,6 +5,11 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-10
+
+- Docs: managed projects are coming soon. `projects.create(kind="managed")` is refused by the API (422
+  `invalid_input`) until `client.whoami().managed_projects` is true; the docstrings and README now say so.
+
 ## [0.5.0] - 2026-10-09
 
 Projects have several base models. The API refuses `base_model` on `POST /v1/projects` (422 `invalid_input`), so

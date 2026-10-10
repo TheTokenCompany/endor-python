@@ -36,7 +36,8 @@ from .types import (
 )
 
 ProjectKind = Literal["custom", "managed"]
-"""``custom``: you train models with the SDK. ``managed``: Endor trains new versions from the project's decisions."""
+"""``custom``: you train models with the SDK. ``managed`` (coming soon): Endor trains new versions from the project's
+decisions; the API refuses it until ``client.whoami().managed_projects`` is true."""
 
 
 __all__ = ["Projects", "Project", "Datasets", "Runs", "Models", "MAX_UPLOAD_ROWS"]
@@ -64,7 +65,9 @@ class Projects:
         ``LimitReachedError`` (a ``ConflictError``) when the org has as many projects as it may.
 
         ``kind`` is ``"custom"`` (you train models with the SDK) or ``"managed"`` (Endor trains new versions from the
-        project's decisions; its decisions cost 50% more). It never changes.
+        project's decisions; its decisions cost 50% more). It never changes. Managed projects are coming soon: until
+        ``client.whoami().managed_projects`` is true, the API refuses them (``UnprocessableEntityError``, 422
+        ``invalid_input``).
 
         ``base_models``: base model ids from ``client.base_models()``, for example ``["decider-2b"]``. Each answers at
         once as ``"<project>/<base id>"``, and ``"<project>"`` answers with the first. A managed project needs at
