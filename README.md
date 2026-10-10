@@ -127,7 +127,7 @@ closes the connections.
 Everything you create lives in a **project**, keyed by its name. Each project has a **kind**, set at creation and
 never changed, and any number of **base models**, each called `"<project>/<base id>"`:
 
-| | Custom (`kind="custom"`, the default) | Managed (`kind="managed"`) |
+| | Custom (`kind="custom"`, the default) | Managed (`kind="managed"`, coming soon) |
 |---|---|---|
 | Who trains | you, with the SDK | Endor, from the project's own decisions (coming soon) |
 | Base models | any number: at creation, later, or added by a run | at least one |
@@ -156,9 +156,10 @@ doesn't have yet is added to it. `get_or_create` adds the `base_models` an exist
 none); it raises `ValueError` when the existing project has another kind. `base_model=` on `create` or
 `get_or_create` raises `TypeError`: pass `base_models=[...]`.
 
-**Managed projects.** Endor trains new versions from the project's decisions, named `YYYY-MM-DD-N`, and
-`"tickets"` serves the newest one. The training pipeline is coming soon: until then a managed project serves its
-first base model. Its decisions are billed at the managed price (50% more) from the start.
+**Managed projects (coming soon).** Until `client.whoami().managed_projects` is true, creating one raises
+`UnprocessableEntityError` (422 `invalid_input`, "Managed projects are coming soon"); use a custom project. Once
+available, Endor trains new versions from the project's decisions, named `YYYY-MM-DD-N`, and `"tickets"` serves the
+newest one. Its decisions are billed at the managed price (50% more).
 
 ```python
 project = client.projects.create("triage", kind="managed", base_models=["decider-2b"])
