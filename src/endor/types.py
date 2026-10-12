@@ -66,8 +66,8 @@ __all__ = [
     "DownloadedFile",
     "UsageRow",
     "WhoAmI",
-    "ReportKind",
-    "ReportReceipt",
+    "UserReportKind",
+    "UserReportReceipt",
     "FutureInfo",
     "question_dict",
     "option_keys",
@@ -707,16 +707,16 @@ class WhoAmI(_View):
     """Whether managed projects can be created here (they are coming soon where they can't)."""
 
 
-ReportKind = Literal["bug", "confusing", "works"]
+UserReportKind = Literal["bug", "confusing", "works"]
 """What a report says: ``bug`` (Endor did something unexpected), ``confusing`` (the docs, a message or the API are
 unclear) or ``works`` (an integration runs as it should)."""
 
 
-class ReportReceipt(_View):
-    """The API's answer to a report (``endor.report``, ``client.report``)."""
+class UserReportReceipt(_View):
+    """The API's answer to a report (``endor.user_report``, ``client.user_report``)."""
 
     id: str
-    """The report's id (``rep_...``)."""
+    """The report's id (``urep_...``)."""
     message: str
     """A thank-you from the Endor team."""
 

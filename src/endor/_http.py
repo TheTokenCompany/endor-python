@@ -5,7 +5,7 @@ Each request carries the SDK identity headers (``_headers.py``), the public meth
 POSTs, an ``Idempotency-Key`` so a retried create never makes a duplicate.
 
 The transport remembers its latest request id and its latest failure (``LastCall``: ids, status, code and endpoint,
-never a body or a key), and so does the process (``LAST``), so a report (``_report.py``) can say what it is about.
+never a body or a key), and so does the process (``LAST``), so a report (``_user_report.py``) can say what it is about.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ class LastCall:
 
 
 LAST = LastCall()
-"""The latest request of any client in this process (``endor.report`` without a client reads it)."""
+"""The latest request of any client in this process (``endor.user_report`` without a client reads it)."""
 
 
 class Transport:

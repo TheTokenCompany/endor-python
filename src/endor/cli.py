@@ -9,10 +9,10 @@
     endor models list PROJECT | info MODEL | download MODEL [-o DIR] | set-ttl MODEL SECONDS|none | delete MODEL
     endor eval PROJECT MODEL DATASET
     endor usage --start 2026-10-01 --end 2026-10-06 [--project P] [--csv]
-    endor report "what you did, what happened, what you expected" [--kind bug|confusing|works] [--request-id REQ]
+    endor user-report "what you did, what happened, what you expected" [--kind bug|confusing|works] [--request-id REQ]
 
 MODEL is "<project>/<name>", or "<project>/<base id>" for a base model of the project. Every command takes -f json.
-Credentials: ENDOR_API_KEY (and ENDOR_BASE_URL); `endor report` also works without a key (anonymous).
+Credentials: ENDOR_API_KEY (and ENDOR_BASE_URL); `endor user-report` also works without a key (anonymous).
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from . import _report
+from . import _user_report
 from . import data as D
 from ._headers import sdk_context
 from ._version import __version__
@@ -122,9 +122,9 @@ def build_parser() -> argparse.ArgumentParser:
     us.add_argument("--end", required=True, help="ISO date or datetime")
     us.add_argument("--project")
     us.add_argument("--csv", action="store_true")
-    rp = sub.add_parser("report", help="tell the Endor team what didn't work as expected, was unclear, or works")
+    rp = sub.add_parser("user-report", help="tell the Endor team what didn't work as expected, was unclear, or works")
     rp.add_argument("message", help="what you did, what happened and what you expected")
-    rp.add_argument("--kind", choices=list(_report.KINDS), default="bug")
+    rp.add_argument("--kind", choices=list(_user_report.KINDS), default="bug")
     rp.add_argument("--request-id", help="the req_... id of the request it is about")
     return p
 
@@ -133,11 +133,11 @@ def main(argv: Sequence[str] | None = None, client: EndorClient | None = None) -
     a = build_parser().parse_args(argv)
     try:
         with sdk_context(interface="cli"):
-            if a.cmd == "report":  # works without a key: before the client, which needs one
+            if a.cmd == "user-report":  # works without a key: before the client, which needs one
                 if client is not None:
-                    r = client.report(a.message, kind=a.kind, request_id=a.request_id)
+                    r = client.user_report(a.message, kind=a.kind, request_id=a.request_id)
                 else:
-                    r = _report.report(a.message, kind=a.kind, request_id=a.request_id)
+                    r = _user_report.user_report(a.message, kind=a.kind, request_id=a.request_id)
                 _out(r, a.format)
                 return 0
             if client is None:
@@ -147,7 +147,7 @@ def main(argv: Sequence[str] | None = None, client: EndorClient | None = None) -
             _run(a, client)
     except EndorError as e:
         rid = e.request_id if isinstance(e, APIError) else None
-        hint = "" if a.cmd == "report" else "\n" + report_hint(rid, cli=True)
+        hint = "" if a.cmd == "user-report" else "\n" + report_hint(rid, cli=True)
         print(f"error: {e._text()}{hint}", file=sys.stderr)
         return 1
     return 0

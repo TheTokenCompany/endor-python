@@ -5,7 +5,7 @@
     client.models.list()                                       # every name you can pass as model
     client.base_models()                                       # the base models, with limits and prices
     project = client.projects.get_or_create("tickets", base_models=["decider-2b"])   # datasets, runs, models
-    client.report("what you did, what happened, what you expected", kind="bug")      # tell the Endor team
+    client.user_report("what you did, what happened, what you expected", kind="bug")      # tell the Endor team
 
 ``model`` always names a project: ``"<project>/<name>"`` (one saved model), ``"<project>/<base id>"`` (one of its base
 models) or ``"<project>"`` (a managed project's newest version, else its first base model). A bare base model id is
@@ -25,7 +25,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from . import _constants as C
-from . import _report
+from . import _user_report
 from ._http import Transport
 from ._retry import RetryPolicy
 from .errors import EndorError, NotFoundError, ResponseValidationError
@@ -35,10 +35,10 @@ from .types import (
     JSONContent,
     ListModelsResponse,
     Question,
-    ReportKind,
-    ReportReceipt,
     SystemOneResponse,
     UsageRow,
+    UserReportKind,
+    UserReportReceipt,
     WhoAmI,
     question_dict,
 )
@@ -54,8 +54,9 @@ class EndorClient:
     """The entry point. One instance per process is plenty; it is safe to share across threads.
 
     When Endor doesn't do what you (or your coding agent) expected, or something is unclear, tell the Endor team with
-    ``client.report("what you did, what happened, what you expected", kind="bug")``; ``kind="works"`` once an
-    integration runs. Every error's ``str()`` ends with that hint, and ``endor.report`` works without a client or key.
+    ``client.user_report("what you did, what happened, what you expected", kind="bug")``; ``kind="works"`` once an
+    integration runs. Every error's ``str()`` ends with that hint, and ``endor.user_report`` works without a client
+    or key.
     """
 
     def __init__(
@@ -318,17 +319,17 @@ class EndorClient:
         return [_parse(UsageRow, u, "GET /v1/usage") for u in r]
 
     # ------------------------------------------------------------------ reports
-    def report(
+    def user_report(
         self,
         message: str,
         *,
-        kind: ReportKind = "bug",
+        kind: UserReportKind = "bug",
         request_id: str | None = None,
         context: Mapping[str, Any] | None = None,
-    ) -> ReportReceipt:
+    ) -> UserReportReceipt:
         """Tell the Endor team that something didn't work as expected (``kind="bug"``), was unclear
-        (``"confusing"``), or works (``"works"``): ``POST /v1/reports``, with this client's key so the team sees your
-        org.
+        (``"confusing"``), or works (``"works"``): ``POST /v1/user_reports``, with this client's key so the team sees
+        your org.
 
         Args:
             message: What you did, what happened and what you expected (up to 4000 characters; longer is cut).
@@ -340,24 +341,24 @@ class EndorClient:
                 your key, a request body or a decision's content.
 
         Returns:
-            A ``ReportReceipt`` with the report's ``id``.
+            A ``UserReportReceipt`` with the report's ``id``.
 
         Raises:
             ValueError: An empty message, or an unknown ``kind``.
             RateLimitError: Too many reports for now (``retry_after``); never retried.
         """
-        return _report.send(self._t, message, kind, request_id, context, "client.report")
+        return _user_report.send(self._t, message, kind, request_id, context, "client.user_report")
 
-    async def report_async(
+    async def user_report_async(
         self,
         message: str,
         *,
-        kind: ReportKind = "bug",
+        kind: UserReportKind = "bug",
         request_id: str | None = None,
         context: Mapping[str, Any] | None = None,
-    ) -> ReportReceipt:
+    ) -> UserReportReceipt:
         """``report`` for async code."""
-        return await _report.send_async(self._t, message, kind, request_id, context, "client.report")
+        return await _user_report.send_async(self._t, message, kind, request_id, context, "client.user_report")
 
     # ------------------------------------------------------------------ lifecycle
     def close(self) -> None:

@@ -14,7 +14,7 @@
 
 Every API error body is ``{"error": {"code": "<stable_code>", "message": "<for people>", "param"?: "<field>"}}``.
 ``APIError.code`` is the stable code, meant for programs; ``str(error)`` is for people (and coding agents): it ends
-with one line saying how to tell the Endor team when something didn't work as expected (``endor.report``).
+with one line saying how to tell the Endor team when something didn't work as expected (``endor.user_report``).
 ``APIError.message`` is the server's message alone, for showing to your own users.
 """
 
@@ -55,18 +55,18 @@ __all__ = [
     "report_hint",
 ]
 
-REPORTS_ENDPOINT = "POST /v1/reports"
+USER_REPORTS_ENDPOINT = "POST /v1/user_reports"
 
 
 def report_hint(request_id: str | None = None, *, cli: bool = False) -> str:
-    """The line that ends every error's ``str()``: how to tell the Endor team (``endor.report``, or ``endor report``
-    in the CLI), with the request id when there is one."""
+    """The line that ends every error's ``str()``: how to tell the Endor team (``endor.user_report``, or
+    ``endor user-report`` in the CLI), with the request id when there is one."""
     lead = "If Endor did something you didn't expect, or this message is unclear, tell the Endor team: "
     if cli:
         rid = f" --request-id {request_id}" if request_id else ""
-        return lead + f'endor report "what you did, what happened, what you expected" --kind bug{rid}'
+        return lead + f'endor user-report "what you did, what happened, what you expected" --kind bug{rid}'
     rid = f', request_id="{request_id}"' if request_id else ""
-    return lead + f'endor.report("what you did, what happened, what you expected", kind="bug"{rid})'
+    return lead + f'endor.user_report("what you did, what happened, what you expected", kind="bug"{rid})'
 
 
 class EndorError(Exception):
@@ -141,7 +141,7 @@ class APIError(EndorError):
         return self.request_id
 
     def _with_hint(self) -> bool:
-        return self.endpoint != REPORTS_ENDPOINT  # a failed report says nothing about reporting it
+        return self.endpoint != USER_REPORTS_ENDPOINT  # a failed report says nothing about reporting it
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self._text()!r})"

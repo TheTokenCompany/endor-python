@@ -1,12 +1,13 @@
-"""Reports to the Endor team (``POST /v1/reports``): what didn't work as expected, what was unclear, and what works.
+"""User reports to the Endor team (``POST /v1/user_reports``): what didn't work as expected, what was unclear, and
+what works.
 
-    endor.report("system_one answered 422 for a choice with 2 options; the docs say 2 is fine", kind="bug")
-    client.report("the integration runs: 120 decisions an hour", kind="works")
+    endor.user_report("system_one answered 422 for a choice with 2 options; the docs say 2 is fine", kind="bug")
+    client.user_report("the integration runs: 120 decisions an hour", kind="works")
 
 Meant for people and for their coding agents: every error's ``str()`` ends with a line saying how to report it
 (``errors.report_hint``). A report works without an API key (it is then anonymous); with one, the Endor team sees
 your org. It carries your message, the request it is about (by default the latest failed request of the client, or of
-the process for ``endor.report``) and a small context: the SDK and Python versions, the platform, and the latest
+the process for ``endor.user_report``) and a small context: the SDK and Python versions, the platform, and the latest
 failure's status, code and endpoint. Never your API key, a request body or a decision's content.
 """
 
@@ -26,16 +27,16 @@ from ._http import LAST, LastCall, Transport
 from ._retry import RetryPolicy
 from ._version import __version__
 from .errors import ResponseValidationError
-from .types import ReportKind, ReportReceipt
+from .types import UserReportKind, UserReportReceipt
 
-__all__ = ["report", "report_async", "KINDS"]
+__all__ = ["user_report", "user_report_async", "KINDS"]
 
 KINDS: tuple[str, ...] = ("bug", "confusing", "works")
 MESSAGE_MAX = 4000
 CONTEXT_MAX_KEYS = 30
 CONTEXT_KEY_MAX = 64
 CONTEXT_VALUE_MAX = 500
-ENDPOINT = "/v1/reports"
+ENDPOINT = "/v1/user_reports"
 # One retry for a lost connection or a 5xx; a 429 means enough reports were sent, so it is never retried.
 RETRY = RetryPolicy(max_retries=1, http_statuses=frozenset({408, 500, 502, 503, 504}))
 
@@ -86,9 +87,9 @@ def _last(t: Transport) -> LastCall:
     return t.last if t.last.request_id or t.last.error else LAST
 
 
-def _receipt(raw: Any) -> ReportReceipt:
+def _receipt(raw: Any) -> UserReportReceipt:
     try:
-        return ReportReceipt.model_validate(raw)
+        return UserReportReceipt.model_validate(raw)
     except ValueError as e:
         raise ResponseValidationError(201, raw, None, str(e).splitlines()[0], f"POST {ENDPOINT}") from e
 
@@ -100,7 +101,7 @@ def send(
     request_id: str | None,
     context: Mapping[str, Any] | None,
     method_name: str,
-) -> ReportReceipt:
+) -> UserReportReceipt:
     """Send a report through a transport (a client's, or one made for ``report``)."""
     raw = t.request(
         "POST",
@@ -121,7 +122,7 @@ async def send_async(
     request_id: str | None,
     context: Mapping[str, Any] | None,
     method_name: str,
-) -> ReportReceipt:
+) -> UserReportReceipt:
     raw = await t.arequest(
         "POST",
         ENDPOINT,
@@ -156,17 +157,17 @@ def _transport(
     )
 
 
-def report(
+def user_report(
     message: str,
     *,
-    kind: ReportKind = "bug",
+    kind: UserReportKind = "bug",
     request_id: str | None = None,
     context: Mapping[str, Any] | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
     timeout: float | None = None,
     transport: httpx.BaseTransport | None = None,
-) -> ReportReceipt:
+) -> UserReportReceipt:
     """Tell the Endor team that something didn't work as expected, was unclear, or works. No client needed, and no
     API key: with ``api_key`` (or ``ENDOR_API_KEY``) the team sees your org, without one the report is anonymous.
 
@@ -183,7 +184,7 @@ def report(
         transport: A custom ``httpx`` transport (mostly for tests).
 
     Returns:
-        A ``ReportReceipt`` with the report's ``id``.
+        A ``UserReportReceipt`` with the report's ``id``.
 
     Raises:
         ValueError: An empty message, or an unknown ``kind``.
@@ -191,25 +192,25 @@ def report(
     """
     t = _transport(api_key, base_url, timeout, transport, None)
     try:
-        return send(t, message, kind, request_id, context, "endor.report")
+        return send(t, message, kind, request_id, context, "endor.user_report")
     finally:
         t.close()
 
 
-async def report_async(
+async def user_report_async(
     message: str,
     *,
-    kind: ReportKind = "bug",
+    kind: UserReportKind = "bug",
     request_id: str | None = None,
     context: Mapping[str, Any] | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
     timeout: float | None = None,
     async_transport: httpx.AsyncBaseTransport | None = None,
-) -> ReportReceipt:
+) -> UserReportReceipt:
     """``report`` for async code."""
     t = _transport(api_key, base_url, timeout, None, async_transport)
     try:
-        return await send_async(t, message, kind, request_id, context, "endor.report")
+        return await send_async(t, message, kind, request_id, context, "endor.user_report")
     finally:
         await t.aclose()
