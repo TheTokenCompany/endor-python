@@ -192,10 +192,11 @@ class TestErrors:
         assert err.status == status and err.code == "some_code" and err.param == "field.x"
         assert err.message == "what happened" and err.endpoint == "GET /v1/whoami"
         assert err.request_id and err.request_id.startswith("req_")
+        first, hint = str(err).split("\n")
         assert (
-            str(err)
-            == f"GET /v1/whoami: {status} some_code: what happened (param=field.x) (request_id={err.request_id})"
+            first == f"GET /v1/whoami: {status} some_code: what happened (param=field.x) (request_id={err.request_id})"
         )
+        assert hint == endor.errors.report_hint(err.request_id)
         assert repr(err).startswith(cls.__name__)
         assert isinstance(err, endor.EndorError)
 
@@ -273,7 +274,7 @@ class TestErrors:
 
     def test_unexpected_error_shapes(self) -> None:
         err = APIError(500, {"message": "flat"}, httpx.Headers())
-        assert err.message == "flat" and err.code is None and str(err) == "500: flat"
+        assert err.message == "flat" and err.code is None and str(err).split("\n")[0] == "500: flat"
         err = APIError(500, {"error": "plain string"}, None)
         assert err.message == "plain string"
         err = APIError(500, {"weird": "x" * 300}, None)

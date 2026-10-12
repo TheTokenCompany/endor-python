@@ -66,6 +66,8 @@ __all__ = [
     "DownloadedFile",
     "UsageRow",
     "WhoAmI",
+    "UserReportKind",
+    "UserReportReceipt",
     "FutureInfo",
     "question_dict",
     "option_keys",
@@ -703,6 +705,20 @@ class WhoAmI(_View):
     for the whole org) and the other ``..._per_minute``."""
     managed_projects: bool = False
     """Whether managed projects can be created here (they are coming soon where they can't)."""
+
+
+UserReportKind = Literal["bug", "confusing", "works"]
+"""What a report says: ``bug`` (Endor did something unexpected), ``confusing`` (the docs, a message or the API are
+unclear) or ``works`` (an integration runs as it should)."""
+
+
+class UserReportReceipt(_View):
+    """The API's answer to a report (``endor.user_report``, ``client.user_report``)."""
+
+    id: str
+    """The report's id (``urep_...``)."""
+    message: str
+    """A thank-you from the Endor team."""
 
 
 class FutureInfo(_View):

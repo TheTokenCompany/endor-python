@@ -13,7 +13,9 @@
       OperationFailedError (code, future): a training or evaluation operation failed or was cancelled
 
 Every API error body is ``{"error": {"code": "<stable_code>", "message": "<for people>", "param"?: "<field>"}}``.
-``APIError.code`` is the stable code, meant for programs; ``str(error)`` is for people.
+``APIError.code`` is the stable code, meant for programs; ``str(error)`` is for people (and coding agents): it ends
+with one line saying how to tell the Endor team when something didn't work as expected (``endor.user_report``).
+``APIError.message`` is the server's message alone, for showing to your own users.
 """
 
 from __future__ import annotations
@@ -50,11 +52,40 @@ __all__ = [
     "OperationFailedError",
     "DownloadError",
     "api_error",
+    "report_hint",
 ]
+
+USER_REPORTS_ENDPOINT = "POST /v1/user_reports"
+
+
+def report_hint(request_id: str | None = None, *, cli: bool = False) -> str:
+    """The line that ends every error's ``str()``: how to tell the Endor team (``endor.user_report``, or
+    ``endor user-report`` in the CLI), with the request id when there is one."""
+    lead = "If Endor did something you didn't expect, or this message is unclear, tell the Endor team: "
+    if cli:
+        rid = f" --request-id {request_id}" if request_id else ""
+        return lead + f'endor user-report "what you did, what happened, what you expected" --kind bug{rid}'
+    rid = f', request_id="{request_id}"' if request_id else ""
+    return lead + f'endor.user_report("what you did, what happened, what you expected", kind="bug"{rid})'
 
 
 class EndorError(Exception):
-    """Base class for every error the SDK raises."""
+    """Base class for every error the SDK raises. ``str(error)`` ends with ``report_hint``: one line on how to report
+    a problem to the Endor team."""
+
+    def _text(self) -> str:
+        """The error itself, without the report line."""
+        return super().__str__()
+
+    def _hint_request_id(self) -> str | None:
+        return None
+
+    def _with_hint(self) -> bool:
+        return True
+
+    def __str__(self) -> str:
+        text = self._text()
+        return f"{text}\n{report_hint(self._hint_request_id())}" if self._with_hint() else text
 
 
 class APIError(EndorError):
@@ -93,7 +124,7 @@ class APIError(EndorError):
         v = self.headers.get(HEADER_REQUEST_ID)
         return str(v) if v is not None else None
 
-    def __str__(self) -> str:
+    def _text(self) -> str:
         parts = [str(self.status)]
         if self.code:
             parts.append(self.code)
@@ -106,8 +137,14 @@ class APIError(EndorError):
             text += f" (request_id={self.request_id})"
         return text
 
+    def _hint_request_id(self) -> str | None:
+        return self.request_id
+
+    def _with_hint(self) -> bool:
+        return self.endpoint != USER_REPORTS_ENDPOINT  # a failed report says nothing about reporting it
+
     def __repr__(self) -> str:
-        return f"{type(self).__name__}({str(self)!r})"
+        return f"{type(self).__name__}({self._text()!r})"
 
 
 class BadRequestError(APIError):
@@ -240,7 +277,7 @@ class OperationFailedError(EndorError):
         """Whether retrying the same operation on the same run makes sense (only ``oom`` with a smaller batch)."""
         return self.code == "oom"
 
-    def __str__(self) -> str:
+    def _text(self) -> str:
         return f"{self.code}: {self.message}" if self.code else self.message
 
 
