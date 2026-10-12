@@ -3,6 +3,9 @@
 Each request carries the SDK identity headers (``_headers.py``), the public method that caused it
 (``X-Endor-SDK-Method``), a client request id that stays the same across retries, and, for resource-creating
 POSTs, an ``Idempotency-Key`` so a retried create never makes a duplicate.
+
+The transport remembers its latest request id and its latest failure (``LastCall``: ids, status, code and endpoint,
+never a body or a key), and so does the process (``LAST``), so a report (``_report.py``) can say what it is about.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ import logging
 import time
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -33,8 +37,41 @@ from ._retry import RetryPolicy
 GZIP_THRESHOLD = 32 * 1024  # bytes; smaller bodies are not worth compressing
 
 
+@dataclass
+class LastCall:
+    """What the SDK knows of its latest requests, for reports: never a body or a key."""
+
+    request_id: str | None = None
+    """The server's request id of the latest response."""
+    failed_request_id: str | None = None
+    """The server's request id of the latest failed response (None after a connection error)."""
+    error: dict[str, Any] | None = None
+    """The latest failure: ``status`` (None without a response), ``code``, ``endpoint`` and ``sdk_method``."""
+
+    def response(self, r: httpx.Response, endpoint: str, method_name: str | None) -> None:
+        rid = r.headers.get(HEADER_REQUEST_ID)
+        self.request_id = str(rid) if rid is not None else None
+        if not r.is_success:
+            self.failed_request_id = self.request_id
+            self.error = {
+                "status": r.status_code,
+                "code": _error_code(r),
+                "endpoint": endpoint,
+                "sdk_method": method_name,
+            }
+
+    def no_response(self, exc: Exception, endpoint: str, method_name: str | None) -> None:
+        self.failed_request_id = None
+        self.error = {"status": None, "code": type(exc).__name__, "endpoint": endpoint, "sdk_method": method_name}
+
+
+LAST = LastCall()
+"""The latest request of any client in this process (``endor.report`` without a client reads it)."""
+
+
 class Transport:
-    """Sync and async HTTP for the Endor API. Not part of the public surface."""
+    """Sync and async HTTP for the Endor API. Not part of the public surface. An empty ``api_key`` sends no
+    ``Authorization`` header (anonymous reports)."""
 
     def __init__(
         self,
@@ -62,6 +99,8 @@ class Transport:
         self._atransport = async_transport
         self._owns_client = http_client is None
         self._owns_aclient = async_http_client is None
+        self.last = LastCall()
+        """This transport's latest request and failure."""
 
     # ------------------------------------------------------------------ clients
     @property
@@ -99,7 +138,8 @@ class Transport:
         h: dict[str, str] = {**self._user_headers, **(extra or {})}
         h.update(identity_headers())
         h.update(context_headers(method_name))
-        h["Authorization"] = f"Bearer {self.api_key}"
+        if self.api_key:
+            h["Authorization"] = f"Bearer {self.api_key}"
         h["Accept"] = "application/json"
         h[HEADER_CLIENT_REQUEST_ID] = request_id
         if attempt:
@@ -143,6 +183,15 @@ class Transport:
             return E.APITimeoutError(timeout)
         return E.APIConnectionError(f"connection error: {type(exc).__name__}: {exc}")
 
+    def _remember(
+        self, r: httpx.Response | None, exc: Exception | None, endpoint: str, method_name: str | None
+    ) -> None:
+        for last in (self.last, LAST):
+            if r is not None:
+                last.response(r, endpoint, method_name)
+            elif exc is not None:
+                last.no_response(exc, endpoint, method_name)
+
     def _log(self, method: str, path: str, r: httpx.Response | None, started: float, exc: BaseException | None) -> None:
         ms = (time.monotonic() - started) * 1000
         if r is not None:
@@ -170,8 +219,10 @@ class Transport:
         timeout: float | None = None,
         retry: RetryPolicy | None = None,
         extra_headers: Mapping[str, str] | None = None,
+        remember: bool = True,
     ) -> Any:
-        """Send one request with retries. Returns the decoded JSON body (None for 204); raises ``APIError``."""
+        """Send one request with retries. Returns the decoded JSON body (None for 204); raises ``APIError``.
+        ``remember=False`` leaves ``last`` as it was (a report must not become the request it reports)."""
         policy = retry or self.retry
         endpoint = f"{method} {path}"
         request_id = str(uuid.uuid4())
@@ -204,10 +255,14 @@ class Transport:
                 self._log(method, path, None, t0, exc)
                 delay = policy.delay(attempt + 1, None)
                 if not (policy.retryable_exception(exc) and policy.allows(attempt + 1, started, delay)):
+                    if remember:
+                        self._remember(None, exc, endpoint, method_name)
                     raise self._network_error(exc, timeout if timeout is not None else self.timeout) from exc
                 time.sleep(delay)
             else:
                 self._log(method, path, r, t0, None)
+                if remember:
+                    self._remember(r, None, endpoint, method_name)
                 if r.is_success:
                     return self._result(r, endpoint)
                 delay = policy.delay(attempt + 1, r.headers)
@@ -234,6 +289,7 @@ class Transport:
         timeout: float | None = None,
         retry: RetryPolicy | None = None,
         extra_headers: Mapping[str, str] | None = None,
+        remember: bool = True,
     ) -> Any:
         policy = retry or self.retry
         endpoint = f"{method} {path}"
@@ -267,10 +323,14 @@ class Transport:
                 self._log(method, path, None, t0, exc)
                 delay = policy.delay(attempt + 1, None)
                 if not (policy.retryable_exception(exc) and policy.allows(attempt + 1, started, delay)):
+                    if remember:
+                        self._remember(None, exc, endpoint, method_name)
                     raise self._network_error(exc, timeout if timeout is not None else self.timeout) from exc
                 await asyncio.sleep(delay)
             else:
                 self._log(method, path, r, t0, None)
+                if remember:
+                    self._remember(r, None, endpoint, method_name)
                 if r.is_success:
                     return self._result(r, endpoint)
                 delay = policy.delay(attempt + 1, r.headers)
@@ -285,13 +345,19 @@ class Transport:
             logger.info("%s %s retry %d", method, path, attempt)
 
 
-def _final_error(r: httpx.Response) -> bool:
-    """Whether the error body carries a code that retrying can't fix (``limit_reached``, ``insufficient_balance``)."""
+def _error_code(r: httpx.Response) -> str | None:
+    """An error response's ``error.code``, or None."""
     try:
         err = r.json().get("error")
     except (ValueError, AttributeError):
-        return False
-    return isinstance(err, dict) and err.get("code") in NON_RETRYABLE_CODES
+        return None
+    code = err.get("code") if isinstance(err, dict) else None
+    return code if isinstance(code, str) else None
+
+
+def _final_error(r: httpx.Response) -> bool:
+    """Whether the error body carries a code that retrying can't fix (``limit_reached``, ``insufficient_balance``)."""
+    return _error_code(r) in NON_RETRYABLE_CODES
 
 
 def _clean(params: Mapping[str, Any] | None) -> dict[str, Any] | None:

@@ -215,6 +215,7 @@ class FakeEndor:
 
     projects: dict[str, dict] = field(default_factory=dict)
     wandb_connected: bool = False  # the org's W&B connection (dashboard only)
+    reports: list[dict] = field(default_factory=list)  # POST /v1/reports, with "org_id" (None: anonymous)
     datasets: dict[tuple[str, str], dict] = field(default_factory=dict)
     runs: dict[str, dict] = field(default_factory=dict)
     models: dict[str, dict] = field(default_factory=dict)
@@ -384,7 +385,10 @@ class FakeEndor:
                 raise fault
         try:
             auth = request.headers.get("authorization", "")
-            if not auth.startswith("Bearer ") or auth[7:] not in self.api_keys:
+            known = auth.startswith("Bearer ") and auth[7:] in self.api_keys
+            if request.method == "POST" and request.url.path == "/v1/reports":  # no key needed; a bad one: anonymous
+                return self._json(201, self.report(body, "org_test" if known else None))
+            if not known:
                 raise HTTPError(401, "unauthorized", "bad API key")
             idem = request.headers.get("idempotency-key")
             if idem and request.method == "POST" and idem in self.idempotency:
@@ -410,6 +414,19 @@ class FakeEndor:
         if e.param:
             err["param"] = e.param
         return httpx.Response(e.status, json={"error": err}, headers={"x-request-id": self.new_id("req"), **e.headers})
+
+    def report(self, body: Any, org_id: str | None) -> dict:
+        if not isinstance(body, dict) or body.get("kind") not in ("bug", "confusing", "works"):
+            raise HTTPError(422, "invalid_input", "kind must be bug, confusing or works", "kind")
+        message = body.get("message")
+        if not isinstance(message, str) or not 1 <= len(message) <= 4000:
+            raise HTTPError(422, "invalid_input", "message must be 1 to 4000 characters", "message")
+        context = body.get("context") or {}
+        if len(context) > 30 or any(len(k) > 64 or (isinstance(v, str) and len(v) > 500) for k, v in context.items()):
+            raise HTTPError(422, "invalid_input", "context is too big", "context")
+        rep = {"id": self.new_id("rep"), "org_id": org_id, **body}
+        self.reports.append(rep)
+        return {"id": rep["id"], "message": "Thanks: the Endor team reads every report."}
 
     # ------------------------------------------------------------------ routing
     def route(self, method: str, path: str, body: Any, params: dict[str, str]) -> tuple[int, Any]:

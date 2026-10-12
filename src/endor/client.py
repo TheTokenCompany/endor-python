@@ -5,6 +5,7 @@
     client.models.list()                                       # every name you can pass as model
     client.base_models()                                       # the base models, with limits and prices
     project = client.projects.get_or_create("tickets", base_models=["decider-2b"])   # datasets, runs, models
+    client.report("what you did, what happened, what you expected", kind="bug")      # tell the Endor team
 
 ``model`` always names a project: ``"<project>/<name>"`` (one saved model), ``"<project>/<base id>"`` (one of its base
 models) or ``"<project>"`` (a managed project's newest version, else its first base model). A bare base model id is
@@ -24,6 +25,7 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from . import _constants as C
+from . import _report
 from ._http import Transport
 from ._retry import RetryPolicy
 from .errors import EndorError, NotFoundError, ResponseValidationError
@@ -33,6 +35,8 @@ from .types import (
     JSONContent,
     ListModelsResponse,
     Question,
+    ReportKind,
+    ReportReceipt,
     SystemOneResponse,
     UsageRow,
     WhoAmI,
@@ -47,7 +51,12 @@ ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
 
 class EndorClient:
-    """The entry point. One instance per process is plenty; it is safe to share across threads."""
+    """The entry point. One instance per process is plenty; it is safe to share across threads.
+
+    When Endor doesn't do what you (or your coding agent) expected, or something is unclear, tell the Endor team with
+    ``client.report("what you did, what happened, what you expected", kind="bug")``; ``kind="works"`` once an
+    integration runs. Every error's ``str()`` ends with that hint, and ``endor.report`` works without a client or key.
+    """
 
     def __init__(
         self,
@@ -307,6 +316,48 @@ class EndorClient:
         }
         r = self._t.request("GET", "/v1/usage", params=params, method_name="client.usage")
         return [_parse(UsageRow, u, "GET /v1/usage") for u in r]
+
+    # ------------------------------------------------------------------ reports
+    def report(
+        self,
+        message: str,
+        *,
+        kind: ReportKind = "bug",
+        request_id: str | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> ReportReceipt:
+        """Tell the Endor team that something didn't work as expected (``kind="bug"``), was unclear
+        (``"confusing"``), or works (``"works"``): ``POST /v1/reports``, with this client's key so the team sees your
+        org.
+
+        Args:
+            message: What you did, what happened and what you expected (up to 4000 characters; longer is cut).
+            kind: ``"bug"``, ``"confusing"`` or ``"works"``.
+            request_id: The ``req_...`` id of the request it is about (an error's ``request_id``). Default: this
+                client's latest failed request (for ``"works"``, its latest request).
+            context: Extra details as short values: at most 30 keys in all, strings cut at 500 characters. The SDK
+                adds its version, Python's, the platform and the latest failure's status, code and endpoint; never
+                your key, a request body or a decision's content.
+
+        Returns:
+            A ``ReportReceipt`` with the report's ``id``.
+
+        Raises:
+            ValueError: An empty message, or an unknown ``kind``.
+            RateLimitError: Too many reports for now (``retry_after``); never retried.
+        """
+        return _report.send(self._t, message, kind, request_id, context, "client.report")
+
+    async def report_async(
+        self,
+        message: str,
+        *,
+        kind: ReportKind = "bug",
+        request_id: str | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> ReportReceipt:
+        """``report`` for async code."""
+        return await _report.send_async(self._t, message, kind, request_id, context, "client.report")
 
     # ------------------------------------------------------------------ lifecycle
     def close(self) -> None:

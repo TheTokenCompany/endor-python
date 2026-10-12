@@ -18,9 +18,12 @@ with project.runs.create(rank=16) as run:   # on the project's first base model;
         endor.gather(fb, opt)
     model = run.save_checkpoint("v1").result()                      # "tickets/v1"
 client.system_one(state, questions, model=model)
+
+endor.report("what you did, what happened, what you expected", kind="bug")   # tell the Endor team; no key needed
 """
 
 from . import data, metrics, recipes, types
+from ._report import report, report_async
 from ._retry import RetryPolicy
 from ._version import __version__
 from .client import EndorClient
@@ -74,6 +77,8 @@ from .types import (
     NoulCriteria,
     OptimStepOutput,
     ProjectInfo,
+    ReportKind,
+    ReportReceipt,
     RunInfo,
     Score,
     ScoreAnswer,
@@ -101,6 +106,10 @@ __all__ = [
     "gather",
     "gather_async",
     "RetryPolicy",
+    "report",
+    "report_async",
+    "ReportKind",
+    "ReportReceipt",
     # questions and answers
     "Image",
     "Noul",

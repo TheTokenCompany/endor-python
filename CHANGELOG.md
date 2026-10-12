@@ -5,6 +5,23 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-12
+
+Reports to the Endor team, for people and their coding agents.
+
+- `endor.report(message, *, kind="bug", request_id=None, context=None, api_key=None, base_url=None, timeout=None)`
+  and `client.report(message, *, kind="bug", request_id=None, context=None)` (and their `_async` variants) send
+  `POST /v1/reports`: `kind` is `bug`, `confusing` or `works`. They return a `ReportReceipt` (`id`, `message`).
+  `endor.report` needs no client and no key (anonymous; with `ENDOR_API_KEY` the team sees your org). By default a
+  report is about the latest failed request (the client's, or the process's for `endor.report`) and carries the SDK
+  and Python versions, the platform and that failure's status, code and endpoint; never a key, a request body or a
+  decision's content. A 429 is a `RateLimitError` and is never retried.
+- Every error's `str()` ends with one line saying how to report it, with the request id when there is one
+  (`endor.errors.report_hint`); `APIError.message` and the other attributes are unchanged, and `repr()` leaves the
+  line out.
+- CLI: `endor report "message" [--kind bug|confusing|works] [--request-id REQ]`, with or without `ENDOR_API_KEY`;
+  other commands' errors end with that command.
+
 ## [0.5.1] - 2026-10-10
 
 - Docs: managed projects are coming soon. `projects.create(kind="managed")` is refused by the API (422

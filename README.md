@@ -356,6 +356,32 @@ answers `503 warming_up` with `Retry-After`, and the SDK retries after that wait
 Retries are safe: creates carry an `Idempotency-Key`, and a run's compute calls carry a sequence number the server
 checks, so a retried request never runs twice.
 
+`str(error)` ends with one line on how to report the problem (below); `error.message` is the server's message
+alone, for showing to your own users.
+
+## Reporting problems
+
+If Endor does something you didn't expect, or the docs, an error message or the API are unclear, tell the Endor
+team. This is meant for you and for the coding agent you handed the integration to: every error's `str()` ends with
+the line below, so an agent sees it right where it gets stuck.
+
+```python
+endor.report("what you did, what happened, what you expected", kind="bug")       # no client or key needed
+client.report("the docs don't say how to label a score question", kind="confusing")
+client.report("the integration runs: tickets are routed with tickets/v1", kind="works")
+```
+
+`kind` is `bug` (Endor did something unexpected), `confusing` (something is unclear) or `works` (send one once an
+integration runs, so we know what worked). A report goes to `POST /v1/reports` with your message, the request it is
+about (`request_id=`, by default the latest failed request of the client, or of any client in the process for
+`endor.report`) and a small context: the SDK and Python versions, the platform, and that failure's status, code and
+endpoint, plus anything you pass as `context={...}` (short values). Never your API key, a request body or a
+decision's content. With a key (the client's, or `ENDOR_API_KEY`) the team sees your org; without one the report is
+anonymous. From a shell: `endor report "what happened" --kind bug [--request-id req_...]`.
+
+If you give a coding agent the Endor integration, add to its instructions: *"If Endor behaves unexpectedly or a step
+is unclear, report it with `endor.report(...)`; report `kind="works"` once the integration runs."*
+
 ## Configuration
 
 | Argument | Environment variable | Default |
@@ -381,7 +407,7 @@ Besides your API key and the request itself, every request carries:
   `X-Endor-Client-Request-Id` (the same on every retry of one call) and `X-Endor-Retry-Count` (on retries).
 
 `runs.create` also sends the run's settings and, unless `capture=False`, your git commit hash and a dirty flag
-(never file contents).
+(never file contents). A report (`endor.report`) sends only what "Reporting problems" lists.
 
 For every request, the API stores the request id, your org, the calling key, the route, the status and the latency,
 plus a `client` record with one field per header: `user_agent`, `sdk`, `sdk_version`, `runtime`, `interface`,
@@ -401,9 +427,10 @@ endor runs list PROJECT | show RUN_ID | close RUN_ID
 endor models list PROJECT | info MODEL | download MODEL [-o DIR] [--include-optimizer] | set-ttl MODEL SECONDS|none | delete MODEL
 endor eval PROJECT MODEL DATASET
 endor usage --start 2026-10-01 --end 2026-10-06 [--project P] [--csv]
+endor report "what you did, what happened, what you expected" [--kind bug|confusing|works] [--request-id REQ]
 ```
 
-`MODEL` is `<project>/<name>`, or `<project>/<base id>` for a base model of the project. Every command takes `-f json`. Training itself happens in Python. `endor runs close`
+`MODEL` is `<project>/<name>`, or `<project>/<base id>` for a base model of the project. Every command takes `-f json`; `endor report` also works without `ENDOR_API_KEY`. Training itself happens in Python. `endor runs close`
 frees a slot when a script left a run open. `usage --csv` columns are `hour, kind, project, base_model, model,
 training_run_id, input_tokens, gpu_seconds, continuous_learning, price_per_mtok, base_cost_usd,
 continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a managed project's decisions.
@@ -412,7 +439,8 @@ continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a man
 
 | Object | Members |
 |---|---|
-| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(starting_on, ending_before, project=None)`, `close()`, `aclose()`, context managers |
+| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(starting_on, ending_before, project=None)`, `report(message, *, kind="bug", request_id=None, context=None)`, `report_async`, `close()`, `aclose()`, context managers |
+| `endor.report(message, *, kind="bug", request_id=None, context=None, api_key=None, base_url=None, timeout=None)` | `endor.report_async(...)`; works without a key (anonymous); returns `ReportReceipt` (`id`, `message`) |
 | `client.projects` | `create(name, description=None, *, kind="custom", base_models=None)`, `get(name)`, `get_or_create(name, description=None, *, kind="custom", base_models=None)`, `list(limit=None, offset=0)` (all pages) |
 | `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `add_base_model(base_model)`, `remove_base_model(base_model)`, `update(*, description=None, paused=None, wandb=None)`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
 | `project.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
