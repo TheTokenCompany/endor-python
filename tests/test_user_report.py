@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 import endor
-from endor import EndorClient, NotFoundError, RateLimitError, RetryPolicy, cli
+from endor import AuthenticationError, EndorClient, NotFoundError, RateLimitError, RetryPolicy, cli
 from endor._http import LAST
 
 from .conftest import BASE_URL
@@ -63,26 +63,26 @@ def test_works_report_is_about_the_latest_request_and_no_failure(fake: FakeEndor
     assert rep["context"]["decisions_per_hour"] == 120 and rep["context"]["nested"] == "{'a': 1}"
 
 
-def test_endor_user_report_without_a_key_is_anonymous(fake: FakeEndor, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_endor_user_report_needs_a_key(fake: FakeEndor, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ENDOR_API_KEY", raising=False)
     c = make_client(fake)
     with pytest.raises(NotFoundError) as e:
         c.projects.get("nope")
+    mock = httpx.MockTransport(fake.handler)
+    with pytest.raises(endor.EndorError, match="no API key"):
+        endor.user_report("I can't find how to add a base model", base_url=BASE_URL, transport=mock)
+    assert not [r for r in fake.requests if r.path == "/v1/user_reports"]  # refused before any request
     receipt = endor.user_report(
-        "I can't find how to add a base model",
-        kind="confusing",
-        base_url=BASE_URL,
-        transport=httpx.MockTransport(fake.handler),
+        "I can't find how to add a base model", kind="confusing", api_key="edk_test", base_url=BASE_URL, transport=mock
     )
     assert receipt.id.startswith("urep_")
     rep = fake.user_reports[0]
-    assert rep["org_id"] is None and rep["kind"] == "confusing"
+    assert rep["org_id"] == "org_test" and rep["kind"] == "confusing"
     assert rep["request_id"] == e.value.request_id  # any client's latest failure in this process
     req = [r for r in fake.requests if r.path == "/v1/user_reports"][0]
-    assert "authorization" not in req.headers
-    # a bad key is no reason to fail: the API takes the report anonymously
-    endor.user_report("x", api_key="edk_revoked", base_url=BASE_URL, transport=httpx.MockTransport(fake.handler))
-    assert fake.user_reports[1]["org_id"] is None
+    assert req.headers["authorization"] == "Bearer edk_test"
+    with pytest.raises(AuthenticationError):
+        endor.user_report("x", api_key="edk_revoked", base_url=BASE_URL, transport=mock)
 
 
 async def test_async_reports(fake: FakeEndor, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -140,16 +140,10 @@ def test_cli_user_report(capsys: pytest.CaptureFixture[str], fake: FakeEndor, mo
     assert cli.main(["-f", "json", "user-report", "the docs skip auth", "--kind", "confusing"], client=c) == 0
     assert json.loads(capsys.readouterr().out)["id"].startswith("urep_")
     assert fake.user_reports[0]["kind"] == "confusing" and fake.user_reports[0]["context"]["interface"] == "cli"
-    # without a key (and without a client): anonymous, never "no API key"
+    # without a key, like every command
     monkeypatch.delenv("ENDOR_API_KEY", raising=False)
-    real = endor._user_report.user_report
-
-    def through_fake(message: str, **kw: object) -> endor.UserReportReceipt:
-        return real(message, base_url=BASE_URL, transport=httpx.MockTransport(fake.handler), **kw)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(endor._user_report, "user_report", through_fake)
-    assert cli.main(["user-report", "no key yet", "--request-id", "req_1"]) == 0
-    assert fake.user_reports[1]["org_id"] is None and fake.user_reports[1]["request_id"] == "req_1"
+    assert cli.main(["user-report", "no key yet", "--request-id", "req_1"]) == 1
+    assert "no API key" in capsys.readouterr().err and len(fake.user_reports) == 1
     # other commands' errors end with the CLI's way to report
     assert cli.main(["projects", "delete", "nope"], client=c) == 1
     err = capsys.readouterr().err

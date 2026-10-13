@@ -5,10 +5,10 @@ what works.
     client.user_report("the integration runs: 120 decisions an hour", kind="works")
 
 Meant for people and for their coding agents: every error's ``str()`` ends with a line saying how to report it
-(``errors.report_hint``). A report works without an API key (it is then anonymous); with one, the Endor team sees
-your org. It carries your message, the request it is about (by default the latest failed request of the client, or of
-the process for ``endor.user_report``) and a small context: the SDK and Python versions, the platform, and the latest
-failure's status, code and endpoint. Never your API key, a request body or a decision's content.
+(``errors.report_hint``). A report needs your API key, like every call, so the Endor team sees your org. It carries
+your message, the request it is about (by default the latest failed request of the client, or of the process for
+``endor.user_report``) and a small context: the SDK and Python versions, the platform, and the latest failure's
+status, code and endpoint. Never your API key, a request body or a decision's content.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from ._headers import _interface
 from ._http import LAST, LastCall, Transport
 from ._retry import RetryPolicy
 from ._version import __version__
-from .errors import ResponseValidationError
+from .errors import EndorError, ResponseValidationError
 from .types import UserReportKind, UserReportReceipt
 
 __all__ = ["user_report", "user_report_async", "KINDS"]
@@ -142,11 +142,12 @@ def _transport(
     transport: httpx.BaseTransport | None,
     async_transport: httpx.AsyncBaseTransport | None,
 ) -> Transport:
-    """A transport with the given key, else ENDOR_API_KEY, else none (anonymous): a report never fails for want of
-    a key."""
+    """A transport with the given key, else ENDOR_API_KEY; EndorError without one, as ``EndorClient``."""
     key = (api_key if api_key is not None else os.environ.get(C.API_KEY_ENV, "")).strip()
+    if not key:
+        raise EndorError(f"no API key: pass api_key=... or set {C.API_KEY_ENV}")
     if not key.isascii() or not key.isprintable() or " " in key:
-        key = ""
+        raise EndorError("the API key must be printable ASCII without whitespace")
     url = (base_url or os.environ.get(C.BASE_URL_ENV, "").strip() or C.DEFAULT_BASE_URL).rstrip("/")
     return Transport(
         key,
@@ -168,8 +169,8 @@ def user_report(
     timeout: float | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> UserReportReceipt:
-    """Tell the Endor team that something didn't work as expected, was unclear, or works. No client needed, and no
-    API key: with ``api_key`` (or ``ENDOR_API_KEY``) the team sees your org, without one the report is anonymous.
+    """Tell the Endor team that something didn't work as expected, was unclear, or works. No client needed; the API
+    key is ``api_key`` or ``ENDOR_API_KEY``.
 
     Args:
         message: What you did, what happened and what you expected (up to 4000 characters; longer is cut).
@@ -179,7 +180,7 @@ def user_report(
             in this process (for ``"works"``, the latest request).
         context: Extra details as short values (versions, settings, counts): at most 30 keys in all, strings cut at
             500 characters. Never put secrets or customer data here.
-        api_key, base_url: Default to ``ENDOR_API_KEY`` (none: anonymous) and ``ENDOR_BASE_URL``, then production.
+        api_key, base_url: Default to ``ENDOR_API_KEY`` and ``ENDOR_BASE_URL``, then production.
         timeout: Seconds for the request (default 30).
         transport: A custom ``httpx`` transport (mostly for tests).
 
@@ -188,7 +189,9 @@ def user_report(
 
     Raises:
         ValueError: An empty message, or an unknown ``kind``.
-        RateLimitError: Too many reports from this org or address for now (``retry_after``); never retried.
+        EndorError: No API key was given and ``ENDOR_API_KEY`` is not set.
+        AuthenticationError: The API key is not valid.
+        RateLimitError: Too many reports from this org for now (``retry_after``); never retried.
     """
     t = _transport(api_key, base_url, timeout, transport, None)
     try:

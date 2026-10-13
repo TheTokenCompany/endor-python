@@ -19,7 +19,7 @@ with project.runs.create(rank=16) as run:   # on the project's first base model;
     model = run.save_checkpoint("v1").result()                      # "tickets/v1"
 client.system_one(state, questions, model=model)
 
-endor.user_report("what you did, what happened, what you expected", kind="bug")   # tell the Endor team; no key needed
+endor.user_report("what you did, what happened, what you expected", kind="bug")   # tell the Endor team
 """
 
 from . import data, metrics, recipes, types
