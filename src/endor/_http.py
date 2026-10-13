@@ -71,7 +71,7 @@ LAST = LastCall()
 
 class Transport:
     """Sync and async HTTP for the Endor API. Not part of the public surface. An empty ``api_key`` sends no
-    ``Authorization`` header (anonymous reports)."""
+    ``Authorization`` header."""
 
     def __init__(
         self,

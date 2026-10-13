@@ -12,7 +12,7 @@
     endor user-report "what you did, what happened, what you expected" [--kind bug|confusing|works] [--request-id REQ]
 
 MODEL is "<project>/<name>", or "<project>/<base id>" for a base model of the project. Every command takes -f json.
-Credentials: ENDOR_API_KEY (and ENDOR_BASE_URL); `endor user-report` also works without a key (anonymous).
+Credentials: ENDOR_API_KEY (and ENDOR_BASE_URL).
 """
 
 from __future__ import annotations
@@ -133,17 +133,13 @@ def main(argv: Sequence[str] | None = None, client: EndorClient | None = None) -
     a = build_parser().parse_args(argv)
     try:
         with sdk_context(interface="cli"):
-            if a.cmd == "user-report":  # works without a key: before the client, which needs one
-                if client is not None:
-                    r = client.user_report(a.message, kind=a.kind, request_id=a.request_id)
-                else:
-                    r = _user_report.user_report(a.message, kind=a.kind, request_id=a.request_id)
-                _out(r, a.format)
-                return 0
             if client is None:
                 from .client import EndorClient
 
                 client = EndorClient()
+            if a.cmd == "user-report":
+                _out(client.user_report(a.message, kind=a.kind, request_id=a.request_id), a.format)
+                return 0
             _run(a, client)
     except EndorError as e:
         rid = e.request_id if isinstance(e, APIError) else None

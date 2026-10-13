@@ -5,6 +5,12 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-13
+
+- User reports need an API key, as the API now requires: `endor.user_report` without `api_key` or `ENDOR_API_KEY`
+  raises `EndorError` ("no API key", as `EndorClient`) before sending, and a key the API refuses is an
+  `AuthenticationError`. `endor user-report` needs `ENDOR_API_KEY` like every other command.
+
 ## [0.6.0] - 2026-10-12
 
 User reports to the Endor team, for people and their coding agents.

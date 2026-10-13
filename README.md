@@ -366,7 +366,7 @@ team. This is meant for you and for the coding agent you handed the integration 
 the line below, so an agent sees it right where it gets stuck.
 
 ```python
-endor.user_report("what you did, what happened, what you expected", kind="bug")       # no client or key needed
+endor.user_report("what you did, what happened, what you expected", kind="bug")       # no client needed
 client.user_report("the docs don't say how to label a score question", kind="confusing")
 client.user_report("the integration runs: tickets are routed with tickets/v1", kind="works")
 ```
@@ -376,8 +376,7 @@ integration runs, so we know what worked). A report goes to `POST /v1/user_repor
 about (`request_id=`, by default the latest failed request of the client, or of any client in the process for
 `endor.user_report`) and a small context: the SDK and Python versions, the platform, and that failure's status, code and
 endpoint, plus anything you pass as `context={...}` (short values). Never your API key, a request body or a
-decision's content. With a key (the client's, or `ENDOR_API_KEY`) the team sees your org; without one the report is
-anonymous. From a shell: `endor user-report "what happened" --kind bug [--request-id req_...]`.
+decision's content. It needs your API key (the client's, or `ENDOR_API_KEY`). From a shell: `endor user-report "what happened" --kind bug [--request-id req_...]`.
 
 If you give a coding agent the Endor integration, add to its instructions: *"If Endor behaves unexpectedly or a step
 is unclear, report it with `endor.user_report(...)`; report `kind="works"` once the integration runs."*
@@ -440,7 +439,7 @@ continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a man
 | Object | Members |
 |---|---|
 | `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
-| `endor.user_report(message, *, kind="bug", request_id=None, context=None, api_key=None, base_url=None, timeout=None)` | `endor.user_report_async(...)`; works without a key (anonymous); returns `UserReportReceipt` (`id`, `message`) |
+| `endor.user_report(message, *, kind="bug", request_id=None, context=None, api_key=None, base_url=None, timeout=None)` | `endor.user_report_async(...)`; returns `UserReportReceipt` (`id`, `message`) |
 | `client.projects` | `create(name, description=None, *, kind="custom", base_models=None)`, `get(name)`, `get_or_create(name, description=None, *, kind="custom", base_models=None)`, `list(limit=None, offset=0)` (all pages) |
 | `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `add_base_model(base_model)`, `remove_base_model(base_model)`, `update(*, description=None, paused=None, wandb=None)`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
 | `project.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
