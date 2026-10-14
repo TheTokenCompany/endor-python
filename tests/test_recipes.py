@@ -6,8 +6,23 @@ import endor
 from endor import EndorClient
 from endor.recipes import DistillConfig, SupervisedConfig, distill, supervised
 
-from .conftest import DEPT, rows, unique, wait_closed
+from .conftest import DEPT, requests_to, rows, unique, wait_closed
 from .fake_api import FakeEndor
+
+SHORT = {"forward_backward": "fb", "optim_step": "opt", "forward": "fwd", "save_checkpoint": "save"}
+
+
+def run_calls(fake: FakeEndor) -> list[str]:
+    """The recipe's run calls in the order sent (the order the trainer runs them), with "wait" where it polled
+    futures (consecutive polls once)."""
+    out: list[str] = []
+    for r in fake.requests:
+        kind = r.path.rsplit("/", 1)[-1]
+        if r.method == "POST" and r.path.startswith("/v1/runs/") and kind in SHORT:
+            out.append(SHORT[kind])
+        elif r.path.startswith("/v1/futures") and out and out[-1] != "wait":
+            out.append("wait")
+    return out
 
 
 def test_supervised_train(client: EndorClient, fake: FakeEndor) -> None:
@@ -30,6 +45,51 @@ def test_supervised_train(client: EndorClient, fake: FakeEndor) -> None:
     base_calls = [x.body["model"] for x in fake.requests if x.path == "/v1/systemone"]
     assert base_calls and set(base_calls) == {f"{cfg.project}/decider-2b"}  # the baseline goes through the project
     assert {e.model for e in evals} >= {f"{cfg.project}/decider-2b"}
+
+
+def test_supervised_sends_the_next_step_before_reading_the_last(client: EndorClient, fake: FakeEndor) -> None:
+    cfg = SupervisedConfig(project=unique("sl"), batch_size=4, eval_every=2, eval_base=False, model_name="m")
+    r = supervised.train(cfg, rows(8), eval_rows=rows(1), client=client)  # 16 datums: 4 steps
+    assert [h["step"] for h in r.history] == [2, 4]
+    step = ["fb", "opt"]
+    # Step 2 is sent before step 1 is read. A held-out evaluation reads every step first and runs right after its
+    # step's optim_step, as before.
+    held_out = ["wait", "fwd", "wait"]
+    assert run_calls(fake) == step + step + held_out + step + step + held_out + ["save", "wait"]
+    assert cfg.steps_in_flight == 2 and fake.runs[r.run_id]["config"]["steps_in_flight"] == 2
+
+
+def test_supervised_with_one_step_in_flight_waits_for_each_step(client: EndorClient, fake: FakeEndor) -> None:
+    cfg = SupervisedConfig(project=unique("sl"), batch_size=4, eval_every=2, eval_base=False, steps_in_flight=1)
+    r = supervised.train(cfg, rows(8), eval_rows=rows(1), client=client)
+    assert [h["step"] for h in r.history] == [2, 4]
+    step = ["fb", "opt", "wait"]
+    held_out = ["fwd", "wait"]
+    assert run_calls(fake) == step + step + held_out + step + step + held_out + ["save", "wait"]
+    with pytest.raises(ValueError, match="in_flight"):
+        supervised.train(SupervisedConfig(project="x", steps_in_flight=0), rows(4), client=client)
+
+
+def test_supervised_raises_a_failed_step_at_that_step(
+    client: EndorClient, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sent = FakeEndor.forward
+
+    def third_fails(self: FakeEndor, run: dict, body: dict, kind: str) -> dict:
+        ref = sent(self, run, body, kind)
+        if kind == "forward_backward" and len(requests_to(self, "/forward_backward")) == 3:
+            self.fail_future(ref["future_id"], "oom", "out of memory")
+        return ref
+
+    monkeypatch.setattr(FakeEndor, "forward", third_fails)
+    cfg = SupervisedConfig(project=unique("sl"), batch_size=4, eval_base=False, epochs=2)  # 8 steps
+    with pytest.raises(endor.OperationFailedError) as e:
+        supervised.train(cfg, rows(8), eval_rows=rows(1), client=client)
+    assert e.value.code == "oom"
+    progress = capsys.readouterr().err
+    assert "step 2/8" in progress and "step 3/8" not in progress  # steps 1 and 2 were read and logged
+    assert len(requests_to(fake, "/forward_backward")) == 4  # step 4 was in flight
+    assert [r["status"] for r in fake.runs.values()] == ["closed"]
 
 
 def test_supervised_gives_a_project_without_a_base_one(client: EndorClient) -> None:

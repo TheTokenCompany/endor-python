@@ -218,7 +218,9 @@ with warmup then linear decay, batches of 16), scores the held-out rows during a
 final model. Every number appears on the run's dashboard page. `SupervisedConfig` has the knobs: base model, rank,
 learning rate and schedule, batch size, epochs, loss, how often to evaluate. The recipe sets the run's
 `total_steps` from the data size and epochs, so the dashboard shows a progress bar with an ETA, and it prints a
-progress line (`step 37/120 (31%) · loss 0.4120 · ~3 min left`; `progress=False` turns it off).
+progress line (`step 37/120 (31%) · loss 0.4120 · ~3 min left`; `progress=False` turns it off). It sends each step
+before the last one's results are read (`steps_in_flight=2`), so the trainer doesn't wait for a round trip between
+steps; results, metrics and evaluations are the same as with `steps_in_flight=1`.
 
 ## Training costs and limits
 
@@ -250,10 +252,14 @@ train, heldout = endor.data.split(rows, holdout=0.1)
 train, heldout = endor.data.rows_to_datums(train), endor.data.rows_to_datums(heldout)
 
 with project.runs.create(rank=16) as run:          # on the project's first base model, or base_model="..."
+    steps = endor.Steps()                           # keeps 2 steps in flight
     for batch in endor.data.batches(train, 16):
         fb = run.forward_backward(batch)            # gradients accumulate on the trainer
         opt = run.optim_step(learning_rate=1e-4)    # AdamW step, then zero gradients
-        out, step = endor.gather(fb, opt)           # submit both, then wait once
+        for out, step in steps.add(fb, opt):        # sent; returns the previous step's results
+            print(step.step, out.loss)
+    for out, step in steps.wait():                  # the last step
+        print(step.step, out.loss)
     scored = run.forward(heldout).result()          # option probabilities with the current adapter
     metrics = endor.metrics.decision_metrics(scored.probabilities, [d.target for d in heldout])
     run.log({"heldout/accuracy": metrics["accuracy"]})   # at the run's current step
@@ -271,6 +277,12 @@ fresh run defaults to rank 16, alpha 32, attention and MLP layers, no readout.
 - `forward`, `forward_backward`, `optim_step` and `save_checkpoint` return futures. Call `.result()`, `await` them,
   or wait for several with `endor.gather(...)`. Each has an `_async` variant that submits without blocking. A future
   can stay pending while a GPU starts (usually under a minute); `.result()` keeps waiting.
+- `endor.Steps()` sends each step before the last one's results are read, so the trainer starts the next step as soon
+  as it finishes one instead of waiting for your round trip (most of a second per step). `steps.add(fb, opt)` returns
+  the results of the steps it waited for (the step before, once two are out), oldest first, and `steps.wait()` the
+  rest; a failed step raises from the call that reads it. A call you send between steps (`run.forward`,
+  `save_checkpoint`) runs after every step added so far. `Steps(in_flight=1)` waits for each step, like
+  `endor.gather(fb, opt)` after every step. `add_async` and `wait_async` are for async code.
 - Gradients are the weighted mean over every datum since the last `optim_step`, so splitting a batch across calls
   changes nothing. `optim_step` with nothing accumulated fails with `no_gradients`. Batches over 1,024 datums are
   split for you; every datum is checked locally before any chunk is sent, so a bad datum never leaves half a batch
@@ -447,6 +459,7 @@ continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a man
 | `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `download(model, path, include_optimizer=False)`, `delete(model)`; `model` is a name (a base id for a base model) or `<project>/<name>` |
 | `Run` | `.id`, `.project`, `.info_`, `.ready`, `.next_seq_id`, `forward(data, loss_fn)`, `forward_backward(data, loss_fn)`, `optim_step(adam_params=None, *, learning_rate=None)`, `save_checkpoint(name, *, include_optimizer, ttl_seconds, user_metadata)` → `APIFuture[str]`, the `_async` variants of those four, `close(*, wait=False, timeout=None)`, `close_async(...)`, `info()`, `log(metrics, step=None)`, `metrics(keys=None, since_step=None)`, `log_eval(model, results, *, step, name)`, sync and async context manager |
 | `APIFuture[T]` | `result(timeout=None)`, `await f`, `result_async(timeout)`, `done()`, `info`, `cancel()`, `cancel_async()`, `APIFuture.completed(value)`; `endor.gather(*futures)`, `endor.gather_async(*futures)` |
+| `endor.Steps(in_flight=2)` | `add(*futures)` → the results of the steps it read, `wait()` → the rest, `add_async`, `wait_async`, `len(steps)` |
 | `endor.data` | `to_row`, `load_rows(path)`, `save_rows(path, rows)`, `label_target(question, label)`, `row_to_datums(row)`, `rows_to_datums(rows)`, `split(rows, holdout=0.1, seed=0)`, `batches(items, size, *, shuffle=True, seed=0)` |
 | `endor.metrics` | `decision_metrics(probs, targets, bins=10)` → `{n, accuracy, nll, brier, ece, mean_confidence, selective}` |
 | `endor.recipes.supervised` | `SupervisedConfig`, `SupervisedResult`, `train(cfg, rows, eval_rows=None, client=None)`, `evaluate_run(run, datums)`, `evaluate_model(client, model, rows)`, `lr_at(cfg, step, total)` |

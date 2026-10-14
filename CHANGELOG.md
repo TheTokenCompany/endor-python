@@ -5,6 +5,20 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-14
+
+Training steps no longer wait for each other's results.
+
+- `endor.Steps(in_flight=2)` keeps up to `in_flight` training steps sent and not yet read: `steps.add(fb, opt)`
+  takes a step's futures and returns the results of the steps it waited for (the step before, once two are out),
+  oldest first, as `endor.gather` returns them; `steps.wait()` reads the rest (`add_async` and `wait_async` for async
+  code). The trainer has the next step queued when it finishes one, instead of waiting for your round trip between
+  steps (about 0.7 s a step). A failed step raises from the call that reads it, and a call sent between two `add`
+  calls runs after every step added so far.
+- `recipes.supervised.train` (and `distill`) sends each step before the last one's results are read:
+  `SupervisedConfig.steps_in_flight`, default 2 (1 waits for each step, as before). Results, metrics, the progress
+  line and the held-out evaluations are the same; an evaluation reads every step first and runs right after its step.
+  A step that fails still raises at that step; the one step sent after it runs before the run is closed.
 ## [0.6.1] - 2026-10-13
 
 - User reports need an API key, as the API now requires: `endor.user_report` without `api_key` or `ENDOR_API_KEY`

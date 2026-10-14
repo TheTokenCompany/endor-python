@@ -6,6 +6,8 @@
     fb.result(); opt.result()                         # submit both, then wait: no idle round trip
     model = run.save_checkpoint("v1").result()        # "tickets/v1", usable with client.system_one at once
 
+In a loop, ``endor.Steps`` sends each step before the last one's results are read (see its docstring).
+
 Every compute or save call carries a sequence number. The trainer executes calls strictly in that order, and the
 server accepts a call only when its number is the next one it expects. A ``Run`` handle starts from the server's
 ``next_seq_id``, holds its lock from assigning a number until the request returns, and advances only on success,
