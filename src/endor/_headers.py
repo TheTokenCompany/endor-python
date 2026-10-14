@@ -12,6 +12,7 @@ Every request carries (see "What the SDK sends" in the README):
     X-Endor-Client-Request-Id: <uuid4, the same across retries of one logical call>
     X-Endor-Retry-Count:       <n, only on retries>
     Idempotency-Key:           <uuid4, on resource-creating POSTs>
+    X-Endor-Client-Latency:    <request id>=<ms>, the previous response's end-to-end time, once (``_http.py``)
 """
 
 from __future__ import annotations

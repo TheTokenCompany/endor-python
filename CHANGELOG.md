@@ -5,6 +5,11 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Every request is timed end to end, from sending it to reading the response, and that time is sent with the next
+  request, once, as `X-Endor-Client-Latency: <request id>=<ms>`, so the dashboard can show the latency your app sees
+  next to Endor's own. Nothing waits for it and it never raises. `EndorClient(report_latency=False)` or
+  `ENDOR_REPORT_LATENCY=0` turns it off.
+
 ## [0.6.1] - 2026-10-13
 
 - User reports need an API key, as the API now requires: `endor.user_report` without `api_key` or `ENDOR_API_KEY`
