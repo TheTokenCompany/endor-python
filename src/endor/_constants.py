@@ -40,6 +40,9 @@ MAX_FUTURES_PER_RETRIEVE = 256
 FUTURE_POLL_WAIT_S = 25.0  # server-side long poll per request (server clamps at 30)
 MAX_ERROR_BODY_LENGTH = 200
 LIST_PAGE_SIZE = 100  # page size when a list call pages through every item
+# An open run tells the API this often that its client is still there; the API closes a parked run after 5 minutes
+# without a call or a heartbeat.
+RUN_HEARTBEAT_S = 60.0
 
 # Model names saved from the SDK: the API's name pattern, and never "base" (reserved by the API, as are the base model
 # ids: ``<project>/<base id>`` calls a base model).

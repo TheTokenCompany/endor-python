@@ -20,12 +20,14 @@ import math
 import re
 import threading
 import time
+import weakref
 from collections.abc import Callable, Iterable
 from typing import Any
 
 from . import _constants as C
 from ._http import Transport
 from ._log import logger
+from .errors import ConflictError, NotFoundError
 from .futures import APIFuture
 from .types import (
     AdamParams,
@@ -53,9 +55,11 @@ class Run:
     """A training run. Get one from ``project.runs.create(...)``, ``project.runs.get(id)`` or
     ``project.runs.list()``.
 
-    Training is billed for the GPU time its calls use. A run without calls is parked (``idle``) after 2 minutes and
-    closed after an hour, and an org can have at most 5 runs that aren't closed (idle ones included). Use it as a
-    context manager so it is closed even on errors::
+    Training is billed for the GPU time its calls use. A run without calls is parked (``idle``) after 2 minutes, and an
+    org can have at most 5 runs that aren't closed (idle ones included). While a run is open (from ``runs.create``, or
+    in a ``with`` block) a background thread sends a heartbeat every minute, so it stays open however long you wait
+    between calls; a run whose process ended without closing it is closed 5 minutes later. Use it as a context
+    manager so it is closed even on errors::
 
         with project.runs.create(base_model="jev-9b") as run:
             ...
@@ -78,17 +82,21 @@ class Run:
         self._alock: asyncio.Lock | None = None
         self._last_optim_seq: int | None = None
         self._last_save_seq: int | None = None
+        self._heartbeat: threading.Thread | None = None
+        self._stop_heartbeat = threading.Event()
 
     def __repr__(self) -> str:
         return f"Run(id={self.id!r}, project={self.project!r}, base_model={self.info_.base_model!r})"
 
     def __enter__(self) -> Run:
+        self._start_heartbeat()
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self._close_on_exit(exc is not None)
 
     async def __aenter__(self) -> Run:
+        self._start_heartbeat()
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
@@ -109,6 +117,17 @@ class Run:
             self.close()
         except Exception:
             logger.warning("run %s: close failed; close it with `endor runs close %s`", self.id, self.id, exc_info=True)
+
+    def _start_heartbeat(self) -> None:
+        """Tell the API every ``RUN_HEARTBEAT_S`` that this client is still there, from a daemon thread, until the run
+        is closed (here or elsewhere) or this handle is garbage collected. Once per handle."""
+        if self._heartbeat is not None or self._stop_heartbeat.is_set() or self.info_.status in _FINAL:
+            return
+        weakref.finalize(self, self._stop_heartbeat.set)  # a handle nobody holds stops, so the API closes its run
+        self._heartbeat = threading.Thread(
+            target=_beat, args=(self._t, self.id, self._stop_heartbeat), name=f"endor-heartbeat-{self.id}", daemon=True
+        )
+        self._heartbeat.start()
 
     @property
     def next_seq_id(self) -> int:
@@ -204,6 +223,7 @@ class Run:
 
         Logs a warning when this handle stepped the optimizer after its last save.
         """
+        self._stop_heartbeat.set()
         self._warn_unsaved()
         self.info_ = RunInfo.model_validate(
             self._t.request("POST", f"/v1/runs/{self.id}/close", method_name="run.close")
@@ -216,6 +236,7 @@ class Run:
 
     async def close_async(self, *, wait: bool = False, timeout: float | None = None) -> RunInfo:
         """``close`` for async code."""
+        self._stop_heartbeat.set()
         self._warn_unsaved()
         self.info_ = RunInfo.model_validate(
             await self._t.arequest("POST", f"/v1/runs/{self.id}/close", method_name="run.close")
@@ -409,6 +430,19 @@ class Run:
             "ttl_seconds": ttl_seconds,
             "user_metadata": user_metadata or {},
         }
+
+
+def _beat(t: Transport, run_id: str, stop: threading.Event) -> None:
+    """The heartbeat thread: it holds the transport, never the ``Run``. A failure is logged at debug and the next beat
+    tries again; a run the API reports closed (409) or gone (404) stops it."""
+    while not stop.wait(C.RUN_HEARTBEAT_S):
+        try:
+            t.request("POST", f"/v1/runs/{run_id}/heartbeat", method_name="run.heartbeat", remember=False)
+        except (ConflictError, NotFoundError):
+            logger.debug("run %s: heartbeat stopped: the run is closed or gone", run_id, exc_info=True)
+            return
+        except Exception:
+            logger.debug("run %s: heartbeat failed", run_id, exc_info=True)
 
 
 def check_model_name(name: str) -> None:
