@@ -596,6 +596,8 @@ class FakeEndor:
                 return 200, self.run_view(run)
             if tail == ["forward"] or tail == ["forward_backward"]:
                 return 202, self.forward(run, body, tail[0])
+            if tail == ["predict"]:
+                return 202, self.predict(run, body)
             if tail == ["optim_step"]:
                 return 202, self.optim_step(run, body)
             if tail == ["save_checkpoint"]:
@@ -1065,6 +1067,32 @@ class FakeEndor:
             return {"outputs": outs, "metrics": metrics}
 
         return self.accept(run, body, kind, result)
+
+    def predict(self, run: dict, body: dict) -> dict:
+        """Decision rows answered as /v1/systemone answers them (uniform), in order; 1..1024 questions per call."""
+        rows = body.get("rows")
+        if not isinstance(rows, list) or not rows:
+            raise HTTPError(422, "invalid_input", "send at least one row", "rows")
+        if sum(len(r.get("questions") or {}) for r in rows) > 1024:
+            raise HTTPError(422, "invalid_input", "at most 1024 questions per call, across rows", "rows")
+        base = BASE_MODELS[run["base_model"]]
+        for i, r in enumerate(rows):
+            if set(r) - {"state", "questions", "id", "labels", "weight"} or "state" not in r:
+                raise HTTPError(422, "invalid_input", "a row is {state, questions}", f"rows.{i}")
+            if not isinstance(r.get("questions"), dict) or not 1 <= len(r["questions"]) <= 64:
+                raise HTTPError(422, "invalid_input", "send 1..64 questions", f"rows.{i}.questions")
+            if find_images(r["state"]):
+                raise HTTPError(422, "invalid_input", "images aren't supported in predict yet", f"rows.{i}.state")
+            for name, q in r["questions"].items():
+                where = f"rows[{i}].questions.{name}"
+                check_question(q, where)
+                if len(option_keys(q)) > base["max_options"]:
+                    raise HTTPError(422, "invalid_options", f"{where}: more than {base['max_options']} options", where)
+
+        def result() -> dict:
+            return {"answers": [{n: answer_from_probs(q, uniform(q)) for n, q in r["questions"].items()} for r in rows]}
+
+        return self.accept(run, body, "predict", result)
 
     def optim_step(self, run: dict, body: dict) -> dict:
         adam = body.get("adam_params") or {}

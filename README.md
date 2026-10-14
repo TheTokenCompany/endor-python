@@ -308,6 +308,11 @@ fresh run defaults to rank 16, alpha 32, attention and MLP layers, no readout.
 - Losses: `cross_entropy` (hard or soft targets) and `brier`.
 - `optim_step` takes `AdamParams` (betas, epsilon, weight decay, gradient clipping) and the learning rate, which you
   pass every step: the schedule is yours.
+- `run.predict(rows)` answers decision rows with the current adapter before you save it: a future of one
+  `{name: answer}` per row, in order, as `client.system_one` answers them (labels are ignored). The answers match
+  the model saved at that point within the usual train/serve tolerance, a few hundredths at most in a probability
+  (bf16 rounding of the batch shape). It runs on the training GPU in order with the run's other calls and is billed
+  as training GPU time, like `forward`. Lists over 1,024 questions are split for you. Text and JSON states only.
 - `run.forward` scores data with the current adapter without saving a model. `project.evaluate(model, dataset)`
   scores a saved model on a stored dataset server-side (or on `rows=` sent with the call).
 - `run.close()` releases the trainer (a `with` block does it for you). Unsaved progress is lost; the SDK warns when
@@ -476,7 +481,7 @@ continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a man
 | `project.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
 | `project.runs` | `create(base_model=None, *, rank, alpha, seed, train_attn, train_mlp, train_readout, from_model, include_optimizer, name, tags, config, user_metadata, total_steps, wandb, wait)` → `Run`, `get(run_id)`, `list(tag=None, limit=None, offset=0)` |
 | `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `download(model, path, include_optimizer=False)`, `delete(model)`; `model` is a name (a base id for a base model) or `<project>/<name>` |
-| `Run` | `.id`, `.project`, `.info_`, `.ready`, `.next_seq_id`, `forward(data, loss_fn)`, `forward_backward(data, loss_fn)`, `optim_step(adam_params=None, *, learning_rate=None)`, `save_checkpoint(name, *, include_optimizer, ttl_seconds, user_metadata)` → `APIFuture[str]`, the `_async` variants of those four, `close(*, wait=False, timeout=None)`, `close_async(...)`, `info()`, `log(metrics, step=None)`, `metrics(keys=None, since_step=None)`, `log_eval(model, results, *, step, name)`, sync and async context manager |
+| `Run` | `.id`, `.project`, `.info_`, `.ready`, `.next_seq_id`, `forward(data, loss_fn)`, `forward_backward(data, loss_fn)`, `optim_step(adam_params=None, *, learning_rate=None)`, `save_checkpoint(name, *, include_optimizer, ttl_seconds, user_metadata)` → `APIFuture[str]`, `predict(rows)` → `APIFuture[list[dict[str, Answer]]]`, the `_async` variants of those five, `close(*, wait=False, timeout=None)`, `close_async(...)`, `info()`, `log(metrics, step=None)`, `metrics(keys=None, since_step=None)`, `log_eval(model, results, *, step, name)`, sync and async context manager |
 | `APIFuture[T]` | `result(timeout=None)`, `await f`, `result_async(timeout)`, `done()`, `info`, `cancel()`, `cancel_async()`, `APIFuture.completed(value)`; `endor.gather(*futures)`, `endor.gather_async(*futures)` |
 | `endor.Steps(in_flight=2)` | `add(*futures)` → the results of the steps it read, `wait()` → the rest, `add_async`, `wait_async`, `len(steps)` |
 | `endor.data` | `to_row`, `load_rows(path)`, `save_rows(path, rows)`, `label_target(question, label)`, `row_to_datums(row)`, `rows_to_datums(rows)`, `split(rows, holdout=0.1, seed=0)`, `batches(items, size, *, shuffle=True, seed=0)` |

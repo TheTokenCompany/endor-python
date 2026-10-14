@@ -34,6 +34,7 @@ HEADER_RETRY_AFTER_MS = "retry-after-ms"
 
 # Server limits the SDK enforces or works around.
 MAX_DATUMS_PER_CALL = 1024
+MAX_PREDICT_QUESTIONS_PER_CALL = 1024  # run.predict: questions per request, across its rows
 MAX_UPLOAD_ROWS = 50_000
 MAX_QUESTIONS_PER_REQUEST = 64
 MAX_FUTURES_PER_RETRIEVE = 256
