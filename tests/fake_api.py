@@ -211,6 +211,7 @@ class FakeEndor:
     requests: list[Recorded] = field(default_factory=list)
     file_requests: list[Recorded] = field(default_factory=list)  # GETs of presigned file links
     file_links: dict[str, tuple[str, str]] = field(default_factory=dict)  # token -> (model id, file name)
+    blobs: dict[str, bytes] = field(default_factory=dict)  # token -> an evaluation's rows.jsonl
     corrupt_files: bool = False
     blocked: bool = False
     """The org's balance is used up: paid calls answer 402 insufficient_balance."""
@@ -360,6 +361,8 @@ class FakeEndor:
     def serve_file(self, request: httpx.Request) -> httpx.Response:
         """A presigned storage GET: no Endor auth, the token in the path is the whole credential."""
         token, _, name = request.url.path.strip("/").partition("/")
+        if token in self.blobs and name == "rows.jsonl" and request.method == "GET":
+            return httpx.Response(200, content=self.blobs[token], headers={"content-type": "application/x-ndjson"})
         hit = self.file_links.get(token)
         if hit is None or hit[1] != name or request.method != "GET":
             return httpx.Response(403, text="<Error><Code>AccessDenied</Code></Error>")
@@ -577,7 +580,7 @@ class FakeEndor:
                         key=lambda e: e["created_at"],
                         reverse=True,
                     )
-                    return 200, self.page(items, params)
+                    return 200, self.page([self.evaluation_view(e) for e in items], params)
         # runs
         if len(p) >= 2 and p[0] == "runs":
             run = self.run(p[1])
@@ -664,7 +667,7 @@ class FakeEndor:
         if p[:1] == ["evaluations"] and len(p) == 2 and m == "GET":
             if p[1] not in self.evaluations:
                 raise HTTPError(404, "not_found", f"no evaluation {p[1]}")
-            return 200, self.evaluations[p[1]]
+            return 200, self.evaluation_view(self.evaluations[p[1]])
         raise HTTPError(404, "not_found", f"no route {method} {path}")
 
     @staticmethod
@@ -850,30 +853,37 @@ class FakeEndor:
         self.projects[name] = p
         return self.project_view(p, self)
 
+    @staticmethod
+    def check_rows(rows: Any) -> tuple[int, Counter]:
+        """Decision rows as a dataset upload (or an evaluation's inline rows) checks them: (labelled questions,
+        question types)."""
+        if not isinstance(rows, list) or not 1 <= len(rows) <= 50_000:
+            raise HTTPError(422, "invalid_input", "1..50000 rows", "rows")
+        n_labelled, types = 0, Counter()
+        for i, row in enumerate(rows):
+            try:
+                if not row.get("questions"):
+                    raise ValueError("a row needs at least one question")
+                for qn, q in row["questions"].items():
+                    check_question(q, f"rows[{i}].questions.{qn}")
+                    types[q["type"]] += 1
+                for qn, label in (row.get("labels") or {}).items():
+                    if qn not in row["questions"]:
+                        raise ValueError(f"label for unknown question {qn}")
+                    label_target(row["questions"][qn], label)
+                    n_labelled += 1
+            except ValueError as e:
+                raise HTTPError(422, "invalid_row", f"rows[{i}]: {e}") from e
+        return n_labelled, types
+
     def datasets_route(self, m: str, project: str, tail: list[str], body: Any, params: dict) -> tuple[int, Any]:
         if not tail and m == "POST":
             name, rows = body.get("name"), body.get("rows")
             if not isinstance(name, str) or not NAME.match(name):
                 raise HTTPError(422, "invalid_input", "bad name", "name")
-            if not isinstance(rows, list) or not 1 <= len(rows) <= 50_000:
-                raise HTTPError(422, "invalid_input", "1..50000 rows", "rows")
             if (project, name) in self.datasets:
                 raise HTTPError(409, "conflict", f"dataset {name} already exists")
-            n_labelled, types = 0, Counter()
-            for i, row in enumerate(rows):
-                try:
-                    if not row.get("questions"):
-                        raise ValueError("a row needs at least one question")
-                    for qn, q in row["questions"].items():
-                        check_question(q, f"rows[{i}].questions.{qn}")
-                        types[q["type"]] += 1
-                    for qn, label in (row.get("labels") or {}).items():
-                        if qn not in row["questions"]:
-                            raise ValueError(f"label for unknown question {qn}")
-                        label_target(row["questions"][qn], label)
-                        n_labelled += 1
-                except ValueError as e:
-                    raise HTTPError(422, "invalid_row", f"rows[{i}]: {e}") from e
+            n_labelled, types = self.check_rows(rows)
             d = {
                 "name": name,
                 "project": project,
@@ -1183,20 +1193,70 @@ class FakeEndor:
 
     # ------------------------------------------------------------------ evaluations
     def create_evaluation(self, project: str, body: dict) -> dict:
+        """A dataset's rows or rows sent inline (one of the two), decided at once with uniform distributions, as the
+        API: a row with labels is asked (and scored on) its labeled questions, a row without labels every question
+        (answered, not scored). rows.jsonl is served from a presigned link, its lines in reverse order (the SDK must
+        order them by ``index``)."""
         self.check_balance()
-        if (project, body.get("dataset")) not in self.datasets:
-            raise HTTPError(404, "not_found", f"no dataset {body.get('dataset')}")
-        _, model = self.resolve_model(body["model"], project)  # stored by the model that answers, as the API
+        dataset, rows = body.get("dataset"), body.get("rows")
+        if (dataset is None) == (rows is None):
+            raise HTTPError(422, "invalid_input", "send dataset or rows", "rows" if dataset else "dataset")
+        if dataset is not None:
+            if (project, dataset) not in self.datasets:
+                raise HTTPError(404, "not_found", f"no dataset {dataset}")
+            rows = self.datasets[(project, dataset)]["_rows"]
+        else:
+            self.check_rows(rows)
+        base, model = self.resolve_model(body["model"], project)  # stored by the model that answers, as the API
+        lines, n = [], 0
+        for i, row in enumerate(rows):
+            labels = row.get("labels") or {}
+            asked = {k: q for k, q in row["questions"].items() if k in labels} or row["questions"]
+            for name, q in asked.items():
+                if len(option_keys(q)) > BASE_MODELS[base]["max_options"]:
+                    where = f"rows.{i}.questions.{name}"
+                    raise HTTPError(422, "invalid_options", f"{where}: too many options", where)
+                probs = uniform(q)
+                target = label_target(q, labels[name]) if name in labels else None
+                n += target is not None
+                lines.append(
+                    {
+                        "row": row.get("id"),
+                        "index": i,
+                        "question": name,
+                        "probabilities": dict(zip(option_keys(q), probs, strict=False)),
+                        "answer": answer_from_probs(q, probs),
+                        "target": target,
+                    }
+                )
+        token = uuid.uuid4().hex
+        self.blobs[token] = "".join(json.dumps(x) + "\n" for x in reversed(lines)).encode()
         e = {
             "id": self.new_id("evl"),
             "project": project,
             "model": model,
-            "dataset": body["dataset"],
+            "dataset": dataset,
             "training_run_id": body.get("training_run_id"),
             "source": "server",
             "status": "completed",
-            "results": {"n": 0, "overall": {"accuracy": 0.5}},
+            "results": {
+                "n": n,
+                "overall": {"n": n, "accuracy": 0.5} if n else {"n": 0},
+                "rows_url": f"https://{FILES_HOST}/{token}/rows.jsonl?X-Amz-Signature=sig{token}&X-Amz-Expires=3600",
+            },
+            "rows_total": len(rows),
+            "rows_done": len(rows),
+            "started_at": now().isoformat(),
             "created_at": now().isoformat(),
         }
         self.evaluations[e["id"]] = e
-        return {"future_id": self.future("evaluate", {"evaluation_id": e["id"]})["id"]}
+        f = self.future("evaluate", {"evaluation_id": e["id"]})
+        e["_future"] = f["id"]
+        return {"future_id": f["id"], "evaluation_id": e["id"]}
+
+    def evaluation_view(self, e: dict) -> dict:
+        """An evaluation as the API shows it: halfway (running, no results) while its future is open."""
+        out = {k: v for k, v in e.items() if not k.startswith("_")}
+        if "_future" in e and self.futures[e["_future"]]["status"] in ("pending", "running"):
+            out.update(status="running", rows_done=e["rows_total"] // 2, results=None)
+        return out

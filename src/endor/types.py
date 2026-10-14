@@ -638,11 +638,17 @@ class Evaluation(_View):
     project: str
     model: str
     dataset: str | None = None
+    """The dataset's name; None for rows sent inline and for client evaluations."""
     training_run_id: str | None = None
     source: str
     """``server`` or ``client``."""
     status: str
     results: dict[str, Any] | None = None
+    rows_total: int | None = None
+    """Server evaluations: its rows (the dataset's, or those sent inline)."""
+    rows_done: int | None = None
+    """Server evaluations: the rows decided so far, updated every few seconds while it runs."""
+    started_at: datetime | None = None
     created_at: datetime
 
 

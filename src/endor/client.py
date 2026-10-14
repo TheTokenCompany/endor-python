@@ -2,6 +2,7 @@
 
     client = endor.EndorClient()                               # ENDOR_API_KEY from the environment
     client.system_one(state, questions, model="tickets/v1")    # a decision with one saved model
+    client.predict("tickets/v1", rows)                         # the answers for many rows, in their order
     client.models.list()                                       # every name you can pass as model
     client.base_models()                                       # the base models, with limits and prices
     project = client.projects.get_or_create("tickets", base_models=["decider-2b"])   # datasets, runs, models
@@ -17,7 +18,7 @@ Environment: ``ENDOR_API_KEY``, ``ENDOR_BASE_URL``, ``ENDOR_DEFAULT_MODEL``, ``E
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any, TypeVar, overload
 
@@ -25,12 +26,13 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from . import _constants as C
-from . import _user_report
+from . import _predict, _user_report
 from ._http import Transport
 from ._retry import RetryPolicy
 from .errors import EndorError, NotFoundError, ResponseValidationError
 from .projects import Projects
 from .types import (
+    Answer,
     BaseModelInfo,
     JSONContent,
     ListModelsResponse,
@@ -276,6 +278,62 @@ class EndorClient:
         if extra_body:
             body.update(extra_body)
         return body
+
+    # ------------------------------------------------------------------ predictions
+    def predict(
+        self, model: str, rows: Iterable[Any], *, progress: bool = True, timeout: float | None = None
+    ) -> list[dict[str, Answer]]:
+        """The answers to every question of every row, in the rows' order: one server-side evaluation of the rows
+        without their labels, so nothing needs uploading and nothing is scored. For many rows at once (new traffic,
+        a backfill) instead of a ``system_one`` call per row; billed as decisions, the same per row.
+
+        Args:
+            model: ``"<project>/<name>"``, ``"<project>/<base id>"`` or ``"<project>"``, as for ``system_one``; the
+                evaluation is made in that project (a custom project).
+            rows: Decision rows in any shape ``project.datasets.upload`` takes (``{"state", "questions"}``; labels
+                are ignored), at most 50,000 and 32 MB per call.
+            progress: Print a progress line to stderr every 10 s while the evaluation runs
+                (``evaluation evl_...: 1,200/10,000 rows (12%) · ~2 min left``).
+            timeout: Seconds to wait at most (``TimeoutError`` after them; the evaluation keeps running). None
+                waits until it is done.
+
+        Returns:
+            One dict per row, in order: question name → ``NoulAnswer``, ``ChoiceAnswer`` or ``ScoreAnswer``, as
+            ``system_one(...).answers`` has them.
+
+        Raises:
+            ValueError: No rows, or more than 50,000.
+            APIError: As for ``project.evaluate``: ``NotFoundError`` for an unknown project or model,
+                ``UnprocessableEntityError`` naming a bad row (``rows.<i>...``) or a question the model can't read,
+                ``WrongProjectKindError`` for a managed project, ``RateLimitError``.
+            OperationFailedError: The evaluation failed (for example a row too long for the model,
+                ``context_too_long``).
+        """
+        project, body, n = _predict.prediction(model, rows)
+        r = self._t.request(
+            "POST",
+            f"/v1/projects/{project}/evaluations",
+            json=body,
+            method_name="client.predict",
+            idempotent=True,
+        )
+        ev = _predict.wait(self._t, r, progress, timeout, "client.predict")
+        return _predict.answers(self._t, ev, n)
+
+    async def predict_async(
+        self, model: str, rows: Iterable[Any], *, progress: bool = True, timeout: float | None = None
+    ) -> list[dict[str, Answer]]:
+        """``predict`` for async code."""
+        project, body, n = _predict.prediction(model, rows)
+        r = await self._t.arequest(
+            "POST",
+            f"/v1/projects/{project}/evaluations",
+            json=body,
+            method_name="client.predict",
+            idempotent=True,
+        )
+        ev = await _predict.wait_async(self._t, r, progress, timeout, "client.predict")
+        return await _predict.answers_async(self._t, ev, n)
 
     def base_models(self) -> list[BaseModelInfo]:
         """The base models you can fine-tune and decide with (through a project that has it, as

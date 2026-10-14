@@ -1,4 +1,5 @@
-"""Downloading a saved model's files from the short-lived links the API hands out (``project.models.download``).
+"""Downloading files from the short-lived links the API hands out: a saved model's files
+(``project.models.download``) and an evaluation's results (``client.predict``, ``fetch_bytes``).
 
 The links are presigned storage URLs: anyone holding one can read that file until it expires, so they never leave
 this module. They are not returned, not put in exceptions and not logged (``httpx`` logs every request URL at INFO,
@@ -98,3 +99,39 @@ def _fetch(http: httpx.Client, f: dict[str, Any], dest: Path) -> DownloadedFile:
         part.unlink(missing_ok=True)
         raise
     return DownloadedFile(name=name, path=dest, size_bytes=size, sha256=digest)
+
+
+def fetch_bytes(url: str, what: str, *, transport: httpx.BaseTransport | None = None, timeout: float = 60.0) -> bytes:
+    """One file's bytes from a presigned link (an evaluation's results). ``what`` names it in errors."""
+    _check_link(url, what)
+    try:
+        with httpx.Client(transport=transport, timeout=timeout, follow_redirects=False) as http:
+            r = http.get(url)
+    except httpx.HTTPError as e:  # its message would carry the link
+        raise DownloadError(f"{what}: download failed ({type(e).__name__})") from None
+    return _body(r, what)
+
+
+async def fetch_bytes_async(
+    url: str, what: str, *, transport: httpx.AsyncBaseTransport | None = None, timeout: float = 60.0
+) -> bytes:
+    """``fetch_bytes`` for async code."""
+    _check_link(url, what)
+    try:
+        async with httpx.AsyncClient(transport=transport, timeout=timeout, follow_redirects=False) as http:
+            r = await http.get(url)
+    except httpx.HTTPError as e:  # its message would carry the link
+        raise DownloadError(f"{what}: download failed ({type(e).__name__})") from None
+    return _body(r, what)
+
+
+def _check_link(url: str, what: str) -> None:
+    if not url.startswith("https://"):
+        raise DownloadError(f"{what}: the API returned a link that is not HTTPS; refusing to download it")
+
+
+def _body(r: httpx.Response, what: str) -> bytes:
+    if r.status_code != 200:
+        hint = " (the link expired; fetch it again)" if r.status_code == 403 else ""
+        raise DownloadError(f"{what}: storage answered HTTP {r.status_code}{hint}")
+    return r.content
