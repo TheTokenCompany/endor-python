@@ -38,6 +38,23 @@ The SDK calls production (`https://api.endor.thetokencompany.com`). For another 
 
 API keys belong to an organization (`edk_...`, created in the dashboard); everything you create belongs to that org.
 
+### Coding agents
+
+The Endor skill tells a coding agent (Claude Code, Cursor, Codex and others) how to set up and use Endor. Install it
+one way:
+
+```bash
+# Claude Code
+claude plugin marketplace add TheTokenCompany/endor-python
+claude plugin install endor@endor
+
+# Other agents (https://skills.sh)
+npx skills add TheTokenCompany/endor-python --skill endor
+```
+
+Or give your agent [SKILL.md](https://github.com/TheTokenCompany/endor-python/blob/main/skills/endor/SKILL.md) to
+read. The dashboard's API key page has a prompt to paste into your agent that installs the skill and sets up the SDK.
+
 ## Decisions
 
 Every decision goes through a project, which records it. Create one with a base model and it answers at once:

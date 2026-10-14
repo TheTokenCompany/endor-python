@@ -1,0 +1,11 @@
+{
+  "name": "endor",
+  "description": "Agent skills for building with Endor: fine-tune decision models on your data and call them.",
+  "author": {
+    "name": "The Token Company",
+    "url": "https://endor.thetokencompany.com"
+  },
+  "homepage": "https://endor.thetokencompany.com",
+  "repository": "https://github.com/TheTokenCompany/endor-python",
+  "license": "MIT"
+}

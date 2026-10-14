@@ -1,0 +1,15 @@
+{
+  "name": "endor",
+  "description": "Agent skills for building with Endor: fine-tune decision models on your data and call them.",
+  "owner": {
+    "name": "The Token Company",
+    "url": "https://endor.thetokencompany.com"
+  },
+  "plugins": [
+    {
+      "name": "endor",
+      "description": "Set up Endor, fine-tune decision models with the Python SDK and call them through the TypeSafe-compatible API",
+      "source": "./"
+    }
+  ]
+}
