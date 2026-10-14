@@ -342,8 +342,8 @@ class Runs:
         logs progress on the ``endor`` logger; if the wait is interrupted (Ctrl-C, an error) the run is closed. With
         ``wait=False`` it returns at once and ``run.ready`` is the future.
 
-        Close every run you create (``with project.runs.create(...) as run:``): an org can have at most 5 runs that
-        aren't closed, idle ones included (a sixth raises ``LimitReachedError``). A run without calls is parked
+        Close every run you create (``with project.runs.create(...) as run:``): an org can have at most 25 runs that
+        aren't closed, idle ones included (a 26th raises ``LimitReachedError``). A run without calls is parked
         (``idle``) after 2 minutes and closed after an hour. Custom projects only: a managed project raises
         ``WrongProjectKindError`` (Endor trains it).
         ``config`` is free-form and shown on the dashboard; when the client was created with ``capture=True`` the

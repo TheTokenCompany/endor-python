@@ -54,7 +54,7 @@ class Run:
     ``project.runs.list()``.
 
     Training is billed for the GPU time its calls use. A run without calls is parked (``idle``) after 2 minutes and
-    closed after an hour, and an org can have at most 5 runs that aren't closed (idle ones included). Use it as a
+    closed after an hour, and an org can have at most 25 runs that aren't closed (idle ones included). Use it as a
     context manager so it is closed even on errors::
 
         with project.runs.create(base_model="jev-9b") as run:
