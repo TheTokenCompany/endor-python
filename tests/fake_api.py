@@ -206,6 +206,8 @@ class FakeEndor:
     """How many polls a run's ready future stays pending."""
     fail_next: list[Any] = field(default_factory=list)
     """Queued faults applied to the next requests: an ``HTTPError`` or an ``httpx.TransportError``."""
+    heartbeat_fault: Exception | None = None
+    """Raised by every run heartbeat while set: an ``HTTPError`` or an ``httpx.TransportError``."""
     requests: list[Recorded] = field(default_factory=list)
     file_requests: list[Recorded] = field(default_factory=list)  # GETs of presigned file links
     file_links: dict[str, tuple[str, str]] = field(default_factory=dict)  # token -> (model id, file name)
@@ -599,6 +601,13 @@ class FakeEndor:
                 if run["status"] not in ("closed", "failed"):
                     run["status"] = "closed"
                 return 200, self.run_view(run)
+            if tail == ["heartbeat"] and m == "POST":
+                if self.heartbeat_fault is not None:
+                    raise self.heartbeat_fault
+                if run["status"] in ("closed", "failed"):
+                    raise HTTPError(409, "invalid_state", f"Run {run['id']} is closed.")
+                run["client_seen_at"] = now().isoformat()
+                return 204, None
             if tail == ["metrics"] and m == "POST":
                 if len(body["metrics"]) > 100:
                     raise HTTPError(422, "invalid_input", "at most 100 keys", "metrics")

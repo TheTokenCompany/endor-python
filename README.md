@@ -230,7 +230,9 @@ steps; results, metrics and evaluations are the same as with `steps_in_flight=1`
   `client.base_models()` shows the prices; `client.usage(starting_on, ending_before)` returns hourly `decide` rows (input tokens)
   and `train` rows (GPU-seconds) with their cost.
 - **Idle timeout.** After 2 minutes without calls, a run saves its state and frees its GPU (status `idle`). The next
-  call resumes it in a few seconds. After 1 hour without calls, the run is closed; saved models are kept.
+  call resumes it in a few seconds. While a run is open, the SDK sends a heartbeat every minute from a background
+  thread, so the run stays open however long you wait between calls. After 5 minutes without calls or heartbeats (the
+  process ended without closing the run), the run is closed; saved models are kept.
 - **5 open runs per org.** Every run that isn't closed counts, idle ones included. A sixth `runs.create` raises
   `LimitReachedError` (409, code `limit_reached`), whose message lists the open runs; close one (`run.close()` or
   `endor runs close RUN_ID`). It is not retried.
@@ -418,7 +420,8 @@ Besides your API key and the request itself, every request carries:
   `X-Endor-Client-Request-Id` (the same on every retry of one call) and `X-Endor-Retry-Count` (on retries).
 
 `runs.create` also sends the run's settings and, unless `capture=False`, your git commit hash and a dirty flag
-(never file contents). A report (`endor.user_report`) sends only what "Reporting problems" lists.
+(never file contents). While a run is open, a background thread sends `POST /v1/runs/{id}/heartbeat`, with no
+body, once a minute. A report (`endor.user_report`) sends only what "Reporting problems" lists.
 
 For every request, the API stores the request id, your org, the calling key, the route, the status and the latency,
 plus a `client` record with one field per header: `user_agent`, `sdk`, `sdk_version`, `runtime`, `interface`,
