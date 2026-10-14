@@ -18,6 +18,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from typing import Any, Literal
 
 from . import _constants as C
+from . import _predict
 from . import data as D
 from ._http import Transport
 from ._log import logger
@@ -206,19 +207,30 @@ class Project:
         )
         return self.info_
 
-    def evaluate(self, model: str, dataset: str, run_id: str | None = None) -> APIFuture[Evaluation]:
-        """Score a model on one of this project's datasets, server-side. ``model`` is a base model id of this
-        project (``"decider-2b"``), a saved model's name (``"v1"``), this project's name (a managed project's newest
-        version, else its first base model) or a full model id (``"<project>/<base id>"``, ``"<project>/<name>"``).
-        The evaluation records the full id of the model that answered: ``"decider-2b"`` becomes
-        ``"<project>/decider-2b"``.
+    def evaluate(
+        self,
+        model: str,
+        dataset: str | None = None,
+        run_id: str | None = None,
+        *,
+        rows: Iterable[Any] | None = None,
+    ) -> APIFuture[Evaluation]:
+        """Score a model server-side on one of this project's datasets, or on ``rows`` sent with the call (decision
+        rows in any shape ``project.datasets.upload`` takes, at most 50,000 and 32 MB; nothing is stored as a
+        dataset). One of the two. ``model`` is a base model id of this project (``"decider-2b"``), a saved model's
+        name (``"v1"``), this project's name (a managed project's newest version, else its first base model) or a
+        full model id (``"<project>/<base id>"``, ``"<project>/<name>"``). The evaluation records the full id of the
+        model that answered: ``"decider-2b"`` becomes ``"<project>/decider-2b"``.
 
-        The result's ``results`` has ``n``, then ``overall``, ``by_type`` and ``by_question``, each with accuracy,
-        NLL, Brier, ECE, mean confidence and ``selective`` (``{"0.5": {"accuracy", "coverage"}, ...}`` for the
-        thresholds 0.5, 0.7, 0.9 and 0.95), and ``rows_url``, a link to every scored question that expires after 1
-        hour. With ``run_id``, the evaluation appears on that run's page.
+        A row with labels is scored on its labeled questions; a row without labels is answered on every question and
+        not scored (``client.predict`` returns those answers). The result's ``results`` has ``n`` (the questions
+        scored), then ``overall``, ``by_type`` and ``by_question``, each with accuracy, NLL, Brier, ECE, mean
+        confidence and ``selective`` (``{"0.5": {"accuracy", "coverage"}, ...}`` for the thresholds 0.5, 0.7, 0.9 and
+        0.95), and ``rows_url``, a link to every answer (one JSON line per question asked) that expires after 1 hour.
+        While it runs, ``rows_done`` of ``rows_total`` shows how far it is. With ``run_id``, the evaluation appears
+        on that run's page.
         """
-        body = {"model": model, "dataset": dataset, "training_run_id": run_id}
+        body = _predict.evaluation_body(model, dataset, rows, run_id)
         r = self._t.request(
             "POST",
             f"/v1/projects/{self.name}/evaluations",

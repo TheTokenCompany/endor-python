@@ -5,6 +5,21 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Predictions for many rows at once, without labels or a dataset.
+
+- `client.predict(model, rows, *, progress=True, timeout=None)` (and `predict_async`) returns the answers to every
+  question of every row, in the rows' order: one `{question name: NoulAnswer | ChoiceAnswer | ScoreAnswer}` per row,
+  as `system_one(...).answers`. It sends the rows without their labels as one server-side evaluation in the model's
+  project (`POST /v1/projects/{project}/evaluations` with `rows`), waits for it, printing a progress line to stderr
+  every 10 seconds while it runs (`evaluation evl_...: 1,200/10,000 rows (12%) · ~2 min left`), and fetches its
+  results file from storage (HTTPS only, without the API key). At most 50,000 rows and 32 MB per call; billed as
+  decisions. `TimeoutError` after `timeout` seconds (the evaluation keeps running), `OperationFailedError` when it
+  fails.
+- `project.evaluate(model, dataset=None, run_id=None, *, rows=None)` takes rows inline instead of a dataset's name
+  (one of the two). A row with labels is scored on its labeled questions; a row without labels is answered on every
+  question and not scored (its answers are in `results["rows_url"]`).
+- `Evaluation` has `rows_total`, `rows_done` and `started_at`, the API's progress of a server-side evaluation.
+
 ## [0.6.1] - 2026-10-13
 
 - User reports need an API key, as the API now requires: `endor.user_report` without `api_key` or `ENDOR_API_KEY`

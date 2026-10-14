@@ -119,8 +119,19 @@ base models (`GET /v1/base_models`) with their option limits, `modalities`, `hf_
 (`price_per_mtok_decide`, `price_per_mtok_decide_continuous_learning` for managed projects, `price_per_gpu_hour`).
 Call a base model through a project that has it: `"<project>/<base id>"`.
 
-**Async.** `await client.system_one_async(...)` and `await client.models.list_async()`; `async with EndorClient()`
-closes the connections.
+**Many rows at once.** `client.predict(model, rows)` returns the answers to every question of every row, in the rows'
+order, from one server-side evaluation of them: nothing to upload, nothing scored, billed as the same decisions. Rows
+are `{"state", "questions"}` (any shape `project.datasets.upload` takes; labels are ignored), at most 50,000 and 32 MB
+per call, and the model's project must be a custom one. While it runs it prints a progress line every 10 seconds
+(`progress=False` turns it off); `timeout=` bounds the wait.
+
+```python
+answers = client.predict("tickets/v1", [{"state": t, "questions": questions} for t in new_tickets])
+answers[0]["department"].choice           # "billing": each row's answers as system_one(...).answers has them
+```
+
+**Async.** `await client.system_one_async(...)`, `await client.predict_async(...)` and
+`await client.models.list_async()`; `async with EndorClient()` closes the connections.
 
 ## Projects
 
@@ -142,11 +153,16 @@ project = client.projects.get_or_create("tickets", base_models=["decider-2b"])  
 project.datasets.upload("train", endor.data.load_rows("train.jsonl"))   # rows: see "Data format" below
 project.datasets.upload("heldout", endor.data.load_rows("heldout.jsonl"))
 baseline = project.evaluate("decider-2b", "heldout").result()   # names resolve in the project: "tickets/decider-2b"
+project.evaluate("decider-2b", rows=more_rows).result()          # or rows sent with the call, no dataset
 
 project.add_base_model("gev-26b")         # "tickets/gev-26b" answers at once
 project.info_.base_models                 # ["decider-2b", "gev-26b"]
 project.remove_base_model("gev-26b")      # "tickets/gev-26b" stops answering; models trained on it keep working
 ```
+
+An evaluation scores a row's labeled questions; a row without labels is answered on every question and not scored
+(its answers are in the results' `rows_url`, which `client.predict` reads for you). `rows_done` of `rows_total` shows
+how far a running evaluation is.
 
 `project.info_` has `kind`, `base_models` (in the order they were added) and `paused` (managed projects only).
 `project.update(description=...)` changes the description. `project.models.list()` starts with the base models
@@ -279,7 +295,7 @@ fresh run defaults to rank 16, alpha 32, attention and MLP layers, no readout.
 - `optim_step` takes `AdamParams` (betas, epsilon, weight decay, gradient clipping) and the learning rate, which you
   pass every step: the schedule is yours.
 - `run.forward` scores data with the current adapter without saving a model. `project.evaluate(model, dataset)`
-  scores a saved model on a stored dataset server-side.
+  scores a saved model on a stored dataset server-side (or on `rows=` sent with the call).
 - `run.close()` releases the trainer (a `with` block does it for you). Unsaved progress is lost; the SDK warns when
   you close with optimizer steps newer than your last save.
 - Creating a run provisions a trainer, usually in under a minute. `runs.create(wait=True)` (the default) blocks
@@ -438,10 +454,10 @@ continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a man
 
 | Object | Members |
 |---|---|
-| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
+| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `predict(model, rows, *, progress=True, timeout=None)` → one `{question: answer}` per row, `predict_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
 | `endor.user_report(message, *, kind="bug", request_id=None, context=None, api_key=None, base_url=None, timeout=None)` | `endor.user_report_async(...)`; returns `UserReportReceipt` (`id`, `message`) |
 | `client.projects` | `create(name, description=None, *, kind="custom", base_models=None)`, `get(name)`, `get_or_create(name, description=None, *, kind="custom", base_models=None)`, `list(limit=None, offset=0)` (all pages) |
-| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `add_base_model(base_model)`, `remove_base_model(base_model)`, `update(*, description=None, paused=None, wandb=None)`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
+| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `add_base_model(base_model)`, `remove_base_model(base_model)`, `update(*, description=None, paused=None, wandb=None)`, `evaluate(model, dataset=None, run_id=None, *, rows=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
 | `project.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
 | `project.runs` | `create(base_model=None, *, rank, alpha, seed, train_attn, train_mlp, train_readout, from_model, include_optimizer, name, tags, config, user_metadata, total_steps, wandb, wait)` → `Run`, `get(run_id)`, `list(tag=None, limit=None, offset=0)` |
 | `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `download(model, path, include_optimizer=False)`, `delete(model)`; `model` is a name (a base id for a base model) or `<project>/<name>` |
