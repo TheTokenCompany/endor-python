@@ -250,9 +250,11 @@ steps; results, metrics and evaluations are the same as with `steps_in_flight=1`
   thread, so the run stays open however long you wait between calls. After 5 minutes without calls or heartbeats (the
   process ended without closing the run), the run is closed; saved models are kept.
 - **5 open runs per org.** Every run that isn't closed counts, idle ones included. A sixth `runs.create` raises
+  call resumes it in a few seconds. After 1 hour without calls, the run is closed; saved models are kept.
+- **25 open runs per org.** Every run that isn't closed counts, idle ones included. A 26th `runs.create` raises
   `LimitReachedError` (409, code `limit_reached`), whose message lists the open runs; close one (`run.close()` or
   `endor runs close RUN_ID`). It is not retried.
-- **Other limits.** 7 projects per org, 20 API keys and 50 models per project also raise `LimitReachedError` once
+- **Other limits.** 7 projects per org, 20 API keys and 500 models per project also raise `LimitReachedError` once
   reached. `client.whoami().limits` lists every limit with its value.
 - **Close your runs.** Use `with project.runs.create(...) as run:` (or `async with`): the run is closed when the
   block ends, also on errors. `runs.create(wait=True)` closes the run if you interrupt it while it provisions, and the

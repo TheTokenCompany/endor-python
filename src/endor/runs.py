@@ -71,6 +71,9 @@ class Run:
     in a ``with`` block) a background thread sends a heartbeat every minute, so it stays open however long you wait
     between calls; a run whose process ended without closing it is closed 5 minutes later. Use it as a context
     manager so it is closed even on errors::
+    Training is billed for the GPU time its calls use. A run without calls is parked (``idle``) after 2 minutes and
+    closed after an hour, and an org can have at most 25 runs that aren't closed (idle ones included). Use it as a
+    context manager so it is closed even on errors::
 
         with project.runs.create(base_model="jev-9b") as run:
             ...

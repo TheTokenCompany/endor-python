@@ -359,6 +359,10 @@ class Runs:
         (``idle``) after 2 minutes. Until you close it, the run sends a heartbeat every minute from a background
         thread, so it stays open however long you wait; if your process ends without closing it, Endor closes it 5
         minutes later. Custom projects only: a managed project raises ``WrongProjectKindError`` (Endor trains it).
+        Close every run you create (``with project.runs.create(...) as run:``): an org can have at most 25 runs that
+        aren't closed, idle ones included (a 26th raises ``LimitReachedError``). A run without calls is parked
+        (``idle``) after 2 minutes and closed after an hour. Custom projects only: a managed project raises
+        ``WrongProjectKindError`` (Endor trains it).
         ``config`` is free-form and shown on the dashboard; when the client was created with ``capture=True`` the
         SDK adds the LoRA settings and the current git commit (never file contents).
 
