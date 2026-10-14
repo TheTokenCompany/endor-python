@@ -12,7 +12,8 @@
 models) or ``"<project>"`` (a managed project's newest version, else its first base model). A bare base model id is
 refused (``ModelRequiresProjectError``).
 
-Environment: ``ENDOR_API_KEY``, ``ENDOR_BASE_URL``, ``ENDOR_DEFAULT_MODEL``, ``ENDOR_LOG_LEVEL``.
+Environment: ``ENDOR_API_KEY``, ``ENDOR_BASE_URL``, ``ENDOR_DEFAULT_MODEL``, ``ENDOR_LOG_LEVEL``,
+``ENDOR_REPORT_LATENCY``.
 """
 
 from __future__ import annotations
@@ -77,6 +78,7 @@ class EndorClient:
         async_http_client: httpx.AsyncClient | None = None,
         transport: httpx.BaseTransport | None = None,
         async_transport: httpx.AsyncBaseTransport | None = None,
+        report_latency: bool | None = None,
     ) -> None:
         """Create a client.
 
@@ -98,6 +100,9 @@ class EndorClient:
             http_client, async_http_client: Your own ``httpx`` clients, if you need one connection pool or
                 custom settings. They are not closed with this client.
             transport, async_transport: Custom ``httpx`` transports (mostly for tests).
+            report_latency: Tell Endor how long each request took for you, from sending it to reading the response,
+                with the next request (``X-Endor-Client-Latency``), so the dashboard shows your latency next to
+                Endor's. Nothing waits for it. Defaults to on, unless ``ENDOR_REPORT_LATENCY`` is ``0``.
 
         Raises:
             EndorError: No API key was given and ``ENDOR_API_KEY`` is not set.
@@ -132,6 +137,7 @@ class EndorClient:
             async_http_client=async_http_client,
             transport=transport,
             async_transport=async_transport,
+            report_latency=report_latency,
         )
         self.models = Models(self._t)
         """``client.models.list()``: every name you can pass as ``model``."""

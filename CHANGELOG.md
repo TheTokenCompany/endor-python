@@ -33,6 +33,10 @@ Predictions for many rows at once, without labels or a dataset.
   (one of the two). A row with labels is scored on its labeled questions; a row without labels is answered on every
   question and not scored (its answers are in `results["rows_url"]`).
 - `Evaluation` has `rows_total`, `rows_done` and `started_at`, the API's progress of a server-side evaluation.
+- Every request is timed end to end, from sending it to reading the response, and that time is sent with the next
+  request, once, as `X-Endor-Client-Latency: <request id>=<ms>`, so the dashboard can show the latency your app sees
+  next to Endor's own. Nothing waits for it and it never raises. `EndorClient(report_latency=False)` or
+  `ENDOR_REPORT_LATENCY=0` turns it off.
 
 ## [0.6.1] - 2026-10-13
 

@@ -425,6 +425,7 @@ is unclear, report it with `endor.user_report(...)`; report `kind="works"` once 
 | `model` | `ENDOR_DEFAULT_MODEL` | none: pass `model=` to `system_one`, e.g. `"tickets"` |
 | `timeout` | | 30 s per request, 330 s for a decision (a future poll also waits up to 25 s on the server) |
 | | `ENDOR_LOG_LEVEL` | unset; `info` logs one line per request on the `endor` logger |
+| `report_latency` | `ENDOR_REPORT_LATENCY` | on; `False` or `0` stops sending `X-Endor-Client-Latency` (see below) |
 
 `EndorClient` also takes `headers` for every request, `retry`, `gzip=False` to stop compressing large bodies, `capture=False`
 to stop sending each run's settings and your git commit hash to the dashboard, and your own `httpx` client or
@@ -438,14 +439,18 @@ Besides your API key and the request itself, every request carries:
 - `X-Endor-SDK: endor-python`, `X-Endor-SDK-Version: <version>`, `X-Endor-Runtime: python/<version> (<os>; <cpu>)`
   and `X-Endor-SDK-Interface: python` or `cli`;
 - `X-Endor-SDK-Method` (the SDK call, e.g. `run.forward_backward`), `X-Endor-SDK-Recipe` (inside a recipe),
-  `X-Endor-Client-Request-Id` (the same on every retry of one call) and `X-Endor-Retry-Count` (on retries).
+  `X-Endor-Client-Request-Id` (the same on every retry of one call) and `X-Endor-Retry-Count` (on retries);
+- `X-Endor-Client-Latency: <request id>=<ms>`: how long the previous request took from sending it to reading the
+  response, network and connection set-up included, sent once with the next request (nothing waits for it), so the
+  dashboard shows the latency you see next to Endor's own. `EndorClient(report_latency=False)` or
+  `ENDOR_REPORT_LATENCY=0` turns it off.
 
 `runs.create` also sends the run's settings and, unless `capture=False`, your git commit hash and a dirty flag
 (never file contents). While a run is open, a background thread sends `POST /v1/runs/{id}/heartbeat`, with no
 body, once a minute. A report (`endor.user_report`) sends only what "Reporting problems" lists.
 
-For every request, the API stores the request id, your org, the calling key, the route, the status and the latency,
-plus a `client` record with one field per header: `user_agent`, `sdk`, `sdk_version`, `runtime`, `interface`,
+For every request, the API stores the request id, your org, the calling key, the route, the status, the latency and
+the end-to-end time the SDK reported for it, plus a `client` record with one field per header: `user_agent`, `sdk`, `sdk_version`, `runtime`, `interface`,
 `method`, `recipe`, `client_request_id` and `retry_count` (each cut to 200 characters). It also keeps the request
 body, and the response body when it is JSON and at most 256 KB, in object storage (S3). The secret API key is never
 stored. You can add your own headers with `EndorClient(headers=...)`; the ones above can't be overridden.

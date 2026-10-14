@@ -6,6 +6,11 @@ POSTs, an ``Idempotency-Key`` so a retried create never makes a duplicate.
 
 The transport remembers its latest request id and its latest failure (``LastCall``: ids, status, code and endpoint,
 never a body or a key), and so does the process (``LAST``), so a report (``_user_report.py``) can say what it is about.
+
+It also times each request end to end, from sending it to reading the response, and sends that time with its next
+request, once: ``X-Endor-Client-Latency: <request id>=<ms>``, so the dashboard can show the latency the caller sees
+next to the API's own. Only the latest is kept; nothing waits for it. ``report_latency=False`` (or
+``ENDOR_REPORT_LATENCY=0``) turns it off.
 """
 
 from __future__ import annotations
@@ -13,6 +18,9 @@ from __future__ import annotations
 import asyncio
 import gzip
 import logging
+import os
+import re
+import threading
 import time
 import uuid
 from collections.abc import Mapping
@@ -24,17 +32,20 @@ from pydantic_core import to_json
 
 from . import errors as E
 from ._constants import (
+    HEADER_CLIENT_LATENCY,
     HEADER_CLIENT_REQUEST_ID,
     HEADER_IDEMPOTENCY_KEY,
     HEADER_REQUEST_ID,
     HEADER_RETRY_COUNT,
     NON_RETRYABLE_CODES,
+    REPORT_LATENCY_ENV,
 )
 from ._headers import context_headers, identity_headers
 from ._log import logger, redact_headers
 from ._retry import RetryPolicy
 
 GZIP_THRESHOLD = 32 * 1024  # bytes; smaller bodies are not worth compressing
+_REQUEST_ID = re.compile(r"req_[0-9A-Za-z]{1,36}")  # the API's request ids; anything else is never echoed back
 
 
 @dataclass
@@ -71,7 +82,8 @@ LAST = LastCall()
 
 class Transport:
     """Sync and async HTTP for the Endor API. Not part of the public surface. An empty ``api_key`` sends no
-    ``Authorization`` header."""
+    ``Authorization`` header. ``report_latency``: send each request's end-to-end time with the next one (default: on,
+    unless ``ENDOR_REPORT_LATENCY`` is ``0``, ``false``, ``no`` or ``off``)."""
 
     def __init__(
         self,
@@ -86,6 +98,7 @@ class Transport:
         async_http_client: httpx.AsyncClient | None = None,
         transport: httpx.BaseTransport | None = None,
         async_transport: httpx.AsyncBaseTransport | None = None,
+        report_latency: bool | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -101,6 +114,9 @@ class Transport:
         self._owns_aclient = async_http_client is None
         self.last = LastCall()
         """This transport's latest request and failure."""
+        self.report_latency = _latency_env_on() if report_latency is None else report_latency
+        self._latency: str | None = None  # "<request id>=<ms>" of the latest response, until a request sends it
+        self._latency_lock = threading.Lock()
 
     # ------------------------------------------------------------------ clients
     @property
@@ -142,6 +158,9 @@ class Transport:
             h["Authorization"] = f"Bearer {self.api_key}"
         h["Accept"] = "application/json"
         h[HEADER_CLIENT_REQUEST_ID] = request_id
+        latency = self._take_latency()
+        if latency:
+            h[HEADER_CLIENT_LATENCY] = latency
         if attempt:
             h[HEADER_RETRY_COUNT] = str(attempt)
         else:
@@ -191,6 +210,25 @@ class Transport:
                 last.response(r, endpoint, method_name)
             elif exc is not None:
                 last.no_response(exc, endpoint, method_name)
+
+    def _time(self, r: httpx.Response, sent: float) -> None:
+        """Keep this response's end-to-end time (``sent``: just before the request went out; the body is read by
+        now) for the next request, replacing one not sent yet. Only for the API's own request ids, so the header is
+        always plain ASCII."""
+        rid = r.headers.get(HEADER_REQUEST_ID)
+        if not self.report_latency or rid is None or not _REQUEST_ID.fullmatch(rid):
+            return
+        latency = f"{rid}={round((time.monotonic() - sent) * 1000)}"
+        with self._latency_lock:
+            self._latency = latency
+
+    def _take_latency(self) -> str | None:
+        """The latest response's time, for this request only (a concurrent one gets nothing)."""
+        if self._latency is None:
+            return None
+        with self._latency_lock:
+            latency, self._latency = self._latency, None
+        return latency
 
     def _log(self, method: str, path: str, r: httpx.Response | None, started: float, exc: BaseException | None) -> None:
         ms = (time.monotonic() - started) * 1000
@@ -260,6 +298,7 @@ class Transport:
                     raise self._network_error(exc, timeout if timeout is not None else self.timeout) from exc
                 time.sleep(delay)
             else:
+                self._time(r, t0)
                 self._log(method, path, r, t0, None)
                 if remember:
                     self._remember(r, None, endpoint, method_name)
@@ -328,6 +367,7 @@ class Transport:
                     raise self._network_error(exc, timeout if timeout is not None else self.timeout) from exc
                 await asyncio.sleep(delay)
             else:
+                self._time(r, t0)
                 self._log(method, path, r, t0, None)
                 if remember:
                     self._remember(r, None, endpoint, method_name)
@@ -358,6 +398,11 @@ def _error_code(r: httpx.Response) -> str | None:
 def _final_error(r: httpx.Response) -> bool:
     """Whether the error body carries a code that retrying can't fix (``limit_reached``, ``insufficient_balance``)."""
     return _error_code(r) in NON_RETRYABLE_CODES
+
+
+def _latency_env_on() -> bool:
+    """Whether ``ENDOR_REPORT_LATENCY`` leaves latency reports on (anything but ``0``, ``false``, ``no``, ``off``)."""
+    return os.environ.get(REPORT_LATENCY_ENV, "").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _clean(params: Mapping[str, Any] | None) -> dict[str, Any] | None:
