@@ -67,13 +67,10 @@ class Run:
     ``project.runs.list()``.
 
     Training is billed for the GPU time its calls use. A run without calls is parked (``idle``) after 2 minutes, and an
-    org can have at most 5 runs that aren't closed (idle ones included). While a run is open (from ``runs.create``, or
+    org can have at most 25 runs that aren't closed (idle ones included). While a run is open (from ``runs.create``, or
     in a ``with`` block) a background thread sends a heartbeat every minute, so it stays open however long you wait
-    between calls; a run whose process ended without closing it is closed 5 minutes later. Use it as a context
-    manager so it is closed even on errors::
-    Training is billed for the GPU time its calls use. A run without calls is parked (``idle``) after 2 minutes and
-    closed after an hour, and an org can have at most 25 runs that aren't closed (idle ones included). Use it as a
-    context manager so it is closed even on errors::
+    between calls; a run whose process ended without closing it is closed an hour later. Use it as a context manager
+    so it is closed even on errors::
 
         with project.runs.create(base_model="jev-9b") as run:
             ...
@@ -223,7 +220,9 @@ class Run:
 
         ``name``: lowercase letters, digits, ``.``, ``_`` and ``-``, up to 63 characters, starting with a letter or
         digit, and not ``base`` (the project's base model).
-        Raises ``ValueError`` otherwise, before anything is sent.
+        Raises ``ValueError`` otherwise, before anything is sent. A model can't be changed, so each name is saved once:
+        a name the project already has raises ``ConflictError`` (409 ``conflict``) at once, and the run goes on as
+        before. For checkpoints during a long run, give each its own name (``f"ckpt-{step}"``) with ``ttl_seconds``.
 
         ``include_optimizer`` also stores the optimizer state, so
         ``runs.create(from_model=..., include_optimizer=True)``

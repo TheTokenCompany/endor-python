@@ -184,7 +184,9 @@ project.update(paused=True)    # stops learning; keeps serving its newest versio
 
 **Model names** you save are lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit, up to 63
 characters, and can't be `base` or a base model id. `save_checkpoint` raises `ValueError` for a bad name (or
-`base`) before sending it; the API refuses a base model id.
+`base`) before sending it; the API refuses a base model id. A model can't be changed, so each name is saved once: a
+name the project already has raises `ConflictError` (409 `conflict`) at once and the run goes on. For checkpoints
+during a long run, give each its own name, e.g. `run.save_checkpoint(f"ckpt-{step}", ttl_seconds=86_400)`.
 
 A dataset row is a decision request with labels:
 
@@ -247,10 +249,9 @@ steps; results, metrics and evaluations are the same as with `steps_in_flight=1`
   and `train` rows (GPU-seconds) with their cost.
 - **Idle timeout.** After 2 minutes without calls, a run saves its state and frees its GPU (status `idle`). The next
   call resumes it in a few seconds. While a run is open, the SDK sends a heartbeat every minute from a background
-  thread, so the run stays open however long you wait between calls. After 5 minutes without calls or heartbeats (the
-  process ended without closing the run), the run is closed; saved models are kept.
-- **5 open runs per org.** Every run that isn't closed counts, idle ones included. A sixth `runs.create` raises
-  call resumes it in a few seconds. After 1 hour without calls, the run is closed; saved models are kept.
+  thread, so the run stays open however long you wait between calls. After an hour without calls or heartbeats (the
+  process ended without closing the run), the run is closed; saved models are kept. To continue it,
+  `project.runs.get(run_id)` gives the run again (`run.info_.step` is its step).
 - **25 open runs per org.** Every run that isn't closed counts, idle ones included. A 26th `runs.create` raises
   `LimitReachedError` (409, code `limit_reached`), whose message lists the open runs; close one (`run.close()` or
   `endor runs close RUN_ID`). It is not retried.

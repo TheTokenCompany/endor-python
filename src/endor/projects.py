@@ -426,7 +426,8 @@ class Runs:
         return run
 
     def get(self, run_id: str) -> Run:
-        """A handle on an existing run, continuing its sequence numbers from the server."""
+        """A handle on an existing run, continuing its sequence numbers from the server. ``run.info_`` is the run as
+        fetched, e.g. ``run.info_.step`` to resume from the right step; ``run.info()`` fetches it again."""
         return Run(self._t, self._t.request("GET", f"/v1/runs/{run_id}", method_name="project.runs.get"))
 
     def list(self, tag: str | None = None, limit: int | None = None, offset: int = 0) -> list[Run]:
