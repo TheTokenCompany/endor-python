@@ -371,6 +371,12 @@ class EndorClient:
         """The org and key behind this client's credentials (``user_id`` is None for an org API key)."""
         return _parse(WhoAmI, self._t.request("GET", "/v1/whoami", method_name="client.whoami"), "GET /v1/whoami")
 
+    def balance(self) -> float | None:
+        """The org's prepaid balance in USD: credits bought or granted, minus usage so far. At $0 or less, paid calls
+        raise ``InsufficientBalanceError``. None on a server without billing (a local API)."""
+        r = self._t.request("GET", "/v1/balance", method_name="client.balance")
+        return None if r["balance_usd"] is None else float(r["balance_usd"])
+
     def usage(self, starting_on: datetime, ending_before: datetime, project: str | None = None) -> list[UsageRow]:
         """Hourly usage with cost, for up to 14 days: ``decide`` rows (input tokens) and ``train`` rows
         (GPU-seconds). Datetimes without a timezone are taken as UTC."""

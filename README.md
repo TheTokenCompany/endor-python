@@ -262,7 +262,8 @@ steps; results, metrics and evaluations are the same as with `steps_in_flight=1`
   (status `closing`), then releases the GPU (status `closed`); it returns at once, or waits with `close(wait=True)`.
 - **Balance.** When your org's balance is used up (a new org starts with none), decisions, new runs, training calls
   and server-side evaluations raise `InsufficientBalanceError` (402, code `insufficient_balance`) until you add
-  credit in the dashboard under Billing. A call the server already accepted still finishes.
+  credit in the dashboard under Billing. A call the server already accepted still finishes. `client.balance()` (or
+  `endor whoami`) shows what is left, in USD.
 
 ## Or drive the loop yourself
 
@@ -472,7 +473,8 @@ endor usage --start 2026-10-01 --end 2026-10-06 [--project P] [--csv]
 endor user-report "what you did, what happened, what you expected" [--kind bug|confusing|works] [--request-id REQ]
 ```
 
-`MODEL` is `<project>/<name>`, or `<project>/<base id>` for a base model of the project. Every command takes `-f json`; `endor user-report` also works without `ENDOR_API_KEY`. Training itself happens in Python. `endor runs close`
+`MODEL` is `<project>/<name>`, or `<project>/<base id>` for a base model of the project. `endor whoami` also shows the
+org's balance (`balance_usd`). Every command takes `-f json`; `endor user-report` also works without `ENDOR_API_KEY`. Training itself happens in Python. `endor runs close`
 frees a slot when a script left a run open. `usage --csv` columns are `hour, kind, project, base_model, model,
 training_run_id, input_tokens, gpu_seconds, continuous_learning, price_per_mtok, base_cost_usd,
 continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a managed project's decisions.
@@ -481,7 +483,7 @@ continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a man
 
 | Object | Members |
 |---|---|
-| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `predict(model, rows, *, progress=True, timeout=None)` → one `{question: answer}` per row, `predict_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
+| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `predict(model, rows, *, progress=True, timeout=None)` → one `{question: answer}` per row, `predict_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `balance()` → USD, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
 | `endor.user_report(message, *, kind="bug", request_id=None, context=None, api_key=None, base_url=None, timeout=None)` | `endor.user_report_async(...)`; returns `UserReportReceipt` (`id`, `message`) |
 | `client.projects` | `create(name, description=None, *, kind="custom", base_models=None)`, `get(name)`, `get_or_create(name, description=None, *, kind="custom", base_models=None)`, `list(limit=None, offset=0)` (all pages) |
 | `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `add_base_model(base_model)`, `remove_base_model(base_model)`, `update(*, description=None, paused=None, wandb=None)`, `evaluate(model, dataset=None, run_id=None, *, rows=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
