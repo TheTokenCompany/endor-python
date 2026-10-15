@@ -221,8 +221,9 @@ class Run:
         ``name``: lowercase letters, digits, ``.``, ``_`` and ``-``, up to 63 characters, starting with a letter or
         digit, and not ``base`` (the project's base model).
         Raises ``ValueError`` otherwise, before anything is sent. A model can't be changed, so each name is saved once:
-        a name the project already has raises ``ConflictError`` (409 ``conflict``) at once, and the run goes on as
-        before. For checkpoints during a long run, give each its own name (``f"ckpt-{step}"``) with ``ttl_seconds``.
+        a name the project already has raises ``ConflictError`` (409 ``conflict``) at once. The run itself is
+        unaffected, but an error you don't catch leaves the ``with`` block, which closes the run. For checkpoints
+        during a long run, give each its own name (``f"ckpt-{step}"``) with ``ttl_seconds``.
 
         ``include_optimizer`` also stores the optimizer state, so
         ``runs.create(from_model=..., include_optimizer=True)``

@@ -185,8 +185,9 @@ project.update(paused=True)    # stops learning; keeps serving its newest versio
 **Model names** you save are lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit, up to 63
 characters, and can't be `base` or a base model id. `save_checkpoint` raises `ValueError` for a bad name (or
 `base`) before sending it; the API refuses a base model id. A model can't be changed, so each name is saved once: a
-name the project already has raises `ConflictError` (409 `conflict`) at once and the run goes on. For checkpoints
-during a long run, give each its own name, e.g. `run.save_checkpoint(f"ckpt-{step}", ttl_seconds=86_400)`.
+name the project already has raises `ConflictError` (409 `conflict`) at once. The run itself is unaffected, but an
+error you don't catch leaves the `with` block, which closes the run. For checkpoints during a long run, give each its
+own name, e.g. `run.save_checkpoint(f"ckpt-{step}", ttl_seconds=86_400)`.
 
 A dataset row is a decision request with labels:
 

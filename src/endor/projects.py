@@ -267,7 +267,8 @@ class Datasets:
     def upload(self, name: str, rows: Iterable[Any]) -> DatasetInfo:
         """Upload decision rows (README, "Data format"). Rows may be dicts or ``DecisionRow`` objects; the other
         supported row formats are converted. At most 50,000 rows per dataset. Datasets are immutable: to change
-        one, upload under a new name."""
+        one, upload under a new name. A name the project already has raises ``ConflictError``; to run a pipeline
+        again, use the dataset that is there (``get(name)``) or catch the error."""
         wire = [D.to_row(r).to_wire() for r in rows]
         if not wire:
             raise ValueError("no rows to upload")
