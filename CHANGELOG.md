@@ -5,8 +5,17 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-15
+
+Your prepaid balance from the SDK, and clearer docs on model names and resuming runs.
+
 - `client.balance()` returns the org's prepaid balance in USD (`GET /v1/balance`): credits bought or granted, minus
   usage so far. `endor whoami` shows it too (`balance_usd`).
+- Docs: `save_checkpoint` says each model name is saved once (a used name raises `ConflictError` at once; the run is
+  unaffected, but an uncaught error leaves the `with` block, which closes the run) and how to name checkpoints in a
+  long run; `runs.get` says `run.info_.step` is the step to resume from; `datasets.upload` says how to run a pipeline
+  again. The `Run` docstring and the README no longer contradict themselves on run limits (25 open runs; a run left
+  open is closed after an hour).
 
 ## [0.7.0] - 2026-10-14
 
