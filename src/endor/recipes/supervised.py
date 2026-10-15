@@ -9,8 +9,10 @@ What it does:
 2. Scores the untuned base model (``"<project>/<base_model>"``) on the held-out rows, so every later number has a
    baseline.
 3. Trains one run: batches of ``batch_size``, a learning rate with linear warmup then linear decay,
-   ``forward_backward`` and ``optim_step`` submitted together each step. The run's ``total_steps`` is set from the
-   data size and epochs, so the dashboard shows a progress bar and an ETA, and a progress line is printed.
+   ``forward_backward`` and ``optim_step`` submitted together each step, and the next step sent before the last one's
+   results are read (``steps_in_flight``), so the trainer doesn't wait for a round trip between steps. The run's
+   ``total_steps`` is set from the data size and epochs, so the dashboard shows a progress bar and an ETA, and a
+   progress line is printed.
 4. Every ``eval_every`` steps and at the end, scores the held-out datums with the run's current adapter and records
    accuracy, log loss, Brier, ECE and selective accuracy on the run's page.
 5. Saves the final adapter as ``"<project>/<model_name>"`` and closes the run (also when anything fails).
@@ -29,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from .. import data as D
 from .._headers import sdk_context
+from ..futures import Steps
 from ..metrics import decision_metrics
 from ..types import Datum, LossFn, Target, answer_probabilities
 
@@ -74,6 +77,9 @@ class SupervisedConfig:
     replay_per_batch: int = 0
     progress: bool = True
     """Print a progress line (step, loss, ETA) about 20 times over the run, and at the end."""
+    steps_in_flight: int = 2
+    """Training steps sent before the oldest one's results are read (``endor.Steps``); 1 waits for each step before
+    sending the next. Results, metrics and evaluations are the same either way."""
 
 
 @dataclass
@@ -183,6 +189,7 @@ def train(
         train_datums, eval_datums = D.rows_to_datums(rows), D.rows_to_datums(eval_rows)
         if not train_datums:
             raise ValueError("no labeled questions to train on")
+        steps = Steps(cfg.steps_in_flight)
         own = client is None
         client = client or EndorClient()
         try:
@@ -211,7 +218,15 @@ def train(
                         run.log_eval(f"{run.id}@{step}", metrics, step=step, name="heldout")
                         result.history.append({"step": step, "metrics": metrics})
 
-                step = 0
+                done = 0  # steps read
+
+                def read(results: list[list[Any]]) -> None:
+                    nonlocal done
+                    for out, _ in results:
+                        done += 1
+                        progress.step(done, out.loss)
+
+                step = 0  # steps sent
                 for epoch in range(cfg.epochs):
                     for batch in D.batches(train_datums, cfg.batch_size, seed=cfg.seed + epoch):
                         if replay:
@@ -219,12 +234,12 @@ def train(
                             batch = batch + [replay[(step * k + i) % len(replay)] for i in range(k)]
                         fb = run.forward_backward(batch, cfg.loss_fn)
                         opt = run.optim_step(learning_rate=lr_at(cfg, step, total))
-                        out = fb.result()
-                        opt.result()
+                        read(steps.add(fb, opt))
                         step += 1
-                        progress.step(step, out.loss)
                         if cfg.eval_every and step % cfg.eval_every == 0 and step < total:
+                            read(steps.wait())  # every step is read and logged before its evaluation
                             held_out(step)
+                read(steps.wait())
                 held_out(step)
                 name = cfg.model_name or f"{cfg.name or 'sft'}-{datetime.now():%Y%m%d-%H%M%S}"
                 result.model = run.save_checkpoint(name).result()

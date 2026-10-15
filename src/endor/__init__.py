@@ -12,10 +12,10 @@ res.choices["dept"].choice, res.nouls["urgent"].noul
 
 project = client.projects.get_or_create("tickets", base_models=["decider-2b"])  # "tickets/decider-2b" answers
 with project.runs.create(rank=16) as run:   # on the project's first base model; closed on exit, even on errors
+    steps = endor.Steps()                                           # the next step is sent before the last is read
     for batch in endor.data.batches(endor.data.rows_to_datums(rows), 16):
-        fb = run.forward_backward(batch)
-        opt = run.optim_step(learning_rate=1e-4)
-        endor.gather(fb, opt)
+        steps.add(run.forward_backward(batch), run.optim_step(learning_rate=1e-4))
+    steps.wait()
     model = run.save_checkpoint("v1").result()                      # "tickets/v1"
 client.system_one(state, questions, model=model)
 
@@ -51,7 +51,7 @@ from .errors import (
     UnprocessableEntityError,
     WrongProjectKindError,
 )
-from .futures import APIFuture, gather, gather_async
+from .futures import APIFuture, Steps, gather, gather_async
 from .images import Image
 from .projects import Project
 from .runs import Run
@@ -103,6 +103,7 @@ __all__ = [
     "Project",
     "Run",
     "APIFuture",
+    "Steps",
     "gather",
     "gather_async",
     "RetryPolicy",

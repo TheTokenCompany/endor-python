@@ -119,8 +119,19 @@ base models (`GET /v1/base_models`) with their option limits, `modalities`, `hf_
 (`price_per_mtok_decide`, `price_per_mtok_decide_continuous_learning` for managed projects, `price_per_gpu_hour`).
 Call a base model through a project that has it: `"<project>/<base id>"`.
 
-**Async.** `await client.system_one_async(...)` and `await client.models.list_async()`; `async with EndorClient()`
-closes the connections.
+**Many rows at once.** `client.predict(model, rows)` returns the answers to every question of every row, in the rows'
+order, from one server-side evaluation of them: nothing to upload, nothing scored, billed as the same decisions. Rows
+are `{"state", "questions"}` (any shape `project.datasets.upload` takes; labels are ignored), at most 50,000 and 32 MB
+per call, and the model's project must be a custom one. While it runs it prints a progress line every 10 seconds
+(`progress=False` turns it off); `timeout=` bounds the wait.
+
+```python
+answers = client.predict("tickets/v1", [{"state": t, "questions": questions} for t in new_tickets])
+answers[0]["department"].choice           # "billing": each row's answers as system_one(...).answers has them
+```
+
+**Async.** `await client.system_one_async(...)`, `await client.predict_async(...)` and
+`await client.models.list_async()`; `async with EndorClient()` closes the connections.
 
 ## Projects
 
@@ -142,11 +153,16 @@ project = client.projects.get_or_create("tickets", base_models=["decider-2b"])  
 project.datasets.upload("train", endor.data.load_rows("train.jsonl"))   # rows: see "Data format" below
 project.datasets.upload("heldout", endor.data.load_rows("heldout.jsonl"))
 baseline = project.evaluate("decider-2b", "heldout").result()   # names resolve in the project: "tickets/decider-2b"
+project.evaluate("decider-2b", rows=more_rows).result()          # or rows sent with the call, no dataset
 
 project.add_base_model("gev-26b")         # "tickets/gev-26b" answers at once
 project.info_.base_models                 # ["decider-2b", "gev-26b"]
 project.remove_base_model("gev-26b")      # "tickets/gev-26b" stops answering; models trained on it keep working
 ```
+
+An evaluation scores a row's labeled questions; a row without labels is answered on every question and not scored
+(its answers are in the results' `rows_url`, which `client.predict` reads for you). `rows_done` of `rows_total` shows
+how far a running evaluation is.
 
 `project.info_` has `kind`, `base_models` (in the order they were added) and `paused` (managed projects only).
 `project.update(description=...)` changes the description. `project.models.list()` starts with the base models
@@ -218,7 +234,9 @@ with warmup then linear decay, batches of 16), scores the held-out rows during a
 final model. Every number appears on the run's dashboard page. `SupervisedConfig` has the knobs: base model, rank,
 learning rate and schedule, batch size, epochs, loss, how often to evaluate. The recipe sets the run's
 `total_steps` from the data size and epochs, so the dashboard shows a progress bar with an ETA, and it prints a
-progress line (`step 37/120 (31%) · loss 0.4120 · ~3 min left`; `progress=False` turns it off).
+progress line (`step 37/120 (31%) · loss 0.4120 · ~3 min left`; `progress=False` turns it off). It sends each step
+before the last one's results are read (`steps_in_flight=2`), so the trainer doesn't wait for a round trip between
+steps; results, metrics and evaluations are the same as with `steps_in_flight=1`.
 
 ## Training costs and limits
 
@@ -228,11 +246,15 @@ progress line (`step 37/120 (31%) · loss 0.4120 · ~3 min left`; `progress=Fals
   `client.base_models()` shows the prices; `client.usage(starting_on, ending_before)` returns hourly `decide` rows (input tokens)
   and `train` rows (GPU-seconds) with their cost.
 - **Idle timeout.** After 2 minutes without calls, a run saves its state and frees its GPU (status `idle`). The next
-  call resumes it in a few seconds. After 1 hour without calls, the run is closed; saved models are kept.
+  call resumes it in a few seconds. While a run is open, the SDK sends a heartbeat every minute from a background
+  thread, so the run stays open however long you wait between calls. After 5 minutes without calls or heartbeats (the
+  process ended without closing the run), the run is closed; saved models are kept.
 - **5 open runs per org.** Every run that isn't closed counts, idle ones included. A sixth `runs.create` raises
+  call resumes it in a few seconds. After 1 hour without calls, the run is closed; saved models are kept.
+- **25 open runs per org.** Every run that isn't closed counts, idle ones included. A 26th `runs.create` raises
   `LimitReachedError` (409, code `limit_reached`), whose message lists the open runs; close one (`run.close()` or
   `endor runs close RUN_ID`). It is not retried.
-- **Other limits.** 7 projects per org, 20 API keys and 50 models per project also raise `LimitReachedError` once
+- **Other limits.** 7 projects per org, 20 API keys and 500 models per project also raise `LimitReachedError` once
   reached. `client.whoami().limits` lists every limit with its value.
 - **Close your runs.** Use `with project.runs.create(...) as run:` (or `async with`): the run is closed when the
   block ends, also on errors. `runs.create(wait=True)` closes the run if you interrupt it while it provisions, and the
@@ -250,10 +272,14 @@ train, heldout = endor.data.split(rows, holdout=0.1)
 train, heldout = endor.data.rows_to_datums(train), endor.data.rows_to_datums(heldout)
 
 with project.runs.create(rank=16) as run:          # on the project's first base model, or base_model="..."
+    steps = endor.Steps()                           # keeps 2 steps in flight
     for batch in endor.data.batches(train, 16):
         fb = run.forward_backward(batch)            # gradients accumulate on the trainer
         opt = run.optim_step(learning_rate=1e-4)    # AdamW step, then zero gradients
-        out, step = endor.gather(fb, opt)           # submit both, then wait once
+        for out, step in steps.add(fb, opt):        # sent; returns the previous step's results
+            print(step.step, out.loss)
+    for out, step in steps.wait():                  # the last step
+        print(step.step, out.loss)
     scored = run.forward(heldout).result()          # option probabilities with the current adapter
     metrics = endor.metrics.decision_metrics(scored.probabilities, [d.target for d in heldout])
     run.log({"heldout/accuracy": metrics["accuracy"]})   # at the run's current step
@@ -271,6 +297,12 @@ fresh run defaults to rank 16, alpha 32, attention and MLP layers, no readout.
 - `forward`, `forward_backward`, `optim_step` and `save_checkpoint` return futures. Call `.result()`, `await` them,
   or wait for several with `endor.gather(...)`. Each has an `_async` variant that submits without blocking. A future
   can stay pending while a GPU starts (usually under a minute); `.result()` keeps waiting.
+- `endor.Steps()` sends each step before the last one's results are read, so the trainer starts the next step as soon
+  as it finishes one instead of waiting for your round trip (most of a second per step). `steps.add(fb, opt)` returns
+  the results of the steps it waited for (the step before, once two are out), oldest first, and `steps.wait()` the
+  rest; a failed step raises from the call that reads it. A call you send between steps (`run.forward`,
+  `save_checkpoint`) runs after every step added so far. `Steps(in_flight=1)` waits for each step, like
+  `endor.gather(fb, opt)` after every step. `add_async` and `wait_async` are for async code.
 - Gradients are the weighted mean over every datum since the last `optim_step`, so splitting a batch across calls
   changes nothing. `optim_step` with nothing accumulated fails with `no_gradients`. Batches over 1,024 datums are
   split for you; every datum is checked locally before any chunk is sent, so a bad datum never leaves half a batch
@@ -278,8 +310,13 @@ fresh run defaults to rank 16, alpha 32, attention and MLP layers, no readout.
 - Losses: `cross_entropy` (hard or soft targets) and `brier`.
 - `optim_step` takes `AdamParams` (betas, epsilon, weight decay, gradient clipping) and the learning rate, which you
   pass every step: the schedule is yours.
+- `run.predict(rows)` answers decision rows with the current adapter before you save it: a future of one
+  `{name: answer}` per row, in order, as `client.system_one` answers them (labels are ignored). The answers match
+  the model saved at that point within the usual train/serve tolerance, a few hundredths at most in a probability
+  (bf16 rounding of the batch shape). It runs on the training GPU in order with the run's other calls and is billed
+  as training GPU time, like `forward`. Lists over 1,024 questions are split for you. Text and JSON states only.
 - `run.forward` scores data with the current adapter without saving a model. `project.evaluate(model, dataset)`
-  scores a saved model on a stored dataset server-side.
+  scores a saved model on a stored dataset server-side (or on `rows=` sent with the call).
 - `run.close()` releases the trainer (a `with` block does it for you). Unsaved progress is lost; the SDK warns when
   you close with optimizer steps newer than your last save.
 - Creating a run provisions a trainer, usually in under a minute. `runs.create(wait=True)` (the default) blocks
@@ -390,6 +427,7 @@ is unclear, report it with `endor.user_report(...)`; report `kind="works"` once 
 | `model` | `ENDOR_DEFAULT_MODEL` | none: pass `model=` to `system_one`, e.g. `"tickets"` |
 | `timeout` | | 30 s per request, 330 s for a decision (a future poll also waits up to 25 s on the server) |
 | | `ENDOR_LOG_LEVEL` | unset; `info` logs one line per request on the `endor` logger |
+| `report_latency` | `ENDOR_REPORT_LATENCY` | on; `False` or `0` stops sending `X-Endor-Client-Latency` (see below) |
 
 `EndorClient` also takes `headers` for every request, `retry`, `gzip=False` to stop compressing large bodies, `capture=False`
 to stop sending each run's settings and your git commit hash to the dashboard, and your own `httpx` client or
@@ -403,13 +441,18 @@ Besides your API key and the request itself, every request carries:
 - `X-Endor-SDK: endor-python`, `X-Endor-SDK-Version: <version>`, `X-Endor-Runtime: python/<version> (<os>; <cpu>)`
   and `X-Endor-SDK-Interface: python` or `cli`;
 - `X-Endor-SDK-Method` (the SDK call, e.g. `run.forward_backward`), `X-Endor-SDK-Recipe` (inside a recipe),
-  `X-Endor-Client-Request-Id` (the same on every retry of one call) and `X-Endor-Retry-Count` (on retries).
+  `X-Endor-Client-Request-Id` (the same on every retry of one call) and `X-Endor-Retry-Count` (on retries);
+- `X-Endor-Client-Latency: <request id>=<ms>`: how long the previous request took from sending it to reading the
+  response, network and connection set-up included, sent once with the next request (nothing waits for it), so the
+  dashboard shows the latency you see next to Endor's own. `EndorClient(report_latency=False)` or
+  `ENDOR_REPORT_LATENCY=0` turns it off.
 
 `runs.create` also sends the run's settings and, unless `capture=False`, your git commit hash and a dirty flag
-(never file contents). A report (`endor.user_report`) sends only what "Reporting problems" lists.
+(never file contents). While a run is open, a background thread sends `POST /v1/runs/{id}/heartbeat`, with no
+body, once a minute. A report (`endor.user_report`) sends only what "Reporting problems" lists.
 
-For every request, the API stores the request id, your org, the calling key, the route, the status and the latency,
-plus a `client` record with one field per header: `user_agent`, `sdk`, `sdk_version`, `runtime`, `interface`,
+For every request, the API stores the request id, your org, the calling key, the route, the status, the latency and
+the end-to-end time the SDK reported for it, plus a `client` record with one field per header: `user_agent`, `sdk`, `sdk_version`, `runtime`, `interface`,
 `method`, `recipe`, `client_request_id` and `retry_count` (each cut to 200 characters). It also keeps the request
 body, and the response body when it is JSON and at most 256 KB, in object storage (S3). The secret API key is never
 stored. You can add your own headers with `EndorClient(headers=...)`; the ones above can't be overridden.
@@ -438,15 +481,16 @@ continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a man
 
 | Object | Members |
 |---|---|
-| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
+| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `predict(model, rows, *, progress=True, timeout=None)` → one `{question: answer}` per row, `predict_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
 | `endor.user_report(message, *, kind="bug", request_id=None, context=None, api_key=None, base_url=None, timeout=None)` | `endor.user_report_async(...)`; returns `UserReportReceipt` (`id`, `message`) |
 | `client.projects` | `create(name, description=None, *, kind="custom", base_models=None)`, `get(name)`, `get_or_create(name, description=None, *, kind="custom", base_models=None)`, `list(limit=None, offset=0)` (all pages) |
-| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `add_base_model(base_model)`, `remove_base_model(base_model)`, `update(*, description=None, paused=None, wandb=None)`, `evaluate(model, dataset, run_id=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
+| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `add_base_model(base_model)`, `remove_base_model(base_model)`, `update(*, description=None, paused=None, wandb=None)`, `evaluate(model, dataset=None, run_id=None, *, rows=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
 | `project.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
 | `project.runs` | `create(base_model=None, *, rank, alpha, seed, train_attn, train_mlp, train_readout, from_model, include_optimizer, name, tags, config, user_metadata, total_steps, wandb, wait)` → `Run`, `get(run_id)`, `list(tag=None, limit=None, offset=0)` |
 | `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `download(model, path, include_optimizer=False)`, `delete(model)`; `model` is a name (a base id for a base model) or `<project>/<name>` |
-| `Run` | `.id`, `.project`, `.info_`, `.ready`, `.next_seq_id`, `forward(data, loss_fn)`, `forward_backward(data, loss_fn)`, `optim_step(adam_params=None, *, learning_rate=None)`, `save_checkpoint(name, *, include_optimizer, ttl_seconds, user_metadata)` → `APIFuture[str]`, the `_async` variants of those four, `close(*, wait=False, timeout=None)`, `close_async(...)`, `info()`, `log(metrics, step=None)`, `metrics(keys=None, since_step=None)`, `log_eval(model, results, *, step, name)`, sync and async context manager |
+| `Run` | `.id`, `.project`, `.info_`, `.ready`, `.next_seq_id`, `forward(data, loss_fn)`, `forward_backward(data, loss_fn)`, `optim_step(adam_params=None, *, learning_rate=None)`, `save_checkpoint(name, *, include_optimizer, ttl_seconds, user_metadata)` → `APIFuture[str]`, `predict(rows)` → `APIFuture[list[dict[str, Answer]]]`, the `_async` variants of those five, `close(*, wait=False, timeout=None)`, `close_async(...)`, `info()`, `log(metrics, step=None)`, `metrics(keys=None, since_step=None)`, `log_eval(model, results, *, step, name)`, sync and async context manager |
 | `APIFuture[T]` | `result(timeout=None)`, `await f`, `result_async(timeout)`, `done()`, `info`, `cancel()`, `cancel_async()`, `APIFuture.completed(value)`; `endor.gather(*futures)`, `endor.gather_async(*futures)` |
+| `endor.Steps(in_flight=2)` | `add(*futures)` → the results of the steps it read, `wait()` → the rest, `add_async`, `wait_async`, `len(steps)` |
 | `endor.data` | `to_row`, `load_rows(path)`, `save_rows(path, rows)`, `label_target(question, label)`, `row_to_datums(row)`, `rows_to_datums(rows)`, `split(rows, holdout=0.1, seed=0)`, `batches(items, size, *, shuffle=True, seed=0)` |
 | `endor.metrics` | `decision_metrics(probs, targets, bins=10)` → `{n, accuracy, nll, brier, ece, mean_confidence, selective}` |
 | `endor.recipes.supervised` | `SupervisedConfig`, `SupervisedResult`, `train(cfg, rows, eval_rows=None, client=None)`, `evaluate_run(run, datums)`, `evaluate_model(client, model, rows)`, `lr_at(cfg, step, total)` |

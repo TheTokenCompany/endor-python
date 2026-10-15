@@ -5,6 +5,39 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-14
+
+Training steps no longer wait for each other's results.
+
+- `endor.Steps(in_flight=2)` keeps up to `in_flight` training steps sent and not yet read: `steps.add(fb, opt)`
+  takes a step's futures and returns the results of the steps it waited for (the step before, once two are out),
+  oldest first, as `endor.gather` returns them; `steps.wait()` reads the rest (`add_async` and `wait_async` for async
+  code). The trainer has the next step queued when it finishes one, instead of waiting for your round trip between
+  steps (about 0.7 s a step). A failed step raises from the call that reads it, and a call sent between two `add`
+  calls runs after every step added so far.
+- `recipes.supervised.train` (and `distill`) sends each step before the last one's results are read:
+  `SupervisedConfig.steps_in_flight`, default 2 (1 waits for each step, as before). Results, metrics, the progress
+  line and the held-out evaluations are the same; an evaluation reads every step first and runs right after its step.
+  A step that fails still raises at that step; the one step sent after it runs before the run is closed.
+Predictions for many rows at once, without labels or a dataset.
+
+- `client.predict(model, rows, *, progress=True, timeout=None)` (and `predict_async`) returns the answers to every
+  question of every row, in the rows' order: one `{question name: NoulAnswer | ChoiceAnswer | ScoreAnswer}` per row,
+  as `system_one(...).answers`. It sends the rows without their labels as one server-side evaluation in the model's
+  project (`POST /v1/projects/{project}/evaluations` with `rows`), waits for it, printing a progress line to stderr
+  every 10 seconds while it runs (`evaluation evl_...: 1,200/10,000 rows (12%) · ~2 min left`), and fetches its
+  results file from storage (HTTPS only, without the API key). At most 50,000 rows and 32 MB per call; billed as
+  decisions. `TimeoutError` after `timeout` seconds (the evaluation keeps running), `OperationFailedError` when it
+  fails.
+- `project.evaluate(model, dataset=None, run_id=None, *, rows=None)` takes rows inline instead of a dataset's name
+  (one of the two). A row with labels is scored on its labeled questions; a row without labels is answered on every
+  question and not scored (its answers are in `results["rows_url"]`).
+- `Evaluation` has `rows_total`, `rows_done` and `started_at`, the API's progress of a server-side evaluation.
+- Every request is timed end to end, from sending it to reading the response, and that time is sent with the next
+  request, once, as `X-Endor-Client-Latency: <request id>=<ms>`, so the dashboard can show the latency your app sees
+  next to Endor's own. Nothing waits for it and it never raises. `EndorClient(report_latency=False)` or
+  `ENDOR_REPORT_LATENCY=0` turns it off.
+
 ## [0.6.1] - 2026-10-13
 
 - User reports need an API key, as the API now requires: `endor.user_report` without `api_key` or `ENDOR_API_KEY`

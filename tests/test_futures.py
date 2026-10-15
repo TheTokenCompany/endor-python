@@ -118,3 +118,73 @@ def test_many_leaves_are_chunked(project: endor.Project, fake: FakeEndor, monkey
     retrieves = [r for r in fake.requests if r.path == "/v1/futures/retrieve"]
     assert [len(r.body["ids"]) for r in retrieves] == [2, 2, 1]
     run.close()
+
+
+def one_step(run: endor.Run) -> tuple[APIFuture[endor.ForwardOutput], APIFuture[endor.OptimStepOutput]]:
+    return run.forward_backward(datums()), run.optim_step(learning_rate=1e-3)
+
+
+def step_calls(fake: FakeEndor) -> list[str]:
+    """The training calls and future polls so far, by the last part of their path."""
+    return [
+        r.path.rsplit("/", 1)[-1]
+        for r in fake.requests
+        if r.path.endswith(("/forward_backward", "/optim_step")) or r.path.startswith("/v1/futures")
+    ]
+
+
+def test_steps_send_the_next_step_before_reading_the_last(project: endor.Project, fake: FakeEndor) -> None:
+    with project.runs.create("jev-9b") as run:
+        calls = len(step_calls(fake))  # the run's ready future
+        steps = endor.Steps()  # 2 in flight
+        assert steps.add(*one_step(run)) == [] and len(steps) == 1
+        done = steps.add(*one_step(run))  # step 2 is sent, then step 1 is read
+        assert [(out.metrics["n"], opt.step) for out, opt in done] == [(4, 1)] and len(steps) == 1
+        assert step_calls(fake)[calls:] == [
+            "forward_backward",
+            "optim_step",
+            "forward_backward",
+            "optim_step",
+            "retrieve",
+        ]
+        assert [opt.step for _, opt in steps.wait()] == [2] and len(steps) == 0
+        assert steps.wait() == []
+
+
+def test_steps_with_one_in_flight_wait_for_each_step(project: endor.Project, fake: FakeEndor) -> None:
+    with project.runs.create("jev-9b") as run:
+        calls = len(step_calls(fake))
+        steps = endor.Steps(in_flight=1)
+        assert [opt.step for _, opt in steps.add(*one_step(run))] == [1]
+        assert [opt.step for _, opt in steps.add(*one_step(run))] == [2]
+        assert steps.wait() == []
+        assert step_calls(fake)[calls:] == ["forward_backward", "optim_step", "retrieve"] * 2
+        with pytest.raises(ValueError, match="in_flight"):
+            endor.Steps(in_flight=0)
+
+
+def test_a_failed_step_raises_where_it_is_read(project: endor.Project, fake: FakeEndor) -> None:
+    with project.runs.create("jev-9b") as run:
+        steps = endor.Steps()
+        steps.add(*one_step(run))
+        fb, opt = one_step(run)
+        fake.fail_future(fb.id or "", "oom", "out of memory")
+        assert [o.step for _, o in steps.add(fb, opt)] == [1]  # step 1 is read; the failed step 2 is still in flight
+        with pytest.raises(OperationFailedError) as e:
+            steps.add(*one_step(run))  # step 3 is sent, then step 2 is read
+        assert e.value.code == "oom" and len(steps) == 1
+        assert [o.step for _, o in steps.wait()] == [3]
+
+
+async def test_steps_async(project: endor.Project, fake: FakeEndor) -> None:
+    fake.future_polls = 1
+    async with project.runs.create("jev-9b") as run:
+        steps = endor.Steps()
+        read = []
+        for _ in range(3):
+            fb = await run.forward_backward_async(datums())
+            opt = await run.optim_step_async(learning_rate=1e-3)
+            read += await steps.add_async(fb, opt)
+            assert len(steps) == 1
+        read += await steps.wait_async()
+        assert [opt.step for _, opt in read] == [1, 2, 3] and len(steps) == 0

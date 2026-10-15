@@ -6,11 +6,15 @@ of them (``forward_backward`` then ``optim_step``) and the trainer runs them bac
     fb = run.forward_backward(batch)
     opt = run.optim_step(learning_rate=1e-4)
     out, step = endor.gather(fb, opt)          # one long-poll for both
+
+In a training loop, ``Steps`` sends the next step before the last one's results are read, so the trainer never waits
+for your round trip between steps.
 """
 
 from __future__ import annotations
 
 import time
+from collections import deque
 from collections.abc import Callable, Generator
 from typing import Any, Generic, TypeVar
 
@@ -19,7 +23,7 @@ from ._constants import FUTURE_POLL_WAIT_S, MAX_FUTURES_PER_RETRIEVE
 from ._http import Transport
 from .types import FutureInfo
 
-__all__ = ["APIFuture", "gather", "gather_async"]
+__all__ = ["APIFuture", "Steps", "gather", "gather_async"]
 
 T = TypeVar("T")
 _UNSET: Any = object()
@@ -251,3 +255,54 @@ async def gather_async(*futures: APIFuture[Any], timeout: float | None = None) -
         assert t is not None
         await _wait_all_async(t, leaves, timeout, "gather")
     return [f._finish() for f in futures]
+
+
+# ---------------------------------------------------------------- steps in flight
+
+
+class Steps:
+    """Training steps sent before the last one's results are read: up to ``in_flight`` at once, so the trainer has the
+    next step queued when it finishes one, instead of waiting for your round trip.
+
+        steps = endor.Steps()                       # 2 steps in flight
+        for batch in batches:
+            for out, opt in steps.add(run.forward_backward(batch), run.optim_step(learning_rate=1e-4)):
+                print(opt.step, out.loss)
+        for out, opt in steps.wait():               # the steps still in flight
+            print(opt.step, out.loss)
+
+    ``add`` takes one step's futures, already sent, and returns the results of the steps it waited for, oldest first,
+    each as ``gather`` returns them: none while fewer than ``in_flight`` steps are out, then the oldest step's.
+    ``wait`` reads every step still in flight. A failed step raises its ``OperationFailedError`` from the ``add`` or
+    ``wait`` that reads it; the steps sent after it stay in flight. A call you send between two ``add`` calls
+    (``run.forward`` on held-out data, ``save_checkpoint``) runs after every step added so far, as the run executes
+    calls in order. ``in_flight=1`` waits for each step before the next one is sent.
+    """
+
+    def __init__(self, in_flight: int = 2) -> None:
+        if in_flight < 1:
+            raise ValueError("in_flight must be at least 1")
+        self.in_flight = in_flight
+        self._sent: deque[tuple[APIFuture[Any], ...]] = deque()
+
+    def __len__(self) -> int:
+        """The steps added and not read yet."""
+        return len(self._sent)
+
+    def add(self, *futures: APIFuture[Any]) -> list[list[Any]]:
+        """Add a step (its futures, already sent); returns the results of the steps it read."""
+        self._sent.append(futures)
+        return [gather(*self._sent.popleft()) for _ in range(len(self._sent) - self.in_flight + 1)]
+
+    def wait(self) -> list[list[Any]]:
+        """Read every step still in flight; returns their results, oldest first."""
+        return [gather(*self._sent.popleft()) for _ in range(len(self._sent))]
+
+    async def add_async(self, *futures: APIFuture[Any]) -> list[list[Any]]:
+        """``add`` for async code."""
+        self._sent.append(futures)
+        return [await gather_async(*self._sent.popleft()) for _ in range(len(self._sent) - self.in_flight + 1)]
+
+    async def wait_async(self) -> list[list[Any]]:
+        """``wait`` for async code."""
+        return [await gather_async(*self._sent.popleft()) for _ in range(len(self._sent))]

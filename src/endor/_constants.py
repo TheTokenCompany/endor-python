@@ -14,6 +14,7 @@ API_KEY_ENV = "ENDOR_API_KEY"
 BASE_URL_ENV = "ENDOR_BASE_URL"
 DEFAULT_MODEL_ENV = "ENDOR_DEFAULT_MODEL"
 LOG_LEVEL_ENV = "ENDOR_LOG_LEVEL"
+REPORT_LATENCY_ENV = "ENDOR_REPORT_LATENCY"  # "0", "false", "no" or "off": don't send X-Endor-Client-Latency
 
 SDK_NAME = "endor-python"
 LOGGER_NAME = "endor"
@@ -27,6 +28,7 @@ HEADER_SDK_METHOD = "X-Endor-SDK-Method"
 HEADER_SDK_RECIPE = "X-Endor-SDK-Recipe"
 HEADER_RETRY_COUNT = "X-Endor-Retry-Count"
 HEADER_CLIENT_REQUEST_ID = "X-Endor-Client-Request-Id"
+HEADER_CLIENT_LATENCY = "X-Endor-Client-Latency"
 HEADER_IDEMPOTENCY_KEY = "Idempotency-Key"
 HEADER_REQUEST_ID = "x-request-id"
 HEADER_RETRY_AFTER = "retry-after"
@@ -34,12 +36,16 @@ HEADER_RETRY_AFTER_MS = "retry-after-ms"
 
 # Server limits the SDK enforces or works around.
 MAX_DATUMS_PER_CALL = 1024
+MAX_PREDICT_QUESTIONS_PER_CALL = 1024  # run.predict: questions per request, across its rows
 MAX_UPLOAD_ROWS = 50_000
 MAX_QUESTIONS_PER_REQUEST = 64
 MAX_FUTURES_PER_RETRIEVE = 256
 FUTURE_POLL_WAIT_S = 25.0  # server-side long poll per request (server clamps at 30)
 MAX_ERROR_BODY_LENGTH = 200
 LIST_PAGE_SIZE = 100  # page size when a list call pages through every item
+# An open run tells the API this often that its client is still there; the API closes a parked run after 5 minutes
+# without a call or a heartbeat.
+RUN_HEARTBEAT_S = 60.0
 
 # Model names saved from the SDK: the API's name pattern, and never "base" (reserved by the API, as are the base model
 # ids: ``<project>/<base id>`` calls a base model).

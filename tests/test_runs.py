@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
+import time
+from collections.abc import Callable
 
 import httpx
 import pytest
@@ -316,3 +319,99 @@ class TestDashboard:
         assert ev.source == "client" and ev.training_run_id == run.id and ev.results
         assert ev.results["accuracy"] == 0.5 and ev.results["step"] == 3
         assert [e.id for e in project.evaluations(run_id=run.id)] == [ev.id]
+
+
+def heartbeats(fake: FakeEndor) -> int:
+    return len([r for r in fake.requests if r.method == "POST" and r.path.endswith("/heartbeat")])
+
+
+def wait_for(cond: Callable[[], bool], timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not cond():
+        assert time.monotonic() < deadline, "timed out"
+        time.sleep(0.01)
+
+
+@pytest.fixture
+def fast_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(endor._constants, "RUN_HEARTBEAT_S", 0.02)
+
+
+@pytest.mark.usefixtures("fast_heartbeat")
+class TestHeartbeat:
+    """While a run is open, a daemon thread tells the API every minute that its client is still there, so a parked
+    run isn't closed while the client waits; it stops when the run closes and never raises into user code."""
+
+    def test_beats_while_open_and_stops_on_close(self, project: endor.Project, fake: FakeEndor) -> None:
+        with project.runs.create("jev-9b") as run:
+            thread = run._heartbeat
+            assert thread is not None and thread.daemon and thread.is_alive()
+            wait_for(lambda: heartbeats(fake) >= 3)
+            assert fake.runs[run.id]["client_seen_at"]
+        thread.join(1)
+        assert not thread.is_alive()
+        sent = heartbeats(fake)
+        time.sleep(0.1)
+        assert heartbeats(fake) == sent
+        hb = [r for r in fake.requests if r.path.endswith("/heartbeat")][0]
+        assert hb.path == f"/v1/runs/{run.id}/heartbeat" and hb.headers["x-endor-sdk-method"] == "run.heartbeat"
+
+    async def test_async_with_block(self, project: endor.Project, fake: FakeEndor) -> None:
+        async with project.runs.create("jev-9b") as run:
+            thread = run._heartbeat
+            assert thread is not None
+            while heartbeats(fake) < 2:
+                await asyncio.sleep(0.01)
+        thread.join(1)
+        assert not thread.is_alive()
+
+    def test_without_a_with_block_until_close(self, project: endor.Project, fake: FakeEndor) -> None:
+        run = project.runs.create("jev-9b")
+        wait_for(lambda: heartbeats(fake) >= 2)
+        thread = run._heartbeat
+        run.close()
+        assert thread is not None
+        thread.join(1)
+        assert not thread.is_alive()
+
+    def test_only_the_handles_that_hold_the_run_open(self, project: endor.Project, fake: FakeEndor) -> None:
+        with project.runs.create("jev-9b") as run:
+            assert project.runs.get(run.id)._heartbeat is None  # a handle to look at the run sends nothing
+            assert all(r._heartbeat is None for r in project.runs.list())
+            with project.runs.get(run.id) as again:  # one in a with block does
+                assert again._heartbeat is not None and again._heartbeat is not run._heartbeat
+
+    def test_errors_never_reach_user_code(
+        self, project: endor.Project, fake: FakeEndor, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger="endor"), project.runs.create("jev-9b") as run:
+            fake.heartbeat_fault = httpx.ConnectError("reset")
+            wait_for(lambda: sum("heartbeat failed" in r.getMessage() for r in caplog.records) >= 2)
+            fake.heartbeat_fault = HTTPError(500, "internal", "boom")
+            wait_for(lambda: sum("heartbeat failed" in r.getMessage() for r in caplog.records) >= 4)
+            fake.heartbeat_fault = None
+            assert run._heartbeat is not None and run._heartbeat.is_alive()  # it keeps going
+            run.forward(datums(1)).result()  # the run works as before
+        failed = [r for r in caplog.records if "heartbeat failed" in r.getMessage()]
+        assert {r.levelno for r in failed} == {logging.DEBUG}
+        assert run._t.last.error is None  # a report is never about a heartbeat
+
+    def test_stops_once_the_server_closed_the_run(self, project: endor.Project, fake: FakeEndor) -> None:
+        run = project.runs.create("jev-9b")
+        fake.runs[run.id]["status"] = "closed"  # closed elsewhere: `endor runs close`, the dashboard
+        thread = run._heartbeat
+        assert thread is not None
+        thread.join(2)
+        assert not thread.is_alive()
+        run.close()
+
+    def test_a_dropped_handle_stops_beating(self, project: endor.Project, fake: FakeEndor) -> None:
+        """A handle nobody holds any more (a notebook cell run again) stops, so the server closes its run."""
+        run = project.runs.create("jev-9b")
+        run_id, thread = run.id, run._heartbeat
+        assert thread is not None
+        del run
+        gc.collect()
+        thread.join(1)
+        assert not thread.is_alive()
+        project.runs.get(run_id).close()

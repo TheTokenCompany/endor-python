@@ -22,18 +22,22 @@ if "heldout" not in {d.name for d in project.datasets.list()}:
     project.datasets.upload("heldout", heldout_rows)
 
 with project.runs.create(rank=16, tags=["manual"]) as run:  # on the project's first base model
-    steps = 0
+    steps = endor.Steps()  # the next step is sent before the last one's results are read: 2 steps in flight
+    sent = 0
     for epoch in range(2):
         for batch in endor.data.batches(train, 16, seed=epoch):
             fb = run.forward_backward(batch)  # gradients accumulate on the trainer
             opt = run.optim_step(learning_rate=1e-4)  # AdamW step, then zero gradients
-            out, step = endor.gather(fb, opt)  # one wait for both
-            steps += 1
-            if steps % 10 == 0:
-                scored = run.forward(heldout).result()  # the current adapter, no checkpoint needed
+            sent += 1
+            for out, step in steps.add(fb, opt):  # the step before this one, once two are out
+                print(f"step {step.step}: loss {out.loss:.3f}")
+            if sent % 10 == 0:
+                scored = run.forward(heldout).result()  # runs right after step `sent`: the current adapter
                 metrics = decision_metrics(scored.probabilities, [d.target for d in heldout])
-                run.log({"heldout/accuracy": metrics["accuracy"], "heldout/ece": metrics["ece"]})  # at the current step
-                print(f"step {step.step}: loss {out.loss:.3f}  held-out accuracy {metrics['accuracy']:.3f}")
+                run.log({"heldout/accuracy": metrics["accuracy"], "heldout/ece": metrics["ece"]}, step=sent)
+                print(f"step {sent}: held-out accuracy {metrics['accuracy']:.3f}")
+    for out, step in steps.wait():  # the last step
+        print(f"step {step.step}: loss {out.loss:.3f}")
 
     model = run.save_checkpoint("v2", include_optimizer=True).result()  # "tickets/v2"
 
