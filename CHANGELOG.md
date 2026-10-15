@@ -5,6 +5,9 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- `client.balance()` returns the org's prepaid balance in USD (`GET /v1/balance`): credits bought or granted, minus
+  usage so far. `endor whoami` shows it too (`balance_usd`).
+
 ## [0.7.0] - 2026-10-14
 
 Training steps no longer wait for each other's results.

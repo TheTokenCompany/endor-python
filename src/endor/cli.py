@@ -158,7 +158,7 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
         return client.projects.get(model.split("/", 1)[0])
 
     if a.cmd == "whoami":
-        _out(client.whoami(), f)
+        _out({**_dump(client.whoami()), "balance_usd": client.balance()}, f)
     elif a.cmd == "base-models":
         _out(client.base_models(), f)
     elif a.cmd == "projects":

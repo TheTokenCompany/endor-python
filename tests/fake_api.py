@@ -215,6 +215,8 @@ class FakeEndor:
     corrupt_files: bool = False
     blocked: bool = False
     """The org's balance is used up: paid calls answer 402 insufficient_balance."""
+    balance_usd: float | None = 100.0
+    """What GET /v1/balance answers (None: a server without billing)."""
 
     projects: dict[str, dict] = field(default_factory=dict)
     wandb_connected: bool = False  # the org's W&B connection (dashboard only)
@@ -454,6 +456,8 @@ class FakeEndor:
                 "limits": dict(LIMITS),
                 "managed_projects": False,
             }
+        if p == ["balance"] and m == "GET":
+            return 200, {"balance_usd": self.balance_usd}
         if p == ["usage"] and m == "GET":
             start, end = datetime.fromisoformat(params["starting_on"]), datetime.fromisoformat(params["ending_before"])
             if end - start > timedelta(days=14):

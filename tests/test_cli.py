@@ -22,7 +22,10 @@ def run_json(capsys: pytest.CaptureFixture[str], client: EndorClient, *args: str
 
 
 def test_whoami_and_base_models(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
-    assert "org_id=" in run(capsys, client, "whoami")
+    out = run(capsys, client, "whoami")
+    assert "org_id=" in out and "balance_usd=" in out
+    me = run_json(capsys, client, "whoami")
+    assert isinstance(me, dict) and me["org_id"] and "limits" in me and "balance_usd" in me
     bases = run_json(capsys, client, "base-models")
     assert isinstance(bases, list) and {b["id"] for b in bases} >= {"jev-9b"}
 

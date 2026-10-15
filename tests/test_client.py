@@ -282,6 +282,15 @@ class TestCatalogAndAccount:
         assert me.limits["max_projects_per_org"] >= 1 and me.limits["max_active_runs"] >= 1
         assert me.managed_projects is False
 
+    def test_balance(self, client: EndorClient) -> None:
+        b = client.balance()
+        assert b is None or isinstance(b, float)  # None: a server without billing
+
+    def test_balance_from_the_api(self, client: EndorClient, fake: FakeEndor) -> None:
+        assert client.balance() == 100.0
+        fake.balance_usd = None
+        assert client.balance() is None
+
     def test_usage_rows(self, client: EndorClient) -> None:
         now = datetime.now(timezone.utc)
         for u in client.usage(now - timedelta(days=1), now + timedelta(hours=1)):
