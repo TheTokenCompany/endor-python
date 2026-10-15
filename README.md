@@ -476,7 +476,7 @@ endor user-report "what you did, what happened, what you expected" [--kind bug|c
 ```
 
 `MODEL` is `<project>/<name>`, or `<project>/<base id>` for a base model of the project. `endor whoami` also shows the
-org's balance (`balance_usd`). Every command takes `-f json`; `endor user-report` also works without `ENDOR_API_KEY`. Training itself happens in Python. `endor runs close`
+org's balance (`balance_usd`). Every command takes `-f json` and needs `ENDOR_API_KEY`, `endor user-report` too. Training itself happens in Python. `endor runs close`
 frees a slot when a script left a run open. `usage --csv` columns are `hour, kind, project, base_model, model,
 training_run_id, input_tokens, gpu_seconds, continuous_learning, price_per_mtok, base_cost_usd,
 continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a managed project's decisions.
