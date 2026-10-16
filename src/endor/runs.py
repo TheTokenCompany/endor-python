@@ -31,9 +31,11 @@ from pydantic import TypeAdapter
 from . import _constants as C
 from . import data as D
 from ._http import Transport
+from ._images import Images
 from ._log import logger
 from .errors import ConflictError, NotFoundError
 from .futures import APIFuture
+from .images import find_images
 from .types import (
     AdamParams,
     Answer,
@@ -48,13 +50,14 @@ from .types import (
     question_dict,
 )
 
-__all__ = ["Run", "MAX_DATUMS_PER_CALL"]
+__all__ = ["Run", "MAX_DATUMS_PER_CALL", "MAX_IMAGES_PER_CALL"]
 
 _FINAL = ("closed", "failed")
 _MODEL_NAME = re.compile(C.SDK_MODEL_NAME)
 _CLOSE_POLL_S = 1.0
 
 MAX_DATUMS_PER_CALL = C.MAX_DATUMS_PER_CALL
+MAX_IMAGES_PER_CALL = C.MAX_IMAGES_PER_CALL
 """Bigger batches are split into several requests; the merged result and the gradients are the same."""
 
 MAX_PREDICT_QUESTIONS = C.MAX_PREDICT_QUESTIONS_PER_CALL
@@ -76,8 +79,9 @@ class Run:
             ...
     """
 
-    def __init__(self, transport: Transport, info: dict[str, Any]) -> None:
+    def __init__(self, transport: Transport, info: dict[str, Any], images: Images | None = None) -> None:
         self._t = transport
+        self._images = images or Images(transport)
         self.info_ = RunInfo.model_validate(info)
         """The run as last fetched from the server (``run.info()`` refreshes it)."""
         self.id: str = self.info_.id
@@ -157,7 +161,10 @@ class Run:
         """Loss and gradients, accumulated until the next ``optim_step``.
 
         The update ``optim_step`` applies is the weight-averaged gradient over every datum since the previous step,
-        so splitting a batch across calls changes nothing. Batches over ``MAX_DATUMS_PER_CALL`` are split for you.
+        so splitting a batch across calls changes nothing. Batches over ``MAX_DATUMS_PER_CALL`` datums, or over
+        ``MAX_IMAGES_PER_CALL`` images, are split for you. On a base model that reads images, a datum's state may
+        hold ``endor.Image`` objects: each new image is uploaded once first (``client.images``) and the datums carry
+        references (limited access: ``PermissionDeniedError`` until the org is approved).
         """
         return self._fb("forward_backward", data, loss_fn)
 
@@ -180,8 +187,9 @@ class Run:
         probability). ``rows`` are decision rows in any shape ``endor.data.to_row`` takes; labels, ids and weights
         are ignored. No gradients, and the run's training state doesn't change. It runs in order with the run's
         other calls (after the steps sent before it) and is billed as training GPU time, like ``forward``. Lists
-        over ``MAX_PREDICT_QUESTIONS`` questions are split into several requests; every row is checked before any
-        is sent. Text and JSON states only (no images yet).
+        over ``MAX_PREDICT_QUESTIONS`` questions, or ``MAX_IMAGES_PER_CALL`` images, are split into several
+        requests; every row is checked before any is sent. States may hold ``endor.Image`` objects on a base model
+        that reads images (uploaded once first, sent as references).
         """
         return self._predict_future(self._send("predict", self._predict_chunks(rows)))
 
@@ -368,17 +376,15 @@ class Run:
             )
 
     # ------------------------------------------------------------------ forward / forward_backward
-    @staticmethod
-    def _chunks(data: Iterable[Datum], loss_fn: LossFn) -> list[dict[str, Any]]:
+    def _chunks(self, data: Iterable[Datum], loss_fn: LossFn) -> list[dict[str, Any]]:
         datums = list(data)
         if not datums:
             raise ValueError("no data: pass at least one Datum")
         for i, d in enumerate(datums):  # every chunk is checked before any is sent, so a batch is never half sent
             check_datum(d, f"data[{i}]")
-        n = MAX_DATUMS_PER_CALL
-        return [
-            {"data": [d.to_wire() for d in datums[i : i + n]], "loss_fn": loss_fn} for i in range(0, len(datums), n)
-        ]
+        wire = [d.to_wire() for d in datums]
+        self._images.prepare_states(wire)  # images uploaded once, sent as references
+        return [{"data": c, "loss_fn": loss_fn} for c in _split(wire, MAX_DATUMS_PER_CALL, lambda w: 1)]
 
     def _fb_future(self, op: str, refs: list[dict[str, Any]]) -> APIFuture[ForwardOutput]:
         parse: Callable[[Any], ForwardOutput] = ForwardOutput.model_validate
@@ -457,10 +463,10 @@ class Run:
             return futures[0]
         return APIFuture(self._t, children=list(futures), combine=_concat_answers, method="run.predict")
 
-    @staticmethod
-    def _predict_chunks(rows: Iterable[Any]) -> list[dict[str, Any]]:
-        """Each row's state and questions in wire form, in requests of at most ``MAX_PREDICT_QUESTIONS`` questions.
-        Every row is checked before any request is sent, so a bad row never leaves half a call sent."""
+    def _predict_chunks(self, rows: Iterable[Any]) -> list[dict[str, Any]]:
+        """Each row's state and questions in wire form, in requests of at most ``MAX_PREDICT_QUESTIONS`` questions
+        (and ``MAX_IMAGES_PER_CALL`` images). Every row is checked before any request is sent, so a bad row never
+        leaves half a call sent."""
         wire: list[dict[str, Any]] = []
         for i, obj in enumerate(rows):
             try:
@@ -474,15 +480,8 @@ class Run:
             wire.append({"state": row.state, "questions": {n: question_dict(q) for n, q in row.questions.items()}})
         if not wire:
             raise ValueError("no rows: pass at least one decision row")
-        chunks: list[list[dict[str, Any]]] = [[]]
-        size = 0
-        for w in wire:
-            if size and size + len(w["questions"]) > MAX_PREDICT_QUESTIONS:
-                chunks.append([])
-                size = 0
-            chunks[-1].append(w)
-            size += len(w["questions"])
-        return [{"rows": c} for c in chunks]
+        self._images.prepare_states(wire)
+        return [{"rows": c} for c in _split(wire, MAX_PREDICT_QUESTIONS, lambda w: len(w["questions"]))]
 
     @staticmethod
     def _optim_body(adam_params: AdamParams | None, learning_rate: float | None) -> dict[str, Any]:
@@ -515,6 +514,21 @@ def _beat(t: Transport, run_id: str, stop: threading.Event) -> None:
             return
         except Exception:
             logger.debug("run %s: heartbeat failed", run_id, exc_info=True)
+
+
+def _split(wire: list[dict[str, Any]], size: int, cost: Callable[[dict[str, Any]], int]) -> list[list[dict[str, Any]]]:
+    """``wire`` (datums or rows, states with their images as references) in order, in chunks of at most ``size`` by
+    ``cost`` (datums, or questions) and ``MAX_IMAGES_PER_CALL`` images each; an item alone always makes a chunk."""
+    chunks: list[list[dict[str, Any]]] = [[]]
+    used = images = 0
+    for w in wire:
+        n, k = cost(w), len(find_images(w["state"]))
+        if chunks[-1] and (used + n > size or images + k > MAX_IMAGES_PER_CALL):
+            chunks.append([])
+            used = images = 0
+        chunks[-1].append(w)
+        used, images = used + n, images + k
+    return chunks
 
 
 def check_model_name(name: str) -> None:

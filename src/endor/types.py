@@ -630,6 +630,9 @@ class DatasetInfo(_View):
     n_rows: int
     n_labelled_questions: int = 0
     question_types: dict[str, int] = Field(default_factory=dict)
+    n_images: int = 0
+    """Images across the rows (``endor.Image``, uploaded once and referenced). An evaluation of the dataset needs a
+    base model that reads images."""
     created_at: datetime
 
 
@@ -711,6 +714,9 @@ class WhoAmI(_View):
     for the whole org) and the other ``..._per_minute``."""
     managed_projects: bool = False
     """Whether managed projects can be created here (they are coming soon where they can't)."""
+    image_training: bool = False
+    """Whether the org may fine-tune with images (``endor.Image`` in rows and datums, ``client.images``). Limited
+    access: without it those calls raise ``PermissionDeniedError`` (403 ``image_training_not_enabled``); ask us."""
 
 
 UserReportKind = Literal["bug", "confusing", "works"]

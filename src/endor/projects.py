@@ -21,6 +21,7 @@ from . import _constants as C
 from . import _predict
 from . import data as D
 from ._http import Transport
+from ._images import Images
 from ._log import logger
 from .errors import ConflictError, NotFoundError
 from .futures import APIFuture
@@ -49,8 +50,9 @@ MAX_UPLOAD_ROWS = C.MAX_UPLOAD_ROWS
 class Projects:
     """``client.projects``: create, fetch and list projects."""
 
-    def __init__(self, transport: Transport, capture: bool) -> None:
+    def __init__(self, transport: Transport, capture: bool, images: Images | None = None) -> None:
         self._t, self._capture = transport, capture
+        self._images = images or Images(transport)
 
     def create(
         self,
@@ -129,13 +131,16 @@ class Projects:
 class Project:
     """One project. ``.datasets``, ``.runs`` and ``.models`` hold what it contains."""
 
-    def __init__(self, transport: Transport, info: dict[str, Any], capture: bool = True) -> None:
+    def __init__(
+        self, transport: Transport, info: dict[str, Any], capture: bool = True, images: Images | None = None
+    ) -> None:
         self._t = transport
+        self._images = images or Images(transport)
         self.info_ = ProjectInfo.model_validate(info)
         """Name, description and counts as last fetched."""
         self.name: str = self.info_.name
-        self.datasets = Datasets(transport, self.name)
-        self.runs = Runs(transport, self.name, capture)
+        self.datasets = Datasets(transport, self.name, self._images)
+        self.runs = Runs(transport, self.name, capture, self._images)
         self.models = Models(transport, self.name)
 
     def __repr__(self) -> str:
@@ -261,19 +266,23 @@ class Project:
 class Datasets:
     """``project.datasets``: labeled decision rows, shared by the project's runs and evaluations."""
 
-    def __init__(self, transport: Transport, project: str) -> None:
+    def __init__(self, transport: Transport, project: str, images: Images | None = None) -> None:
         self._t, self._base = transport, f"/v1/projects/{project}/datasets"
+        self._images = images or Images(transport)
 
     def upload(self, name: str, rows: Iterable[Any]) -> DatasetInfo:
         """Upload decision rows (README, "Data format"). Rows may be dicts or ``DecisionRow`` objects; the other
         supported row formats are converted. At most 50,000 rows per dataset. Datasets are immutable: to change
         one, upload under a new name. A name the project already has raises ``ConflictError``; to run a pipeline
-        again, use the dataset that is there (``get(name)``) or catch the error."""
+        again, use the dataset that is there (``get(name)``) or catch the error. On a base model that reads images
+        the states may hold ``endor.Image`` objects: each new image is uploaded once first (``client.images``) and
+        the rows carry references (limited access: ``PermissionDeniedError`` until the org is approved)."""
         wire = [D.to_row(r).to_wire() for r in rows]
         if not wire:
             raise ValueError("no rows to upload")
         if len(wire) > MAX_UPLOAD_ROWS:
             raise ValueError(f"at most {MAX_UPLOAD_ROWS} rows per dataset (got {len(wire)}); split the data")
+        self._images.prepare_states(wire)
         r = self._t.request(
             "POST",
             self._base,
@@ -317,8 +326,9 @@ class Datasets:
 class Runs:
     """``project.runs``: training runs."""
 
-    def __init__(self, transport: Transport, project: str, capture: bool) -> None:
+    def __init__(self, transport: Transport, project: str, capture: bool, images: Images | None = None) -> None:
         self._t, self._project, self._capture = transport, project, capture
+        self._images = images or Images(transport)
 
     def create(
         self,
@@ -415,7 +425,7 @@ class Runs:
             method_name="project.runs.create",
             idempotent=True,
         )
-        run = Run(self._t, r)
+        run = Run(self._t, r, self._images)
         run._start_heartbeat()
         if wait:
             try:
@@ -429,13 +439,13 @@ class Runs:
     def get(self, run_id: str) -> Run:
         """A handle on an existing run, continuing its sequence numbers from the server. ``run.info_`` is the run as
         fetched, e.g. ``run.info_.step`` to resume from the right step; ``run.info()`` fetches it again."""
-        return Run(self._t, self._t.request("GET", f"/v1/runs/{run_id}", method_name="project.runs.get"))
+        return Run(self._t, self._t.request("GET", f"/v1/runs/{run_id}", method_name="project.runs.get"), self._images)
 
     def list(self, tag: str | None = None, limit: int | None = None, offset: int = 0) -> list[Run]:
         """The project's runs, newest first, optionally those carrying ``tag``: all of them, or at most ``limit``."""
         path = f"/v1/projects/{self._project}/runs"
         items = _list_all(self._t, path, {"tag": tag}, "project.runs.list", limit, offset)
-        return [Run(self._t, x) for x in items]
+        return [Run(self._t, x, self._images) for x in items]
 
 
 class Models:
