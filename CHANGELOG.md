@@ -5,6 +5,12 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- `project.learning() -> Learning`: a managed project's continuous learning (always on): its `status`, `progress` to the
+  next training run, what it serves, and the latest `trainings` (kept or discarded, each with its accuracy and loss on
+  the held-back decisions). New types `Learning` and `Training`.
+- `project.update(paused=...)` and `ProjectInfo.paused` are gone: learning can't be paused (the API refuses `paused`
+  with 422).
+
 Fine-tuning with images, in limited access.
 
 - `endor.Image` objects go in training data too, on base models that read images: rows of `project.datasets.upload`

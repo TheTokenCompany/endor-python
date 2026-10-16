@@ -31,6 +31,7 @@ from .types import (
     DecisionRow,
     DownloadedFile,
     Evaluation,
+    Learning,
     LoraConfig,
     ModelInfo,
     ProjectInfo,
@@ -153,6 +154,14 @@ class Project:
         )
         return self.info_
 
+    def learning(self) -> Learning:
+        """A managed project's continuous learning, which is always on: its status, the way to the next training run
+        (``progress``, 0 to 1), what ``"<project>"`` serves, and the latest training runs, each kept or discarded with
+        its accuracy and loss on the held-back decisions. ``WrongProjectKindError`` for a custom project."""
+        return Learning.model_validate(
+            self._t.request("GET", f"/v1/projects/{self.name}/learning", method_name="project.learning")
+        )
+
     def add_base_model(self, base_model: str) -> ProjectInfo:
         """Add a base model (an id from ``client.base_models()``) to the project, after the ones it has. It answers at
         once as ``"<project>/<base id>"``, and runs can train on it. Raises ``ConflictError`` if the project has it,
@@ -186,27 +195,22 @@ class Project:
         self,
         *,
         description: str | None = None,
-        paused: bool | None = None,
         wandb: WandbSettings | dict[str, Any] | None = None,
     ) -> ProjectInfo:
         """Change the project's settings; arguments left as None are unchanged. The kind never changes; base models
         change with ``add_base_model`` and ``remove_base_model``.
 
         - ``description``: free text.
-        - ``paused``: managed projects only (``WrongProjectKindError`` for a custom one). A paused project stops
-          learning and keeps serving its newest version; its decisions keep the managed price.
         - ``wandb``: ``{"enabled": True}``: new runs then log to Weights & Biases, from Endor's servers, in the W&B
           project ``endor-<project name>``. Needs the organization's W&B connection (dashboard: Settings >
           Integrations); ``ConflictError`` without it."""
         body: dict[str, Any] = {}
         if description is not None:
             body["description"] = description
-        if paused is not None:
-            body["paused"] = paused
         if wandb is not None:
             body["wandb"] = {"enabled": wandb.enabled} if isinstance(wandb, WandbSettings) else dict(wandb)
         if not body:
-            raise ValueError("nothing to update: pass description, paused or wandb")
+            raise ValueError("nothing to update: pass description or wandb")
         self.info_ = ProjectInfo.model_validate(
             self._t.request("PATCH", f"/v1/projects/{self.name}", json=body, method_name="project.update")
         )

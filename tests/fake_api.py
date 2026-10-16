@@ -296,7 +296,6 @@ class FakeEndor:
             "description": p["description"],
             "kind": p["kind"],
             "base_models": list(p["base_models"]),
-            "paused": p["paused"] if p["kind"] == "managed" else None,
             "created_at": p["created_at"],
             "n_datasets": sum(1 for (pr, _) in self_.datasets if pr == p["name"]),
             "n_runs": sum(1 for r in self_.runs.values() if r["project"] == p["name"]),
@@ -645,9 +644,9 @@ class FakeEndor:
                 if body.get("base_models") not in (None, proj["base_models"]) or body.get("base_model") is not None:
                     raise HTTPError(422, "invalid_input", "Add base models with POST .../base_models.", "base_models")
                 if body.get("paused") is not None:
-                    if proj["kind"] != "managed":
-                        raise HTTPError(409, "wrong_project_kind", f"Project {p[1]} is custom: only managed pause.")
-                    proj["paused"] = body["paused"]
+                    raise HTTPError(
+                        422, "invalid_input", "Learning can't be paused: a managed project always learns.", "paused"
+                    )
                 if body.get("wandb") is not None:
                     if body["wandb"].get("enabled") and not self.wandb_connected:
                         raise HTTPError(409, "invalid_state", "Connect Weights & Biases first.", "wandb")
@@ -667,6 +666,18 @@ class FakeEndor:
         if len(p) >= 3 and p[0] == "projects":
             project, sub = p[1], p[2]
             proj = self.project(project)
+            if sub == "learning" and len(p) == 3 and m == "GET":
+                if proj["kind"] != "managed":
+                    raise HTTPError(
+                        409, "wrong_project_kind", f"Learning status needs a managed project; {project} is custom."
+                    )
+                return 200, {
+                    "status": "waiting",
+                    "progress": 0.0,
+                    "serving": f"{project}/{proj['base_models'][0]}",
+                    "trained_at": None,
+                    "trainings": [],
+                }
             if sub == "base_models" and len(p) == 3 and m == "POST":
                 b = body.get("base_model")
                 if b not in BASE_MODELS:
@@ -987,7 +998,6 @@ class FakeEndor:
             "description": body.get("description"),
             "kind": kind,
             "base_models": list(bases),
-            "paused": False,
             "wandb_enabled": False,
             "created_at": now().isoformat(),
         }
