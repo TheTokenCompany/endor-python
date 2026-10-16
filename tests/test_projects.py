@@ -56,12 +56,12 @@ class TestProjects:
         }
         info = p.info_
         assert info.kind == "custom" and info.base_models == ["decider-2b"] and not hasattr(info, "live_model")
-        assert info.paused is None and info.n_models == 1  # the base model counts
+        assert info.n_models == 1  # the base model counts
         two = client.projects.create(unique("two"), base_models=["decider-2b", "gev-26b"])
         assert two.info_.base_models == ["decider-2b", "gev-26b"] and two.info_.n_models == 2
         m = client.projects.create(unique("man"), base_models=["jev-9b"], kind="managed")
         assert fake.requests[-1].body["kind"] == "managed"
-        assert m.info_.kind == "managed" and m.info_.paused is False
+        assert m.info_.kind == "managed"
         with pytest.raises(UnprocessableEntityError) as e:
             client.projects.create(unique("base"), base_models=["gpt-9"])
         assert e.value.code == "invalid_input" and e.value.param == "base_models"
@@ -104,19 +104,20 @@ class TestProjects:
             m.remove_base_model("jev-9b")  # a managed project keeps one
         assert e.value.code == "invalid_state"
 
-    def test_update_description_and_paused(self, client: EndorClient, fake: FakeEndor) -> None:
+    def test_update_description(self, client: EndorClient, fake: FakeEndor) -> None:
         p = client.projects.create(unique("upd"), base_models=["jev-9b"])
         info = p.update(description="tickets")
         assert fake.requests[-1].body == {"description": "tickets"} and info.description == "tickets"
-        with pytest.raises(WrongProjectKindError) as e:
-            p.update(paused=True)  # only managed projects pause
-        assert isinstance(e.value, ConflictError) and e.value.code == "wrong_project_kind"
-        m = client.projects.create(unique("man"), base_models=["jev-9b"], kind="managed")
-        assert m.update(paused=True).paused is True
-        assert fake.requests[-1].body == {"paused": True}
-        assert m.update(paused=False).paused is False
         with pytest.raises(ValueError, match="nothing to update"):
             p.update()
+
+    def test_learning_status_of_a_managed_project(self, client: EndorClient) -> None:
+        m = client.projects.create(unique("man"), base_models=["jev-9b"], kind="managed")
+        got = m.learning()
+        assert got.status == "waiting" and got.serving.endswith("/jev-9b") and got.trainings == []
+        p = client.projects.create(unique("cus"), base_models=["jev-9b"])
+        with pytest.raises(WrongProjectKindError):
+            p.learning()
 
     def test_managed_projects_refuse_training(self, client: EndorClient) -> None:
         m = client.projects.create(unique("man"), base_models=["jev-9b"], kind="managed")

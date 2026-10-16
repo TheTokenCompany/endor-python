@@ -536,8 +536,6 @@ class ProjectInfo(_View):
     """The project's base model ids, in the order they were added. Each answers as ``"<project>/<base id>"``, and the
     first also as ``"<project>"`` (in a managed project, until its first version). Change them with
     ``project.add_base_model`` and ``project.remove_base_model``."""
-    paused: bool | None = None
-    """Managed projects: learning is paused (the project keeps serving its newest version). None for custom."""
     n_datasets: int = 0
     n_runs: int = 0
     n_models: int = 0
@@ -545,6 +543,44 @@ class ProjectInfo(_View):
     wandb: WandbSettings | None = None
     """Weights & Biases logging of the project's runs."""
     created_at: datetime
+
+
+class Training(_View):
+    """One training run of a managed project's continuous learning."""
+
+    at: datetime
+    kept: bool
+    """Saved as ``version``, which the project then served, or discarded (clearly worse than what it served)."""
+    version: str | None = None
+    accuracy: float | None = None
+    """Percent of the held-back decisions it answered like Endor's labels, with the 95% interval ``low`` to ``high``.
+    None: nothing to check on."""
+    low: float | None = None
+    high: float | None = None
+    loss: float | None = None
+    """Its mean cross-entropy on the same decisions (lower is better)."""
+    against: str | None = None
+    """The version it was checked against (None: the base model)."""
+    against_accuracy: float | None = None
+    against_loss: float | None = None
+    worse: list[str] = Field(default_factory=list)
+    """The questions it was clearly worse on."""
+
+
+class Learning(_View):
+    """A managed project's continuous learning (``project.learning()``). It is always on."""
+
+    status: str
+    """``learning``, ``training`` (a run is on), ``waiting`` (nothing to learn from yet), ``up_to_date`` (the model
+    already answers as well as it can learn to), ``out_of_credit`` or ``limit_reached`` (the organization's daily
+    learning limit; it goes on after midnight UTC). Treat unknown values as ``learning``."""
+    progress: float = 0.0
+    """The way to the next training run, 0 to 1."""
+    serving: str
+    """What ``"<project>"`` answers with now: ``"<project>/<version>"``, or its first base model."""
+    trained_at: datetime | None = None
+    trainings: list[Training] = Field(default_factory=list)
+    """The latest 50 training runs, newest first."""
 
 
 class RunInfo(_View):
