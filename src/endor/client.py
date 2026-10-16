@@ -29,6 +29,7 @@ from pydantic import BaseModel, ValidationError
 from . import _constants as C
 from . import _predict, _user_report
 from ._http import Transport
+from ._images import Images
 from ._retry import RetryPolicy
 from .errors import EndorError, NotFoundError, ResponseValidationError
 from .projects import Projects
@@ -141,7 +142,10 @@ class EndorClient:
         )
         self.models = Models(self._t)
         """``client.models.list()``: every name you can pass as ``model``."""
-        self.projects = Projects(self._t, capture)
+        self.images = Images(self._t)
+        """``client.images.upload(...)``: images for training data, uploaded once and referenced by hash (the
+        datasets, runs and predictions below do it for the ``endor.Image`` objects in your rows and datums)."""
+        self.projects = Projects(self._t, capture, self.images)
         """``client.projects``: create, fetch and list projects."""
 
     def __repr__(self) -> str:
@@ -316,6 +320,7 @@ class EndorClient:
                 ``context_too_long``).
         """
         project, body, n = _predict.prediction(model, rows)
+        self.images.prepare_states(body["rows"])  # images uploaded once, sent as references
         r = self._t.request(
             "POST",
             f"/v1/projects/{project}/evaluations",
@@ -331,6 +336,7 @@ class EndorClient:
     ) -> list[dict[str, Answer]]:
         """``predict`` for async code."""
         project, body, n = _predict.prediction(model, rows)
+        self.images.prepare_states(body["rows"])
         r = await self._t.arequest(
             "POST",
             f"/v1/projects/{project}/evaluations",

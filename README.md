@@ -112,6 +112,13 @@ client.system_one(state, {"pay": Noul(instructions="Is the Pay button visible?")
 
 `Image.from_bytes(data, media_type=None)` and `Image.from_pil(image, format="PNG")` (needs Pillow) build one too.
 
+The same objects go in training data on those base models: rows of `project.datasets.upload`, datums of
+`run.forward_backward`, rows of `run.predict` and `client.predict`. The SDK uploads each image once
+(`client.images.upload` does it by hand) and sends a reference, `{"type": "image", "sha256": ...}`; a call carries at
+most 128 images, so larger batches are split. Fine-tuning with images is in limited access: until your organization is
+approved these calls raise `PermissionDeniedError` (403 `image_training_not_enabled`; `client.whoami().image_training`
+says), and the message says how to ask.
+
 **The catalog.** `client.models.list()` returns every name you can pass as `model` (`GET /v1/models`): for each
 project with a base model, `"<project>"` and `"<project>/<base id>"` for each of its base models, then
 `"<project>/<name>"` for each saved model (`.kind` is `project`, `base` or `model`). `client.base_models()` returns the

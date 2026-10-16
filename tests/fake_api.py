@@ -9,6 +9,7 @@ tests. It is a test double, not a reference server.
 
 from __future__ import annotations
 
+import base64
 import gzip
 import hashlib
 import json
@@ -24,6 +25,13 @@ from urllib.parse import parse_qs
 import httpx
 
 FILES_HOST = "files.endor.test"
+UPLOADS_HOST = "uploads.endor.test"  # where declared images are PUT (the API's presigned links)
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGES_PER_CALL = 128
+NOT_ENABLED = (
+    "Fine-tuning with images is in limited access and isn't enabled for this organization yet. To request access, "
+    "write to support@thetokencompany.com with your organization id (GET /v1/whoami)."
+)
 NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
 LIMITS: dict[str, float] = {
@@ -150,8 +158,9 @@ IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp")
 
 
 def find_images(v: Any, path: str = "state") -> list[tuple[str, dict]]:
-    """The images in a state ({"type": "image", ..., "data": ...}) with their paths, as the API reads them."""
-    if isinstance(v, dict) and v.get("type") == "image" and "data" in v:
+    """The images in a state, inline ({"type": "image", ..., "data": ...}) or references ({"type": "image",
+    "sha256"}), with their paths, as the API reads them."""
+    if isinstance(v, dict) and v.get("type") == "image" and ("data" in v or "sha256" in v):
         return [(path, v)]
     if isinstance(v, dict):
         return [x for k, item in v.items() for x in find_images(item, f"{path}.{k}")]
@@ -217,6 +226,13 @@ class FakeEndor:
     """The org's balance is used up: paid calls answer 402 insufficient_balance."""
     balance_usd: float | None = 100.0
     """What GET /v1/balance answers (None: a server without billing)."""
+    image_training: bool = True
+    """Whether the org may fine-tune with images (403 image_training_not_enabled otherwise)."""
+    images: dict[str, dict] = field(default_factory=dict)  # sha256 -> {media_type, bytes, status}
+    uploads: dict[str, bytes] = field(default_factory=dict)  # sha256 -> the bytes PUT to its link
+    upload_requests: list[Recorded] = field(default_factory=list)  # PUTs to the upload links
+    fail_uploads: int = 0
+    """How many of the next PUTs to upload links answer 500."""
 
     projects: dict[str, dict] = field(default_factory=dict)
     wandb_connected: bool = False  # the org's W&B connection (dashboard only)
@@ -360,6 +376,108 @@ class FakeEndor:
     def file_bytes(mid: str, name: str) -> bytes:
         return f"{mid}:{name}:".encode() * 1000
 
+    def store_upload(self, request: httpx.Request) -> httpx.Response:
+        """A PUT to an image's upload link: S3's rules, no Endor auth. The link is bound to the hash: the checksum
+        header must be the declared hash (else 403, as a signature mismatch) and the bytes must have it (else 400
+        BadDigest)."""
+        sha = request.url.path.strip("/")
+        if self.fail_uploads > 0:
+            self.fail_uploads -= 1
+            return httpx.Response(500, text="<Error><Code>InternalError</Code></Error>")
+        if request.method != "PUT" or sha not in self.images:
+            return httpx.Response(403, text="<Error><Code>AccessDenied</Code></Error>")
+        want = base64.b64encode(bytes.fromhex(sha)).decode()
+        if request.headers.get("x-amz-checksum-sha256") != want or "content-type" not in request.headers:
+            return httpx.Response(403, text="<Error><Code>SignatureDoesNotMatch</Code></Error>")
+        if "authorization" in request.headers or "x-endor-api-key" in request.headers:
+            return httpx.Response(
+                403, text="<Error><Code>AccessDenied</Code>the API key must not reach storage</Error>"
+            )
+        if hashlib.sha256(request.content).hexdigest() != sha:
+            return httpx.Response(400, text="<Error><Code>BadDigest</Code></Error>")
+        self.uploads[sha] = request.content
+        return httpx.Response(200, headers={"etag": f'"{sha[:32]}"'})
+
+    def declare_images(self, body: dict) -> dict:
+        """POST /v1/images as the API answers it: per declared image, ready, an upload link, or rejected."""
+        if not self.image_training:
+            raise HTTPError(403, "image_training_not_enabled", NOT_ENABLED)
+        items = body.get("images")
+        if not isinstance(items, list) or not 1 <= len(items) <= 1000:
+            raise HTTPError(422, "invalid_input", "1..1000 images", "images")
+        out = []
+        for i, it in enumerate(items):
+            sha, mt, size = it.get("sha256"), it.get("media_type"), it.get("bytes")
+            if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha):
+                raise HTTPError(422, "invalid_input", "sha256: 64 lowercase hex characters", f"images.{i}.sha256")
+            if mt not in IMAGE_TYPES:
+                raise HTTPError(422, "invalid_input", "bad media_type", f"images.{i}.media_type")
+            if not isinstance(size, int) or size < 1:
+                raise HTTPError(422, "invalid_input", "bytes >= 1", f"images.{i}.bytes")
+            if size > MAX_IMAGE_BYTES:
+                raise HTTPError(422, "invalid_input", "the image is over 5 MB", f"images.{i}.bytes")
+            row = self.images.setdefault(sha, {"media_type": mt, "bytes": size, "status": "pending"})
+            if row["media_type"] != mt:
+                raise HTTPError(422, "invalid_input", f"declared as {row['media_type']}", f"images.{i}.media_type")
+            base = {"sha256": sha, "media_type": mt, "bytes": row["bytes"]}
+            if row["status"] == "ready":
+                out.append({**base, "status": "ready"})
+            elif sha in self.uploads:
+                data = self.uploads[sha]
+                magic = {
+                    "image/png": data.startswith(b"\x89PNG\r\n\x1a\n"),
+                    "image/jpeg": data.startswith(b"\xff\xd8\xff"),
+                    "image/webp": data[:4] == b"RIFF" and data[8:12] == b"WEBP",
+                }[mt]
+                if len(data) > MAX_IMAGE_BYTES or not magic:
+                    del self.uploads[sha], self.images[sha]
+                    reason = "the image is over 5 MB" if len(data) > MAX_IMAGE_BYTES else f"not {mt}"
+                    out.append({**base, "status": "rejected", "reason": reason})
+                else:
+                    row["status"], row["bytes"] = "ready", len(data)
+                    out.append({**base, "bytes": len(data), "status": "ready"})
+            else:
+                out.append(
+                    {
+                        **base,
+                        "status": "upload",
+                        "url": f"https://{UPLOADS_HOST}/{sha}?X-Amz-Signature=sig{sha[:8]}&X-Amz-Expires=3600",
+                        "headers": {
+                            "x-amz-checksum-sha256": base64.b64encode(bytes.fromhex(sha)).decode(),
+                            "content-type": mt,
+                        },
+                        "expires_at": (now() + timedelta(hours=1)).isoformat(),
+                    }
+                )
+        return {"images": out}
+
+    def check_images(self, holders: list[dict], where: str, base: dict | None = None) -> int:
+        """The images in these states (rows' or datums'), as the API checks training data: access, references to
+        ready images only (the SDK uploads inline images first, so inline here is a bug), a base that reads them;
+        how many there are."""
+        n = 0
+        for i, h in enumerate(holders):
+            found = find_images(h.get("state"))
+            if not found:
+                continue
+            if not self.image_training:
+                raise HTTPError(403, "image_training_not_enabled", NOT_ENABLED)
+            if base is not None and "image" not in base.get("modalities", ["text"]):
+                raise HTTPError(422, "unsupported_modality", "this base reads text only", f"{where}{i}.{found[0][0]}")
+            if len(found) > 8:
+                raise HTTPError(422, "invalid_input", "at most 8 images", f"{where}{i}.state")
+            for path, im in found:
+                full = f"{where}{i}.{path}"
+                if "data" in im:
+                    raise HTTPError(422, "invalid_input", "the SDK uploads images and sends references", full)
+                row = self.images.get(im.get("sha256", ""))
+                if row is None or row["status"] != "ready":
+                    raise HTTPError(422, "invalid_input", "no uploaded image with this sha256", full)
+                if im.get("media_type") not in (None, row["media_type"]):
+                    raise HTTPError(422, "invalid_input", f"the uploaded image is {row['media_type']}", full)
+            n += len(found)
+        return n
+
     def serve_file(self, request: httpx.Request) -> httpx.Response:
         """A presigned storage GET: no Endor auth, the token in the path is the whole credential."""
         token, _, name = request.url.path.strip("/").partition("/")
@@ -378,6 +496,9 @@ class FakeEndor:
         if request.url.host == FILES_HOST:
             self.file_requests.append(Recorded(request.method, request.url.path, dict(request.headers), None, {}))
             return self.serve_file(request)
+        if request.url.host == UPLOADS_HOST:
+            self.upload_requests.append(Recorded(request.method, request.url.path, dict(request.headers), None, {}))
+            return self.store_upload(request)
         raw = request.content
         if raw and request.headers.get("content-encoding") == "gzip":
             raw = gzip.decompress(raw)
@@ -455,7 +576,21 @@ class FakeEndor:
                 "key_id": "key_test",
                 "limits": dict(LIMITS),
                 "managed_projects": False,
+                "image_training": self.image_training,
             }
+        if p == ["images"] and m == "POST":
+            return 200, self.declare_images(body)
+        if p == ["images"] and m == "GET":
+            items = [
+                {"sha256": sha, **row, "created_at": now().isoformat(), "ready_at": None}
+                for sha, row in self.images.items()
+            ]
+            return 200, self.page(items, params)
+        if len(p) == 2 and p[0] == "images" and m == "GET":
+            row = self.images.get(p[1])
+            if row is None:
+                raise HTTPError(404, "not_found", f"no image {p[1]}", "sha256")
+            return 200, {"sha256": p[1], **row, "created_at": now().isoformat(), "ready_at": None}
         if p == ["balance"] and m == "GET":
             return 200, {"balance_usd": self.balance_usd}
         if p == ["usage"] and m == "GET":
@@ -896,6 +1031,7 @@ class FakeEndor:
                 "n_rows": len(rows),
                 "n_labelled_questions": n_labelled,
                 "question_types": dict(types),
+                "n_images": self.check_images(rows, "rows."),
                 "created_at": now().isoformat(),
                 "_rows": rows,
             }
@@ -1043,6 +1179,8 @@ class FakeEndor:
         base = BASE_MODELS[run["base_model"]]
         for i, d in enumerate(data):
             check_datum(d, base, f"data[{i}]")
+        if self.check_images(data, "data[", base) > MAX_IMAGES_PER_CALL:  # (paths read data[i.state: close enough)
+            raise HTTPError(422, "invalid_input", f"at most {MAX_IMAGES_PER_CALL} images in one call", "data")
 
         def result() -> dict:
             outs, loss_sum, w_sum, correct = [], 0.0, 0.0, 0
@@ -1085,13 +1223,14 @@ class FakeEndor:
                 raise HTTPError(422, "invalid_input", "a row is {state, questions}", f"rows.{i}")
             if not isinstance(r.get("questions"), dict) or not 1 <= len(r["questions"]) <= 64:
                 raise HTTPError(422, "invalid_input", "send 1..64 questions", f"rows.{i}.questions")
-            if find_images(r["state"]):
-                raise HTTPError(422, "invalid_input", "images aren't supported in predict yet", f"rows.{i}.state")
             for name, q in r["questions"].items():
                 where = f"rows[{i}].questions.{name}"
                 check_question(q, where)
                 if len(option_keys(q)) > base["max_options"]:
                     raise HTTPError(422, "invalid_options", f"{where}: more than {base['max_options']} options", where)
+
+        if self.check_images(rows, "rows[", base) > MAX_IMAGES_PER_CALL:
+            raise HTTPError(422, "invalid_input", f"at most {MAX_IMAGES_PER_CALL} images in one call", "rows")
 
         def result() -> dict:
             return {"answers": [{n: answer_from_probs(q, uniform(q)) for n, q in r["questions"].items()} for r in rows]}
@@ -1240,6 +1379,7 @@ class FakeEndor:
         else:
             self.check_rows(rows)
         base, model = self.resolve_model(body["model"], project)  # stored by the model that answers, as the API
+        self.check_images(rows, "rows.", BASE_MODELS[base])
         lines, n = [], 0
         for i, row in enumerate(rows):
             labels = row.get("labels") or {}

@@ -5,6 +5,19 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Fine-tuning with images, in limited access.
+
+- `endor.Image` objects go in training data too, on base models that read images: rows of `project.datasets.upload`
+  and `client.predict`, datums of `run.forward` / `run.forward_backward`, rows of `run.predict`. The SDK uploads each
+  image once (`client.images.upload(images) -> list[Image]` does it by hand: declares them with `POST /v1/images`,
+  PUTs the files straight to storage, confirms them) and sends references, `{"type": "image", "sha256": ...}`
+  (`Image.ref(sha256, media_type=None)`, `image.is_ref`, `image.sha256`, `image.content`, `Image.wrap(dict)`). A
+  call carries at most `MAX_IMAGES_PER_CALL` (128) images, so larger batches are split as they are over 1,024 datums.
+- Until the organization is approved these calls raise `PermissionDeniedError` (403 `image_training_not_enabled`),
+  whose message says how to ask; `client.whoami().image_training` says whether it is. Decisions with images need no
+  access.
+- `DatasetInfo.n_images`: the images across a dataset's rows.
+
 ## [0.8.0] - 2026-10-15
 
 Your prepaid balance from the SDK, and clearer docs on model names and resuming runs.
