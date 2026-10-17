@@ -5,6 +5,15 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- `client.feedback`: the right answers to past decisions' questions, once you know them.
+  `send(decision, answers, *, source, comment=None) -> FeedbackInfo` (`PUT /v1/decisions/{decision_id}/feedback`),
+  `list(decision)`, `delete(decision, *, source)` and `send_many(items)` (`POST /v1/feedback`: 1 to 1,000 items, all or
+  none), each with an `_async` variant. `decision` is a `SystemOneResponse` or its id. `source` is `review`, `outcome`
+  or `user`. `FeedbackInfo.served` is what Endor answered to the same questions. New types `FeedbackInfo`,
+  `FeedbackSource` and `FeedbackAnswer`.
+- `SystemOneResponse.id`: the decision's id (`req_...`, also its `X-Request-Id`). It is None from a server that doesn't
+  send one.
+
 - `project.learning() -> Learning`: a managed project's continuous learning (always on): its `status`, `progress` to the
   next training run, what it serves, and the latest `trainings` (kept or discarded, each with its accuracy and loss on
   the held-back decisions). New types `Learning` and `Training`.

@@ -237,6 +237,9 @@ class FakeEndor:
     projects: dict[str, dict] = field(default_factory=dict)
     wandb_connected: bool = False  # the org's W&B connection (dashboard only)
     user_reports: list[dict] = field(default_factory=list)  # POST /v1/user_reports, with "org_id"
+    decisions: dict[str, dict] = field(default_factory=dict)  # request id -> {"project", "answers"} of a decision
+    feedback: dict[tuple[str, str], dict] = field(default_factory=dict)  # (decision, source) -> its active feedback
+    request_id: str = ""  # the current request's X-Request-Id
     datasets: dict[tuple[str, str], dict] = field(default_factory=dict)
     runs: dict[str, dict] = field(default_factory=dict)
     models: dict[str, dict] = field(default_factory=dict)
@@ -498,6 +501,7 @@ class FakeEndor:
         if request.url.host == UPLOADS_HOST:
             self.upload_requests.append(Recorded(request.method, request.url.path, dict(request.headers), None, {}))
             return self.store_upload(request)
+        self.request_id = self.new_id("req")
         raw = request.content
         if raw and request.headers.get("content-encoding") == "gzip":
             raw = gzip.decompress(raw)
@@ -529,7 +533,7 @@ class FakeEndor:
             return self._error(e)
 
     def _json(self, status: int, payload: Any, replay: bool = False) -> httpx.Response:
-        headers = {"x-request-id": self.new_id("req")}
+        headers = {"x-request-id": self.request_id}
         if replay:
             headers["idempotent-replayed"] = "true"
         if status == 204:
@@ -540,7 +544,7 @@ class FakeEndor:
         err = {"code": e.code, "message": e.message}
         if e.param:
             err["param"] = e.param
-        return httpx.Response(e.status, json={"error": err}, headers={"x-request-id": self.new_id("req"), **e.headers})
+        return httpx.Response(e.status, json={"error": err}, headers={"x-request-id": self.request_id, **e.headers})
 
     def user_report(self, body: Any, org_id: str) -> dict:
         if not isinstance(body, dict) or body.get("kind") not in ("bug", "confusing", "works"):
@@ -564,6 +568,14 @@ class FakeEndor:
         m = method
         if p == ["systemone"] and m == "POST":
             return 200, self.systemone(body)
+        if len(p) == 3 and p[0] == "decisions" and p[2] == "feedback":
+            return self.decision_feedback(m, p[1], body, params)
+        if p == ["feedback"] and m == "POST":
+            items = body.get("items") if isinstance(body, dict) else None
+            if not isinstance(items, list) or not 1 <= len(items) <= 1000:
+                raise HTTPError(422, "invalid_input", "send 1 to 1,000 items", "items")
+            checked = [self.check_feedback(it.get("decision"), it, f"items[{i}].") for i, it in enumerate(items)]
+            return 200, {"items": [self.keep_feedback(fb) for fb in checked]}
         if p == ["models"] and m == "GET":
             return 200, self.list_models()
         if p == ["base_models"] and m == "GET":
@@ -887,11 +899,70 @@ class FakeEndor:
             if len(option_keys(q)) > base["max_options"]:
                 raise HTTPError(422, "invalid_options", f"questions.{name}: more than {base['max_options']} options")
             answers[name] = answer_from_probs(q, uniform(q))
+        self.decisions[self.request_id] = {"project": answered.partition("/")[0], "answers": answers}
         return {
+            "id": self.request_id,
             "model": answered,
             "answers": answers,
             "usage": {"input_tokens": (7 + 280 * len(images)) * len(answers), "output_tokens": 0},
         }
+
+    def decision_feedback(self, method: str, decision: str, body: Any, params: dict[str, str]) -> tuple[int, Any]:
+        """PUT, GET and DELETE /v1/decisions/{decision}/feedback."""
+        if decision not in self.decisions:
+            raise HTTPError(404, "not_found", f"No decision {decision!r}.")
+        if method == "PUT":
+            return 200, self.keep_feedback(self.check_feedback(decision, body, ""))
+        if method == "GET":
+            return 200, {"items": [fb for (d, _), fb in self.feedback.items() if d == decision]}
+        if method == "DELETE":
+            if self.feedback.pop((decision, params.get("source", "")), None) is None:
+                raise HTTPError(404, "not_found", f"No {params.get('source')} feedback on {decision!r}.", "source")
+            return 204, None
+        raise HTTPError(405, "method_not_allowed", "no such method")
+
+    def check_feedback(self, decision: Any, item: Any, where: str) -> dict:
+        """One feedback checked against its decision's answers (as the API's services/feedback.py), not kept yet."""
+        d = self.decisions.get(decision) if isinstance(decision, str) else None
+        if d is None:
+            raise HTTPError(404, "not_found", f"No decision {decision!r}.", f"{where}decision" if where else None)
+        if not isinstance(item, dict) or item.get("source") not in ("review", "outcome", "user"):
+            raise HTTPError(422, "invalid_input", "source must be review, outcome or user", f"{where}source")
+        answers, comment = item.get("answers"), item.get("comment")
+        if not isinstance(answers, dict) or not answers:
+            raise HTTPError(422, "invalid_input", "send 1 or more answers", f"{where}answers")
+        if comment is not None and not (isinstance(comment, str) and len(comment) <= 1000):
+            raise HTTPError(422, "invalid_input", "at most 1,000 characters", f"{where}comment")
+        served = {}
+        for name, v in answers.items():
+            a, param = d["answers"].get(name), f"{where}answers.{name}"
+            kind = a["type"] if a else None
+            if kind == "noul" and isinstance(v, bool):
+                served[name] = a["noul"] >= 0.5
+            elif kind == "choice" and isinstance(v, str) and v in a["probabilities"]:
+                served[name] = a["choice"]
+            elif kind == "score" and type(v) is int and 0 <= v < len(a["probabilities"]):
+                served[name] = max(range(len(a["probabilities"])), key=lambda i: a["probabilities"][str(i)])
+            else:
+                raise HTTPError(422, "invalid_input", f"{param}: doesn't fit the question", param)
+        return {
+            "decision": decision,
+            "project": d["project"],
+            "source": item["source"],
+            "answers": answers,
+            "served": served,
+            "comment": comment,
+            "created_at": now().isoformat(),
+        }
+
+    def keep_feedback(self, fb: dict) -> dict:
+        """The active feedback after `fb`: the same answers and comment keep the active one, else `fb` replaces it."""
+        key = (fb["decision"], fb["source"])
+        cur = self.feedback.get(key)
+        if cur is not None and (cur["answers"], cur["comment"]) == (fb["answers"], fb["comment"]):
+            return cur
+        self.feedback[key] = fb
+        return fb
 
     def list_models(self) -> dict:
         """GET /v1/models: the names a decision can send (`<project>`, `<project>/<base id>`, `<project>/<name>`)."""
