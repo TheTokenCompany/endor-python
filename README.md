@@ -101,6 +101,23 @@ triage.department.choice, triage.urgent.noul
 for every call) to keep decisions out of a managed project's continuous learning, for example a benchmark or an
 evaluation. They are still answered, billed and logged.
 
+**Feedback.** When you learn the right answer to a decision, send it with the decision's response (or its id,
+`res.id`). Each answer takes its question's form: a choice's option id, a noul's `True` or `False`, a score's level
+index (0 is the first level).
+
+```python
+fb = client.feedback.send(res, {"department": "technical", "urgent": False}, source="review", comment="A bug report")
+fb.served                                 # what Endor answered: {"department": "billing", "urgent": True}
+client.feedback.list(res)                 # the feedback of each source
+client.feedback.delete(res, source="review")
+client.feedback.send_many([{"decision": res.id, "source": "outcome", "answers": {"urgent": True}}])  # 1,000 at most
+```
+
+`source` is `"review"` (someone on your team checked the decision), `"outcome"` (what actually happened, such as a
+chargeback) or `"user"` (an end user's opinion). Review and outcome count as the right answer; user is not trusted.
+Each source has one feedback per decision: sending it again replaces it. `send_many` keeps all items or none. Feedback
+is free. Managed projects learn from feedback.
+
 **Images.** On a base model that reads images (`client.base_models()`: `modalities` includes `"image"`), put
 `endor.Image` objects anywhere in the state. PNG, JPEG or WebP, at most 8 per decision and 5 MB each; their tokens
 are billed like text. Other base models answer `422 unsupported_modality`.
@@ -137,8 +154,9 @@ answers = client.predict("tickets/v1", [{"state": t, "questions": questions} for
 answers[0]["department"].choice           # "billing": each row's answers as system_one(...).answers has them
 ```
 
-**Async.** `await client.system_one_async(...)`, `await client.predict_async(...)` and
-`await client.models.list_async()`; `async with EndorClient()` closes the connections.
+**Async.** `await client.system_one_async(...)`, `await client.predict_async(...)`,
+`await client.models.list_async()` and `client.feedback`'s `send_async`, `list_async`, `delete_async` and
+`send_many_async`; `async with EndorClient()` closes the connections.
 
 ## Projects
 
@@ -492,8 +510,9 @@ continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a man
 
 | Object | Members |
 |---|---|
-| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `predict(model, rows, *, progress=True, timeout=None)` → one `{question: answer}` per row, `predict_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `balance()` → USD, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
+| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `predict(model, rows, *, progress=True, timeout=None)` → one `{question: answer}` per row, `predict_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `feedback`, `whoami()`, `balance()` → USD, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
 | `endor.user_report(message, *, kind="bug", request_id=None, context=None, api_key=None, base_url=None, timeout=None)` | `endor.user_report_async(...)`; returns `UserReportReceipt` (`id`, `message`) |
+| `client.feedback` | `send(decision, answers, *, source, comment=None)` → `FeedbackInfo` (`decision`, `project`, `source`, `answers`, `served`, `comment`, `created_at`), `list(decision)`, `delete(decision, *, source)`, `send_many(items)` (1 to 1,000, all or none), and their `_async` variants; `decision` is a `SystemOneResponse` or its id |
 | `client.projects` | `create(name, description=None, *, kind="custom", base_models=None)`, `get(name)`, `get_or_create(name, description=None, *, kind="custom", base_models=None)`, `list(limit=None, offset=0)` (all pages) |
 | `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `add_base_model(base_model)`, `remove_base_model(base_model)`, `update(*, description=None, paused=None, wandb=None)`, `evaluate(model, dataset=None, run_id=None, *, rows=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
 | `project.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
@@ -506,7 +525,7 @@ continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a man
 | `endor.metrics` | `decision_metrics(probs, targets, bins=10)` → `{n, accuracy, nll, brier, ece, mean_confidence, selective}` |
 | `endor.recipes.supervised` | `SupervisedConfig`, `SupervisedResult`, `train(cfg, rows, eval_rows=None, client=None)`, `evaluate_run(run, datums)`, `evaluate_model(client, model, rows)`, `lr_at(cfg, step, total)` |
 | `endor.recipes.distill` | `Teacher` (protocol), `DistillConfig(supervised, teacher, budget, seed)`, `label_with_teacher(rows, cfg)`, `distill(cfg, unlabeled_rows, eval_rows, client=None)` |
-| Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `ProjectInfo`, `RunInfo`, `LoraInfo`, `ModelInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `DownloadedFile`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
+| Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse` (`id`, `model`, `answers`, `usage`), `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `FeedbackInfo`, `FeedbackSource`, `FeedbackAnswer`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `ProjectInfo`, `RunInfo`, `LoraInfo`, `ModelInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `DownloadedFile`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
 | Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError`, `ConflictError` (`LimitReachedError`, `NoBaseModelError`, `WrongProjectKindError`), `PayloadTooLargeError`, `UnprocessableEntityError` (`ModelRequiresProjectError`), `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
 
 Every public member has a docstring with the details.

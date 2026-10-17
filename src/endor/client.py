@@ -6,6 +6,7 @@
     client.models.list()                                       # every name you can pass as model
     client.base_models()                                       # the base models, with limits and prices
     project = client.projects.get_or_create("tickets", base_models=["decider-2b"])   # datasets, runs, models
+    client.feedback.send("req_...", {"urgent": False}, source="review")   # a decision's right answer, once known
     client.user_report("what you did, what happened, what you expected", kind="bug")      # tell the Endor team
 
 ``model`` always names a project: ``"<project>/<name>"`` (one saved model), ``"<project>/<base id>"`` (one of its base
@@ -28,6 +29,7 @@ from pydantic import BaseModel, ValidationError
 
 from . import _constants as C
 from . import _predict, _user_report
+from ._feedback import Feedback
 from ._http import Transport
 from ._images import Images
 from ._retry import RetryPolicy
@@ -147,6 +149,9 @@ class EndorClient:
         datasets, runs and predictions below do it for the ``endor.Image`` objects in your rows and datums)."""
         self.projects = Projects(self._t, capture, self.images)
         """``client.projects``: create, fetch and list projects."""
+        self.feedback = Feedback(self._t)
+        """``client.feedback``: the right answers to past decisions' questions, once you know them (``send``,
+        ``list``, ``delete``, ``send_many``)."""
 
     def __repr__(self) -> str:
         return f"EndorClient(base_url={self.base_url!r}, model={self.default_model!r})"

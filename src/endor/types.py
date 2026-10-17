@@ -4,6 +4,7 @@ Decisions
     Noul, Choice, Score          the three question types (plain dicts in the same shape are accepted too)
     NoulAnswer, ChoiceAnswer, ScoreAnswer, SystemOneResponse, Usage
     ModelMetadata, ListModelsResponse, BaseModelInfo
+    FeedbackSource, FeedbackAnswer, FeedbackInfo   feedback on a decision: the right answers, once you know them
 
 Training
     Datum        one state + one question + its Target (+ weight): the unit of ``forward`` / ``forward_backward``
@@ -68,6 +69,9 @@ __all__ = [
     "WhoAmI",
     "UserReportKind",
     "UserReportReceipt",
+    "FeedbackSource",
+    "FeedbackAnswer",
+    "FeedbackInfo",
     "FutureInfo",
     "question_dict",
     "option_keys",
@@ -274,6 +278,9 @@ class SystemOneResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
+    id: str | None = None
+    """The decision's id (``req_...``, the same as its ``X-Request-Id``): send feedback on it with
+    ``client.feedback.send(res, ...)``. None from a server that doesn't send one."""
     model: str
     """The model that answered: ``"<project>/<base id>"`` or ``"<project>/<name>"``."""
     answers: dict[str, Answer] = Field(default_factory=dict)
@@ -767,6 +774,30 @@ class UserReportReceipt(_View):
     """The report's id (``urep_...``)."""
     message: str
     """A thank-you from the Endor team."""
+
+
+FeedbackSource = Literal["review", "outcome", "user"]
+"""Who knows the right answer: ``review`` (someone on your team checked the decision), ``outcome`` (what actually
+happened, such as a chargeback; both count as the right answer) or ``user`` (an end user's opinion, not trusted)."""
+FeedbackAnswer = bool | int | str
+"""The right answer to one question, in the question's form: a choice's option id, a noul's ``True`` or ``False``, a
+score's level index (0 is the first level)."""
+
+
+class FeedbackInfo(_View):
+    """The feedback from one source on a decision (``client.feedback``)."""
+
+    decision: str
+    """The decision's id (``req_...``)."""
+    project: str
+    source: str
+    """``review``, ``outcome`` or ``user``."""
+    answers: dict[str, FeedbackAnswer]
+    """The right answers, by question name."""
+    served: dict[str, FeedbackAnswer]
+    """What Endor answered to the same questions, in the same form."""
+    comment: str | None = None
+    created_at: datetime
 
 
 class FutureInfo(_View):
