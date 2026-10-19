@@ -35,6 +35,29 @@ def test_soft_targets_use_argmax_for_accuracy() -> None:
     assert m["nll"] == pytest.approx(-(0.3 * math.log(0.6) + 0.7 * math.log(0.4)))
 
 
+def test_a_tied_top_shares_the_credit_whatever_the_option_order() -> None:
+    # two options tied at the top, the target one of them: half a correct answer, in either option order
+    for p in ({"a": 0.4, "b": 0.4, "c": 0.2}, {"b": 0.4, "a": 0.4, "c": 0.2}):
+        m = decision_metrics([p], [Target(label="b")])
+        assert m["accuracy"] == 0.5 and m["mean_confidence"] == 0.4
+        assert m["selective"]["0.5"] == {"coverage": 0.0, "accuracy": None}
+    assert decision_metrics([{"a": 0.4, "b": 0.4, "c": 0.2}], [Target(label="c")])["accuracy"] == 0.0
+    three = decision_metrics([{"a": 0.25, "b": 0.25, "c": 0.25, "d": 0.25}], [Target(label="d")])
+    assert three["accuracy"] == 0.25
+
+
+def test_a_soft_target_counts_each_of_its_tied_top_options_as_correct() -> None:
+    for y in ({"a": 0.4, "b": 0.4, "c": 0.2}, {"b": 0.4, "a": 0.4, "c": 0.2}):
+        assert decision_metrics([{"a": 0.1, "b": 0.7, "c": 0.2}], [Target(probs=y)])["accuracy"] == 1.0
+        assert decision_metrics([{"a": 0.45, "b": 0.45, "c": 0.1}], [Target(probs=y)])["accuracy"] == 1.0
+        assert decision_metrics([{"a": 0.1, "b": 0.1, "c": 0.8}], [Target(probs=y)])["accuracy"] == 0.0
+
+
+def test_fractional_credit_feeds_ece() -> None:
+    m = decision_metrics([{"a": 0.5, "b": 0.5}], [Target(label="a")])
+    assert m["accuracy"] == 0.5 and m["ece"] == 0.0  # confidence 0.5, half a correct answer
+
+
 def test_empty_and_mismatch() -> None:
     assert decision_metrics([], []) == {"n": 0}
     with pytest.raises(ValueError):
