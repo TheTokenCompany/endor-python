@@ -27,7 +27,15 @@ from functools import cached_property
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, field_validator, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 __all__ = [
     "JSONContent",
@@ -378,10 +386,26 @@ class _Strict(BaseModel):
 
 
 class Target(_Strict):
-    """What the loss compares against: a hard ``label`` (an option id) or soft ``probs`` over every option."""
+    """What the loss compares against: a hard ``label`` (an option id) or soft ``probs`` over every option.
+
+    ``Target(label="billing")`` or ``Target(probs={"billing": 0.7, "tech": 0.3})``; as a dict,
+    ``{"probs": {...}}``. The bare map ``{"billing": 0.7, "tech": 0.3}`` is a row label's shape and raises
+    ValueError; ``endor.data.label_target`` turns a row label into a ``Target``.
+    """
 
     label: str | None = None
     probs: dict[str, float] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _not_a_row_label(cls, v: Any) -> Any:
+        bare_map = isinstance(v, Mapping) and v and "label" not in v and "probs" not in v
+        if bare_map or isinstance(v, (str, int, float, list)):
+            raise ValueError(
+                'a Target is {"label": "billing"} or {"probs": {"billing": 0.7, "tech": 0.3}}; a bare probability '
+                "map or an option key is a row label's shape (endor.data.label_target turns a row label into a Target)"
+            )
+        return v
 
     def as_probs(self) -> dict[str, float]:
         """The target as a distribution (one-hot for a label)."""

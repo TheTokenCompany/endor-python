@@ -6,6 +6,8 @@
 What it does:
 
 1. Splits off a held-out set (unless ``eval_rows`` is given) and expands rows into datums, one per labeled question.
+   Prints a warning for each question with an option that no training label (or fewer than 10) gives any
+   probability: the model can't learn an option it never sees.
 2. Scores the untuned base model (``"<project>/<base_model>"``) on the held-out rows, so every later number has a
    baseline.
 3. Trains one run: batches of ``batch_size``, a learning rate with linear warmup then linear decay,
@@ -33,13 +35,16 @@ from .. import data as D
 from .._headers import sdk_context
 from ..futures import Steps
 from ..metrics import decision_metrics
-from ..types import Datum, LossFn, Target, answer_probabilities
+from ..types import Datum, DecisionRow, LossFn, Target, answer_probabilities, option_keys
 
 if TYPE_CHECKING:
     from ..client import EndorClient
     from ..runs import Run
 
 __all__ = ["SupervisedConfig", "SupervisedResult", "train", "evaluate_run", "evaluate_model", "lr_at"]
+
+_FEW_LABELS = 10
+"""Options with fewer training labels than this are named in a warning before training."""
 
 
 @dataclass
@@ -155,6 +160,35 @@ def evaluate_model(client: EndorClient, model: str, rows: Sequence[Any]) -> dict
     return decision_metrics(probs, targets)
 
 
+def _label_warnings(rows: Sequence[DecisionRow]) -> list[str]:
+    """One line per question with options that no label in ``rows`` gives any probability, or fewer than
+    ``_FEW_LABELS`` do: ``question 'dept': no training labels for refund; the model can't learn ...``."""
+    counts: dict[str, dict[str, int]] = {}
+    for row in rows:
+        for name, label in row.labels.items():
+            q = row.questions[name]
+            probs = D.label_target(q, label).as_probs()
+            per_option = counts.setdefault(name, {})
+            for key in option_keys(q):
+                per_option[key] = per_option.get(key, 0) + (probs.get(key, 0.0) > 0)
+
+    def listed(items: list[str]) -> str:
+        return ", ".join(items[:10]) + (f" and {len(items) - 10} more" if len(items) > 10 else "")
+
+    lines = []
+    for name, per_option in counts.items():
+        none = [k for k, n in per_option.items() if n == 0]
+        few = [f"{k} ({n})" for k, n in per_option.items() if 0 < n < _FEW_LABELS]
+        parts = []
+        if none:
+            parts.append(f"no training labels for {listed(none)}; the model can't learn an option it never sees")
+        if few:
+            parts.append(f"under {_FEW_LABELS} training labels for {listed(few)}")
+        if parts:
+            lines.append(f"question {name!r}: " + "; ".join(parts))
+    return lines
+
+
 def _replay_datums(client: EndorClient, cfg: SupervisedConfig, base: str) -> list[Datum]:
     if not cfg.replay_rows or cfg.replay_per_batch <= 0:
         return []
@@ -189,6 +223,8 @@ def train(
         train_datums, eval_datums = D.rows_to_datums(rows), D.rows_to_datums(eval_rows)
         if not train_datums:
             raise ValueError("no labeled questions to train on")
+        for line in _label_warnings(rows):
+            print(f"warning: {line}", file=sys.stderr, flush=True)
         steps = Steps(cfg.steps_in_flight)
         own = client is None
         client = client or EndorClient()

@@ -5,6 +5,13 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- A row label shaped like a `Datum` target (`{"probs": {...}}` or `{"label": ...}`) raises a ValueError that names
+  both shapes, instead of a TypeError from `float()`. A soft label with a non-number value raises ValueError too.
+- A `Target` (or a `Datum`'s `target`) given a bare probability map or an option key raises a ValueError that names
+  `{"label": ...}` and `{"probs": ...}`, instead of pydantic's "Extra inputs are not permitted".
+- `recipes.supervised.train` prints a warning before training for each question with options that have no
+  training labels (the model can't learn them) or fewer than 10.
+
 - `project.learning() -> Learning`: a managed project's continuous learning (always on): its `status`, `progress` to the
   next training run, what it serves, and the latest `trainings` (kept or discarded, each with its accuracy and loss on
   the held-back decisions). New types `Learning` and `Training`.

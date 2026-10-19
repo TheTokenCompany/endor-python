@@ -124,10 +124,21 @@ def label_target(question: Question, label: Label) -> Target:
     noul: ``True``/``False``, or P(true) as a float, or ``{"true": p, "false": 1-p}``.
     choice: an option key, or ``{key: p, ...}`` over every option.
     score: a level index (``2``) or its option id (``"2"``), or ``[p0, p1, ...]`` or ``{"0": p0, ...}``.
+
+    A soft row label is the probability map itself: ``{"billing": 0.7, "tech": 0.3}``, not
+    ``{"probs": {"billing": 0.7, "tech": 0.3}}``, which is a ``Datum`` target's shape and raises ValueError.
     """
     keys, qtype = option_keys(question), question_dict(question)["type"]
     if isinstance(label, dict):
-        probs = {str(k): float(v) for k, v in label.items()}
+        if ("probs" in label or "label" in label) and not {str(k) for k in label} <= set(keys):
+            raise ValueError(
+                'a row label is the probability map itself ({"billing": 0.7, "tech": 0.3}) or an option key '
+                '("billing"); {"probs": ...} and {"label": ...} are a Datum target\'s shape'
+            )
+        try:
+            probs = {str(k): float(v) for k, v in label.items()}
+        except (TypeError, ValueError):
+            raise ValueError(f"a soft label maps each option to a probability, got {label!r}") from None
         _check_probs(probs, keys)
         return Target(probs=probs)
     if isinstance(label, list):
