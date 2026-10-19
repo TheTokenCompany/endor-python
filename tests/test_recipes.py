@@ -133,6 +133,42 @@ def test_supervised_needs_labels(client: EndorClient) -> None:
         supervised.train(SupervisedConfig(project="x"), [{"state": "s", "questions": {"d": DEPT}}] * 5, client=client)
 
 
+def test_supervised_warns_about_options_without_labels(client: EndorClient, capsys: pytest.CaptureFixture[str]) -> None:
+    train = rows(20)
+    for i, r in enumerate(train):
+        r["labels"]["dept"] = "billing" if i < 3 else "tech"  # 3 billing, 17 tech
+    for r in train:
+        r["labels"]["urgent"] = False  # never true
+    cfg = SupervisedConfig(project=unique("sl"), batch_size=8, eval_base=False, progress=False)
+    supervised.train(cfg, train, eval_rows=rows(2), client=client)
+    err = capsys.readouterr().err.splitlines()
+    assert err == [
+        "warning: question 'dept': under 10 training labels for billing (3)",
+        "warning: question 'urgent': no training labels for true; the model can't learn an option it never sees",
+    ]
+
+
+def test_supervised_does_not_warn_when_every_option_has_labels(
+    client: EndorClient, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def cfg() -> SupervisedConfig:
+        return SupervisedConfig(project=unique("sl"), batch_size=8, eval_base=False, progress=False)
+
+    supervised.train(cfg(), rows(40), eval_rows=rows(2), client=client)
+    soft = [{"state": "s", "questions": {"d": DEPT}, "labels": {"d": {"billing": 0.1, "tech": 0.9}}}] * 12
+    supervised.train(cfg(), soft, eval_rows=rows(2), client=client)  # a soft label gives every option some weight
+    assert capsys.readouterr().err == ""
+
+
+def test_label_warnings_list_at_most_ten_options() -> None:
+    many = endor.Choice(criteria={f"o{i}": None for i in range(15)})
+    lines = supervised._label_warnings([endor.DecisionRow(state="s", questions={"q": many}, labels={"q": "o0"})] * 12)
+    assert lines == [
+        "question 'q': no training labels for o1, o2, o3, o4, o5, o6, o7, o8, o9, o10 and 4 more; "
+        "the model can't learn an option it never sees"
+    ]
+
+
 def test_replay(client: EndorClient, fake: FakeEndor) -> None:
     replay = [{"state": {"g": i}, "questions": {"d": DEPT}} for i in range(3)]
     cfg = SupervisedConfig(project=unique("rp"), batch_size=4, eval_base=False, replay_rows=replay, replay_per_batch=2)

@@ -222,6 +222,9 @@ the `criteria` keys for a choice, `"0"`…`"n-1"` (the level index) for a score.
 | `choice` | `"billing"` | `{"billing": 0.7, "technical": 0.2, "sales": 0.1}` |
 | `score` | `2` (level index) or `"2"` (its option id) | `[0.1, 0.6, 0.3]` or `{"0": 0.1, "1": 0.6, "2": 0.3}` |
 
+A soft label is the probability map itself. `{"probs": {...}}` is the shape of a `Datum` target (below), not of a
+row label, and is refused with a ValueError that says so.
+
 `endor.data.load_rows(path)` reads `.jsonl` or a `.json` array and also accepts single-question rows,
 `{"state", "question", "expected"}` or `{"state", "question", "label"?, "target"?}`, each becoming one question named
 `decision`. `endor.data.save_rows(path, rows)` writes `.jsonl`.
@@ -247,6 +250,10 @@ learning rate and schedule, batch size, epochs, loss, how often to evaluate. The
 progress line (`step 37/120 (31%) · loss 0.4120 · ~3 min left`; `progress=False` turns it off). It sends each step
 before the last one's results are read (`steps_in_flight=2`), so the trainer doesn't wait for a round trip between
 steps; results, metrics and evaluations are the same as with `steps_in_flight=1`.
+
+Before training, the recipe prints a warning for each question with options that have no training labels, or fewer
+than 10 (`warning: question 'dept': no training labels for refund; the model can't learn an option it never sees`).
+Add rows for those options, or drop them from the question.
 
 ## Training costs and limits
 
@@ -303,7 +310,9 @@ trained); the SDK sends only the settings you pass explicitly, and one that conf
 fresh run defaults to rank 16, alpha 32, attention and MLP layers, no readout.
 
 - A `Datum` is one state, one question, a `Target` (a hard `label` or soft `probs`) and a weight. Each labeled
-  question of a row becomes one datum.
+  question of a row becomes one datum. A target is `Target(label="billing")` or
+  `Target(probs={"billing": 0.7, "tech": 0.3})` (as a dict, `{"probs": {...}}`); the bare map is a row label's shape
+  and is refused. `endor.data.label_target(question, label)` turns a row label into a `Target`.
 - `forward`, `forward_backward`, `optim_step` and `save_checkpoint` return futures. Call `.result()`, `await` them,
   or wait for several with `endor.gather(...)`. Each has an `_async` variant that submits without blocking. A future
   can stay pending while a GPU starts (usually under a minute); `.result()` keeps waiting.

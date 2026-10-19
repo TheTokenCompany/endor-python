@@ -136,6 +136,29 @@ class TestLabels:
         with pytest.raises(ValueError):
             data.label_target(q, label)  # type: ignore[arg-type]
 
+    @pytest.mark.parametrize(
+        "label",
+        [
+            {"probs": {"billing": 0.7, "tech": 0.3}},
+            {"label": "billing"},
+            {"probs": {"billing": 0.7, "tech": 0.3}, "weight": 2.0},
+        ],
+    )
+    def test_a_datum_target_is_not_a_row_label(self, label: dict) -> None:
+        with pytest.raises(ValueError, match=r"probability map itself.*Datum target"):
+            data.label_target(DEPT, label)
+        with pytest.raises(ValueError, match="probability map itself"):
+            data.rows_to_datums([{"state": "x", "questions": {"d": DEPT}, "labels": {"d": label}}])
+
+    def test_soft_label_values_are_numbers(self) -> None:
+        with pytest.raises(ValueError, match="probability"):
+            data.label_target(DEPT, {"billing": None, "tech": 1.0})  # type: ignore[dict-item]
+
+    def test_options_named_label_or_probs_still_take_soft_labels(self) -> None:
+        q = Choice(criteria={"label": None, "probs": None})
+        assert data.label_target(q, {"label": 0.4, "probs": 0.6}) == Target(probs={"label": 0.4, "probs": 0.6})
+        assert data.label_target(q, "label") == Target(label="label")
+
     def test_target_as_probs(self) -> None:
         assert Target(label="a").as_probs() == {"a": 1.0}
         assert Target(probs={"a": 0.5, "b": 0.5}).as_probs() == {"a": 0.5, "b": 0.5}
@@ -157,6 +180,20 @@ class TestDatums:
             [{"state": "x", "questions": {"d": DEPT}, "labels": {"d": {"billing": 0.6, "tech": 0.4}}}]
         )
         assert soft[0].to_wire()["target"] == {"probs": {"billing": 0.6, "tech": 0.4}}
+
+    @pytest.mark.parametrize("target", [{"billing": 0.7, "tech": 0.3}, "billing", 0.7, [0.7, 0.3]])
+    def test_a_row_label_is_not_a_datum_target(self, target: object) -> None:
+        with pytest.raises(ValueError, match=r'\{"probs": .*row label'):
+            Datum(state="x", question=DEPT, target=target)  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match=r'\{"probs": .*row label'):
+            Target(billing=0.7, tech=0.3)  # type: ignore[call-arg]
+
+    def test_datum_target_shapes(self) -> None:
+        soft = Datum(state="x", question=DEPT, target={"probs": {"billing": 0.7, "tech": 0.3}})  # type: ignore[arg-type]
+        assert soft.target == Target(probs={"billing": 0.7, "tech": 0.3})
+        hard = Datum(state="x", question=DEPT, target={"label": "billing"})  # type: ignore[arg-type]
+        assert hard.target == Target(label="billing")
+        assert Datum(state="x", question=DEPT, target=Target(label="tech")).target.label == "tech"
 
     def test_unlabeled_and_unknown(self) -> None:
         assert data.rows_to_datums([{"state": "x", "questions": {"d": DEPT}}]) == []
