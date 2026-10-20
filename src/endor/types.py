@@ -587,15 +587,12 @@ class Training(_View):
 
     at: datetime
     kept: bool
-    """Saved as ``version``, which the project then served, or discarded (clearly worse than what it served, on
-    held-back decisions that version wasn't chosen on)."""
+    """Saved as ``version``, which the project then served, or discarded (not better than what it served)."""
     version: str | None = None
     decisions: int | None = None
     """The project's decision count when the run started (None from a server that doesn't send it)."""
     accuracy: float | None = None
-    """Percent of the held-back decisions it answered right, with the 95% interval ``low`` to ``high``: right means
-    as your corrections say once a question has enough of them held back, else as the labelling model (a frontier
-    LLM) answers. None: nothing to check on."""
+    """Its accuracy in percent, with the 95% interval ``low`` to ``high``. None: nothing to check on."""
     low: float | None = None
     high: float | None = None
     loss: float | None = None
@@ -605,12 +602,12 @@ class Training(_View):
     against_accuracy: float | None = None
     against_loss: float | None = None
     worse: list[str] = Field(default_factory=list)
-    """The questions it was clearly worse on."""
+    """The questions it was worse on."""
 
 
 class Drift(_View):
-    """How the served version's answers to one question over the last 7 days compare with its answers on the
-    held-back decisions it was checked on. Reported only: learning goes on as usual."""
+    """Whether the served version's recent answers to one question differ from what it was checked on. Reported
+    only: learning goes on as usual."""
 
     question: str
     changed: bool
@@ -698,7 +695,7 @@ class ModelInfo(_View):
     project: str
     name: str
     """The base model id for a base model; the saved model's name otherwise. A continuous learning project's versions
-    are named ``YYYY-MM-DD-N``."""
+    are named ``v1``, ``v2``, ..."""
     training_run_id: str | None = None
     base_model: str
     contract: str | None = None

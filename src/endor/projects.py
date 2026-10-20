@@ -167,8 +167,8 @@ class Project:
 
     def learning(self) -> Learning:
         """A continuous learning project's learning, which is always on: its status, the way to the next training run
-        (``progress``, 0 to 1), what ``"<project>"`` serves, the latest training runs (each kept or discarded, with its
-        accuracy and loss on the held-back decisions) and whether recent traffic drifted (``drift``).
+        (``progress``, 0 to 1), what ``"<project>"`` serves, the latest training runs (each kept or not, with its
+        accuracy and loss) and whether recent traffic changed (``drift``).
         ``WrongProjectKindError`` for a custom project."""
         return Learning.model_validate(
             self._t.request("GET", f"/v1/projects/{self.name}/learning", method_name="project.learning")

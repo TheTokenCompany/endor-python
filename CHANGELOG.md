@@ -19,7 +19,8 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 - A continuous learning project (`kind="managed"`) has exactly one base model, chosen at creation:
   `projects.create` raises `ValueError` for none or several, and `get_or_create` for an existing one with another base.
   `add_base_model` and `remove_base_model` are for custom projects. Docstrings, the README and the CLI call managed
-  projects continuous learning projects; the API value stays `managed`.
+  projects continuous learning projects; the API value stays `managed`. Their versions are named `v1`, `v2`, ...
+  (the docstrings said `YYYY-MM-DD-N`).
 
 - `endor.metrics.decision_metrics`: when k options tie exactly for the top probability, each counts 1/k toward
   accuracy (so a decision scores the share of its tied top options that are the target's), and a soft target counts

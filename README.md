@@ -184,11 +184,10 @@ with another base model. `base_model=` on `create` or
 
 ### Continuous learning
 
-A continuous learning project learns from its own decisions: you send decisions, Endor labels them with a frontier
-LLM, trains new versions on its base model, named `YYYY-MM-DD-N`, and `"triage"` serves the newest one that checks out
-at least as well as the one it serves. There is no data to upload and no training to run. Its base model is chosen
-once, at creation (`ValueError` for none or several), and its decisions are billed at the continuous-learning price
-(50% more).
+A continuous learning project learns by itself: Endor trains new versions of its model (`v1`, `v2`, ...) from the
+project's own decisions and your corrections, and `"triage"` starts serving a new version when it is better. There is
+no data to upload and no training to run. Its base model is chosen once, at creation (`ValueError` for none or
+several), and its decisions are billed at the continuous-learning price (50% more).
 
 ```python
 project = client.projects.create("triage", kind="managed", base_models=["decider-2b"])
@@ -196,14 +195,11 @@ res = client.system_one(state, questions, model="triage")   # learns from every 
 
 learning = project.learning()
 learning.status, learning.progress    # "learning", 0.4 of the way to the next version
-learning.serving                      # "triage/2026-10-20-1", or "triage/decider-2b" before the first version
-for t in learning.trainings:          # newest first: kept or discarded, with accuracy and loss on held-back decisions
+learning.serving                      # "triage/v2", or "triage/decider-2b" before the first version
+for t in learning.trainings:          # newest first: kept or not, with its accuracy and loss
     print(t.version, t.kept, t.decisions, t.accuracy, t.against_accuracy)
-learning.drift                        # per question, whether recent traffic moved away from what it was checked on
+learning.drift                        # per question, whether recent traffic changed
 ```
-
-Once a choice question has enough of your corrections held back, a new version's confidences are calibrated on them,
-so its probabilities say how often it is right (true/false and score questions get a temperature only).
 
 **Corrections.** When you learn whether a decision was right, correct it. For each question you checked, say whether
 the model answered right and, if not, the right answer:
@@ -221,10 +217,8 @@ client.corrections.create(res, {
   answer included, raises `UnprocessableEntityError` (422, `param` `questions.<name>.answer`). When none of the
   options fits, send `{"correct": False}`.
 - `{"correct": False}` alone names the right answer for a noul, or a choice or score of two options. With more
-  options the project only knows the answer was wrong: it never trains on it, and that's all.
-- Corrections train the next version ahead of the labelling model's answers; a quarter of them are held back to check
-  each new version on; the labelling model learns from the ones it got wrong; and 100 that differ from what was
-  served start a new version early. They count from the next version on: watch `project.learning()`.
+  options the correction's `answer` is `None`: only known to be wrong.
+- The project learns from your corrections in its next versions: watch `project.learning()`.
 - A decision has one correction: creating it again replaces it whole. `client.corrections.get(res)` reads it,
   `client.corrections.delete(res)` withdraws it, and `client.corrections.batch([...])` sends up to 1,000 at once,
   all or nothing (`{"request_id", "questions", "comment"?}` each), for example to backfill decisions you checked

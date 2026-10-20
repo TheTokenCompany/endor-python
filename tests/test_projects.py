@@ -141,7 +141,7 @@ class TestProjects:
                 {
                     "at": "2026-10-20T12:00:00Z",
                     "kept": True,
-                    "version": "2026-10-20-1",
+                    "version": "v1",
                     "decisions": 400,
                     "accuracy": 91.5,
                     "low": 88.0,
@@ -156,7 +156,7 @@ class TestProjects:
             "drift": [{"question": "dept", "changed": True, "answer_shift": 0.14, "confidence_change": -0.06}],
         }
         got = m.learning()
-        assert got.trainings[0].decisions == 400 and got.trainings[0].version == "2026-10-20-1"
+        assert got.trainings[0].decisions == 400 and got.trainings[0].version == "v1"
         assert got.drift[0].question == "dept" and got.drift[0].changed and got.drift[0].answer_shift == 0.14
         p = client.projects.create(unique("cus"), base_models=["jev-9b"])
         with pytest.raises(WrongProjectKindError):
