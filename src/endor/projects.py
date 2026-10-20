@@ -39,8 +39,8 @@ from .types import (
 )
 
 ProjectKind = Literal["custom", "managed"]
-"""``custom``: you train models with the SDK. ``managed`` (coming soon): Endor trains new versions from the project's
-decisions; the API refuses it until ``client.whoami().managed_projects`` is true."""
+"""``managed``: continuous learning, the recommended way. Endor trains new versions of the project's model from its
+decisions and your corrections (``client.corrections``). ``custom``: you train models with the SDK."""
 
 
 __all__ = ["Projects", "Project", "Datasets", "Runs", "Models", "MAX_UPLOAD_ROWS"]
@@ -68,18 +68,21 @@ class Projects:
         of every model id). Raises ``ConflictError`` if you already have one with that name, and
         ``LimitReachedError`` (a ``ConflictError``) when the org has as many projects as it may.
 
-        ``kind`` is ``"custom"`` (you train models with the SDK) or ``"managed"`` (Endor trains new versions from the
-        project's decisions; its decisions cost 50% more). It never changes. Managed projects are coming soon: until
-        ``client.whoami().managed_projects`` is true, the API refuses them (``UnprocessableEntityError``, 422
-        ``invalid_input``).
+        ``kind`` is ``"managed"`` (continuous learning: Endor trains new versions from the project's decisions and
+        your corrections; its decisions cost 50% more) or ``"custom"`` (you train models with the SDK; the default
+        here). It never changes.
 
         ``base_models``: base model ids from ``client.base_models()``, for example ``["decider-2b"]``. Each answers at
-        once as ``"<project>/<base id>"``, and ``"<project>"`` answers with the first. A managed project needs at
-        least one; a custom project may start with none (a run on a base model adds it). Add and remove them later
-        with ``project.add_base_model`` and ``project.remove_base_model``."""
+        once as ``"<project>/<base id>"``, and ``"<project>"`` answers with the first. A continuous learning project
+        has exactly one, chosen here for good (``ValueError`` otherwise); a custom project may start with none (a run
+        on a base model adds it) and adds and removes them later with ``project.add_base_model`` and
+        ``project.remove_base_model``."""
         bases = _base_list(base_models, removed, "projects.create")
-        if kind == "managed" and not bases:
-            raise ValueError('a managed project needs at least one base model: base_models=["decider-2b"]')
+        if kind == "managed" and len(bases) != 1:
+            raise ValueError(
+                "a continuous learning project has exactly one base model, chosen at creation: "
+                'base_models=["decider-2b"]'
+            )
         body: dict[str, Any] = {"name": name, "description": description, "kind": kind, "base_models": bases}
         r = self._t.request("POST", "/v1/projects", json=body, method_name="projects.create", idempotent=True)
         return Project(self._t, r, self._capture)
@@ -100,9 +103,10 @@ class Projects:
         **removed: Any,
     ) -> Project:
         """The project called ``name``, created if missing (with these settings). Safe to call at the top of every
-        script. An existing project gets the ``base_models`` it doesn't have yet, and keeps its other base models and
-        its description. Raises ``ValueError`` if the existing project has another ``kind``: it can't change, so use
-        another project name."""
+        script. An existing custom project gets the ``base_models`` it doesn't have yet, and keeps its other base models
+        and its description. Raises ``ValueError`` if the existing project has another ``kind`` (it can't change, so
+        use another project name), or for an existing continuous learning project with another base model (its base is
+        chosen once)."""
         bases = _base_list(base_models, removed, "projects.get_or_create")
         try:
             p = self.get(name)
@@ -113,6 +117,13 @@ class Projects:
                 f"project {name!r} exists as a {p.info_.kind} project, not a {kind} project; a project's kind can't "
                 "change, so pick another name"
             )
+        if kind == "managed":
+            if bases and bases != p.info_.base_models:
+                raise ValueError(
+                    f"continuous learning project {name!r} learns on {p.info_.base_models}, not {bases}; its base "
+                    "model is chosen once, so pick another name"
+                )
+            return p
         for b in bases:
             if b not in p.info_.base_models:
                 try:
@@ -155,17 +166,20 @@ class Project:
         return self.info_
 
     def learning(self) -> Learning:
-        """A managed project's continuous learning, which is always on: its status, the way to the next training run
-        (``progress``, 0 to 1), what ``"<project>"`` serves, and the latest training runs, each kept or discarded with
-        its accuracy and loss on the held-back decisions. ``WrongProjectKindError`` for a custom project."""
+        """A continuous learning project's learning, which is always on: its status, the way to the next training run
+        (``progress``, 0 to 1), what ``"<project>"`` serves, the latest training runs (each kept or discarded, with its
+        accuracy and loss on the held-back decisions) and whether recent traffic drifted (``drift``).
+        ``WrongProjectKindError`` for a custom project."""
         return Learning.model_validate(
             self._t.request("GET", f"/v1/projects/{self.name}/learning", method_name="project.learning")
         )
 
     def add_base_model(self, base_model: str) -> ProjectInfo:
         """Add a base model (an id from ``client.base_models()``) to the project, after the ones it has. It answers at
-        once as ``"<project>/<base id>"``, and runs can train on it. Raises ``ConflictError`` if the project has it,
-        and ``UnprocessableEntityError`` if the id is not a base model."""
+        once as ``"<project>/<base id>"``, and runs can train on it. Custom projects only: a continuous learning
+        project keeps the one base model it was created with, and the API refuses another (``ConflictError`` or
+        ``UnprocessableEntityError``). Raises ``ConflictError`` if the project has it, and ``UnprocessableEntityError``
+        if the id is not a base model."""
         self.info_ = ProjectInfo.model_validate(
             self._t.request(
                 "POST",
@@ -180,8 +194,8 @@ class Project:
     def remove_base_model(self, base_model: str) -> ProjectInfo:
         """Take a base model off the project: ``"<project>/<base id>"`` stops answering, and ``"<project>"`` answers
         with the next base when this was the first. Saved models trained on it and open runs on it keep working, and
-        a new run on it adds it again. Raises ``NotFoundError`` if the project doesn't have it, and ``ConflictError``
-        for a managed project's last base model."""
+        a new run on it adds it again. Custom projects only: a continuous learning project keeps its one base model
+        (``ConflictError``). Raises ``NotFoundError`` if the project doesn't have it."""
         self.info_ = ProjectInfo.model_validate(
             self._t.request(
                 "DELETE",
@@ -227,9 +241,9 @@ class Project:
         """Score a model server-side on one of this project's datasets, or on ``rows`` sent with the call (decision
         rows in any shape ``project.datasets.upload`` takes, at most 50,000 and 32 MB; nothing is stored as a
         dataset). One of the two. ``model`` is a base model id of this project (``"decider-2b"``), a saved model's
-        name (``"v1"``), this project's name (a managed project's newest version, else its first base model) or a
-        full model id (``"<project>/<base id>"``, ``"<project>/<name>"``). The evaluation records the full id of the
-        model that answered: ``"decider-2b"`` becomes ``"<project>/decider-2b"``.
+        name (``"v1"``), this project's name (a continuous learning project's newest version, else its first base
+        model) or a full model id (``"<project>/<base id>"``, ``"<project>/<name>"``). The evaluation records the full
+        id of the model that answered: ``"decider-2b"`` becomes ``"<project>/decider-2b"``.
 
         A row with labels is scored on its labeled questions; a row without labels is answered on every question and
         not scored (``client.predict`` returns those answers). The result's ``results`` has ``n`` (the questions
@@ -373,10 +387,10 @@ class Runs:
         aren't closed, idle ones included (a sixth raises ``LimitReachedError``). A run without calls is parked
         (``idle``) after 2 minutes. Until you close it, the run sends a heartbeat every minute from a background
         thread, so it stays open however long you wait; if your process ends without closing it, Endor closes it 5
-        minutes later. Custom projects only: a managed project raises ``WrongProjectKindError`` (Endor trains it).
-        Close every run you create (``with project.runs.create(...) as run:``): an org can have at most 25 runs that
-        aren't closed, idle ones included (a 26th raises ``LimitReachedError``). A run without calls is parked
-        (``idle``) after 2 minutes and closed after an hour. Custom projects only: a managed project raises
+        minutes later. Custom projects only: a continuous learning project raises ``WrongProjectKindError`` (Endor
+        trains it). Close every run you create (``with project.runs.create(...) as run:``): an org can have at most 25
+        runs that aren't closed, idle ones included (a 26th raises ``LimitReachedError``). A run without calls is parked
+        (``idle``) after 2 minutes and closed after an hour. Custom projects only: a continuous learning project raises
         ``WrongProjectKindError`` (Endor trains it).
         ``config`` is free-form and shown on the dashboard; when the client was created with ``capture=True`` the
         SDK adds the LoRA settings and the current git commit (never file contents).

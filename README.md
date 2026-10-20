@@ -65,13 +65,14 @@ res.choices["department"].probabilities   # {"billing": 0.91, "technical": 0.07,
 res.nouls["urgent"].noul                  # 0.83
 res.scores["frustration"].score           # 1.4 (expected level), plus .probabilities and .legend
 res.model, res.usage.input_tokens         # the model that answered, e.g. "tickets/v1"
+res.id                                    # the decision's id ("req_..."), to correct it later
 ```
 
 | `model` | The model that answers |
 |---|---|
 | `"tickets/v1"` | one saved model |
 | `"tickets/decider-2b"` | one of the project's base models, without an adapter |
-| `"tickets"` | managed project: its newest version, or its first base model until there is one. Custom project: its first base model |
+| `"tickets"` | continuous learning project: its newest version, or its base model until there is one. Custom project: its first base model |
 
 A bare base model id such as `"decider-2b"` raises `ModelRequiresProjectError` (422 `model_requires_project`). There is no default model: pass
 `model=` or set one with `EndorClient(model="tickets")` or `ENDOR_DEFAULT_MODEL`, else `system_one` raises
@@ -98,7 +99,7 @@ triage.department.choice, triage.urgent.noul
 ```
 
 **Benchmarks.** Pass `exclude_from_training=True` to `system_one` (or `EndorClient(exclude_from_training=True)`
-for every call) to keep decisions out of a managed project's continuous learning, for example a benchmark or an
+for every call) to keep decisions out of a project's continuous learning, for example a benchmark or an
 evaluation. They are still answered, billed and logged.
 
 **Images.** On a base model that reads images (`client.base_models()`: `modalities` includes `"image"`), put
@@ -123,7 +124,8 @@ says), and the message says how to ask.
 project with a base model, `"<project>"` and `"<project>/<base id>"` for each of its base models, then
 `"<project>/<name>"` for each saved model (`.kind` is `project`, `base` or `model`). `client.base_models()` returns the
 base models (`GET /v1/base_models`) with their option limits, `modalities`, `hf_repo`, `contract` and prices
-(`price_per_mtok_decide`, `price_per_mtok_decide_continuous_learning` for managed projects, `price_per_gpu_hour`).
+(`price_per_mtok_decide`, `price_per_mtok_decide_continuous_learning` for continuous learning projects,
+`price_per_gpu_hour`).
 Call a base model through a project that has it: `"<project>/<base id>"`.
 
 **Many rows at once.** `client.predict(model, rows)` returns the answers to every question of every row, in the rows'
@@ -143,15 +145,15 @@ answers[0]["department"].choice           # "billing": each row's answers as sys
 ## Projects
 
 Everything you create lives in a **project**, keyed by its name. Each project has a **kind**, set at creation and
-never changed, and any number of **base models**, each called `"<project>/<base id>"`:
+never changed, and **base models**, each called `"<project>/<base id>"`:
 
-| | Custom (`kind="custom"`, the default) | Managed (`kind="managed"`, coming soon) |
+| | Continuous learning (`kind="managed"`, recommended) | Custom (`kind="custom"`, the SDK's default) |
 |---|---|---|
-| Who trains | you, with the SDK | Endor, from the project's own decisions (coming soon) |
-| Base models | any number: at creation, later, or added by a run | at least one |
-| `"tickets"` serves | the first base model; call the others and each saved model by its id | the newest version, else the first base model |
-| Datasets, runs, saves, evaluations | yes | no (`WrongProjectKindError`, 409 `wrong_project_kind`) |
-| Decision price | the base model's price | +50% (`price_per_mtok_decide_continuous_learning`), paused or not |
+| Who trains | Endor, from the project's own decisions and your corrections | you, with the SDK |
+| Base models | exactly one, chosen at creation | any number: at creation, later, or added by a run |
+| `"tickets"` serves | the newest version, else the base model | the first base model; call the others and each saved model by its id |
+| Datasets, runs, saves, evaluations | no (`WrongProjectKindError`, 409 `wrong_project_kind`) | yes |
+| Decision price | +50% (`price_per_mtok_decide_continuous_learning`) | the base model's price |
 
 A custom project holds datasets, runs, the models those runs save (named `<project>/<name>`), and evaluations:
 
@@ -171,23 +173,64 @@ An evaluation scores a row's labeled questions; a row without labels is answered
 (its answers are in the results' `rows_url`, which `client.predict` reads for you). `rows_done` of `rows_total` shows
 how far a running evaluation is.
 
-`project.info_` has `kind`, `base_models` (in the order they were added) and `paused` (managed projects only).
+`project.info_` has `kind` and `base_models` (in the order they were added).
 `project.update(description=...)` changes the description. `project.models.list()` starts with the base models
 (`kind == "base"`, `name` the base id), then the saved models (`kind == "saved"`), each with `loss`, its training loss
 when it was saved. `runs.create()` trains on the project's first base model, or on `base_model=`; a base the project
-doesn't have yet is added to it. `get_or_create` adds the `base_models` an existing project doesn't have (and removes
-none); it raises `ValueError` when the existing project has another kind. `base_model=` on `create` or
+doesn't have yet is added to it. `get_or_create` adds the `base_models` an existing custom project doesn't have (and
+removes none); it raises `ValueError` when the existing project has another kind, or is a continuous learning project
+with another base model. `base_model=` on `create` or
 `get_or_create` raises `TypeError`: pass `base_models=[...]`.
 
-**Managed projects (coming soon).** Until `client.whoami().managed_projects` is true, creating one raises
-`UnprocessableEntityError` (422 `invalid_input`, "Managed projects are coming soon"); use a custom project. Once
-available, Endor trains new versions from the project's decisions, named `YYYY-MM-DD-N`, and `"tickets"` serves the
-newest one. Its decisions are billed at the managed price (50% more).
+### Continuous learning
+
+A continuous learning project learns from its own decisions: you send decisions, Endor labels them with a frontier
+LLM, trains new versions on its base model, named `YYYY-MM-DD-N`, and `"triage"` serves the newest one that checks out
+at least as well as the one it serves. There is no data to upload and no training to run. Its base model is chosen
+once, at creation (`ValueError` for none or several), and its decisions are billed at the continuous-learning price
+(50% more).
 
 ```python
 project = client.projects.create("triage", kind="managed", base_models=["decider-2b"])
-project.update(paused=True)    # stops learning; keeps serving its newest version, at the managed price
+res = client.system_one(state, questions, model="triage")   # learns from every decision
+
+learning = project.learning()
+learning.status, learning.progress    # "learning", 0.4 of the way to the next version
+learning.serving                      # "triage/2026-10-20-1", or "triage/decider-2b" before the first version
+for t in learning.trainings:          # newest first: kept or discarded, with accuracy and loss on held-back decisions
+    print(t.version, t.kept, t.decisions, t.accuracy, t.against_accuracy)
+learning.drift                        # per question, whether recent traffic moved away from what it was checked on
 ```
+
+Once a choice question has enough of your corrections held back, a new version's confidences are calibrated on them,
+so its probabilities say how often it is right (true/false and score questions get a temperature only).
+
+**Corrections.** When you learn whether a decision was right, correct it. For each question you checked, say whether
+the model answered right and, if not, the right answer:
+
+```python
+client.corrections.create(res, {
+    "frustration": {"correct": True},                       # the model was right
+    "department": {"correct": False, "answer": "technical"},  # wrong: the right answer
+    "urgent": {"correct": False},                           # wrong: a yes/no question, so the other answer
+}, comment="a bug report, not a billing question")
+```
+
+- An `answer` must be exactly one of the question's options as the decision asked it: a choice's option id (case and
+  spelling included), a noul's `True` or `False`, a score's level index as an `int`. Anything else, an "other"
+  answer included, raises `UnprocessableEntityError` (422, `param` `questions.<name>.answer`). When none of the
+  options fits, send `{"correct": False}`.
+- `{"correct": False}` alone names the right answer for a noul, or a choice or score of two options. With more
+  options the project only knows the answer was wrong: it never trains on it, and that's all.
+- Corrections train the next version ahead of the labelling model's answers; a quarter of them are held back to check
+  each new version on; the labelling model learns from the ones it got wrong; and 100 that differ from what was
+  served start a new version early. They count from the next version on: watch `project.learning()`.
+- A decision has one correction: creating it again replaces it whole. `client.corrections.get(res)` reads it,
+  `client.corrections.delete(res)` withdraws it, and `client.corrections.batch([...])` sends up to 1,000 at once,
+  all or nothing (`{"request_id", "questions", "comment"?}` each), for example to backfill decisions you checked
+  earlier. Each has an `_async` variant. A decision is its `SystemOneResponse` or its id (`res.id`).
+- Corrections are free and work in every project; only continuous learning projects learn from them. Endor records a
+  decision a moment after it answers, so a correction sent at once may raise `NotFoundError`: retry.
 
 **Model names** you save are lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit, up to 63
 characters, and can't be `base` or a base model id. `save_checkpoint` raises `ValueError` for a bad name (or
@@ -495,16 +538,18 @@ endor user-report "what you did, what happened, what you expected" [--kind bug|c
 org's balance (`balance_usd`). Every command takes `-f json` and needs `ENDOR_API_KEY`, `endor user-report` too. Training itself happens in Python. `endor runs close`
 frees a slot when a script left a run open. `usage --csv` columns are `hour, kind, project, base_model, model,
 training_run_id, input_tokens, gpu_seconds, continuous_learning, price_per_mtok, base_cost_usd,
-continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a managed project's decisions.
+continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a continuous learning project's
+decisions.
 
 ## Reference
 
 | Object | Members |
 |---|---|
-| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `predict(model, rows, *, progress=True, timeout=None)` → one `{question: answer}` per row, `predict_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `balance()` → USD, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
+| `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `predict(model, rows, *, progress=True, timeout=None)` → one `{question: answer}` per row, `predict_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `whoami()`, `balance()` → USD, `usage(starting_on, ending_before, project=None)`, `corrections`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
 | `endor.user_report(message, *, kind="bug", request_id=None, context=None, api_key=None, base_url=None, timeout=None)` | `endor.user_report_async(...)`; returns `UserReportReceipt` (`id`, `message`) |
+| `client.corrections` | `create(request_id, questions, *, comment=None)` → `CorrectionInfo`, `batch(items)` → `list[CorrectionInfo]`, `get(request_id)`, `delete(request_id)`, each with an `_async` variant; `request_id` is a `SystemOneResponse` or its id |
 | `client.projects` | `create(name, description=None, *, kind="custom", base_models=None)`, `get(name)`, `get_or_create(name, description=None, *, kind="custom", base_models=None)`, `list(limit=None, offset=0)` (all pages) |
-| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `add_base_model(base_model)`, `remove_base_model(base_model)`, `update(*, description=None, paused=None, wandb=None)`, `evaluate(model, dataset=None, run_id=None, *, rows=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
+| `Project` | `.name`, `.info_`, `.datasets`, `.runs`, `.models`, `info()`, `learning()` → `Learning`, `add_base_model(base_model)`, `remove_base_model(base_model)` (custom projects), `update(*, description=None, wandb=None)`, `evaluate(model, dataset=None, run_id=None, *, rows=None)` → `APIFuture[Evaluation]`, `evaluations(run_id=None, model=None)`, `delete()` |
 | `project.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
 | `project.runs` | `create(base_model=None, *, rank, alpha, seed, train_attn, train_mlp, train_readout, from_model, include_optimizer, name, tags, config, user_metadata, total_steps, wandb, wait)` → `Run`, `get(run_id)`, `list(tag=None, limit=None, offset=0)` |
 | `project.models` | `list(run_id=None)`, `get(model)`, `set_ttl(model, ttl_seconds)`, `download(model, path, include_optimizer=False)`, `delete(model)`; `model` is a name (a base id for a base model) or `<project>/<name>` |
@@ -515,7 +560,7 @@ continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a man
 | `endor.metrics` | `decision_metrics(probs, targets, bins=10)` → `{n, accuracy, nll, brier, ece, mean_confidence, selective}` |
 | `endor.recipes.supervised` | `SupervisedConfig`, `SupervisedResult`, `train(cfg, rows, eval_rows=None, client=None)`, `evaluate_run(run, datums)`, `evaluate_model(client, model, rows)`, `lr_at(cfg, step, total)` |
 | `endor.recipes.distill` | `Teacher` (protocol), `DistillConfig(supervised, teacher, budget, seed)`, `label_with_teacher(rows, cfg)`, `distill(cfg, unlabeled_rows, eval_rows, client=None)` |
-| Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `ProjectInfo`, `RunInfo`, `LoraInfo`, `ModelInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `DownloadedFile`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
+| Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `CorrectionInfo`, `QuestionCorrectionInfo`, `QuestionCorrection`, `CorrectionAnswer`; `ProjectInfo`, `Learning`, `Training`, `Drift`, `RunInfo`, `LoraInfo`, `ModelInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `DownloadedFile`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
 | Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError`, `ConflictError` (`LimitReachedError`, `NoBaseModelError`, `WrongProjectKindError`), `PayloadTooLargeError`, `UnprocessableEntityError` (`ModelRequiresProjectError`), `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
 
 Every public member has a docstring with the details.

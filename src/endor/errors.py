@@ -186,9 +186,9 @@ class NoBaseModelError(ConflictError):
 
 
 class WrongProjectKindError(ConflictError):
-    """409 ``wrong_project_kind``: the call doesn't apply to this kind of project. Managed projects refuse datasets,
-    training runs, saved models and evaluations (Endor trains them); custom projects refuse
-    ``paused``. The message says what the project is."""
+    """409 ``wrong_project_kind``: the call doesn't apply to this kind of project. Continuous learning projects refuse
+    datasets, training runs, saved models and evaluations (Endor trains them); custom projects refuse ``paused``. The
+    message says what the project is."""
 
 
 class PayloadTooLargeError(APIError):
@@ -202,7 +202,7 @@ class UnprocessableEntityError(APIError):
 class ModelRequiresProjectError(UnprocessableEntityError):
     """422 ``model_requires_project``: ``model`` is a bare base model id. Every decision names a project:
     ``"<project>/<name>"`` (a saved model), ``"<project>/<base id>"`` (one of its base models) or ``"<project>"`` (a
-    managed project's newest version, else its first base model). Add a base to a project with
+    continuous learning project's newest version, else its first base model). Add a base to a project with
     ``project.add_base_model``."""
 
 

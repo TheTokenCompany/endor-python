@@ -45,6 +45,19 @@ class TestProjects:
         with pytest.raises(ValueError, match="kind can't change"):
             client.projects.get_or_create(name, base_models=["decider-2b"], kind="managed")
 
+    def test_get_or_create_a_continuous_learning_project_keeps_its_one_base(
+        self, client: EndorClient, fake: FakeEndor
+    ) -> None:
+        name = unique("cl")
+        a = client.projects.get_or_create(name, base_models=["jev-9b"], kind="managed")
+        assert a.info_.base_models == ["jev-9b"]
+        assert client.projects.get_or_create(name, base_models=["jev-9b"], kind="managed").name == name
+        assert client.projects.get_or_create(name, kind="managed").info_.base_models == ["jev-9b"]
+        n = len(fake.requests)
+        with pytest.raises(ValueError, match="chosen once"):
+            client.projects.get_or_create(name, base_models=["decider-2b"], kind="managed")
+        assert [r.method for r in fake.requests[n:]] == ["GET"]  # nothing added
+
     def test_create_custom_and_managed(self, client: EndorClient, fake: FakeEndor) -> None:
         name = unique("base")
         p = client.projects.create(name, base_models=["decider-2b"])
@@ -62,6 +75,11 @@ class TestProjects:
         m = client.projects.create(unique("man"), base_models=["jev-9b"], kind="managed")
         assert fake.requests[-1].body["kind"] == "managed"
         assert m.info_.kind == "managed"
+        n = len(fake.requests)
+        for bases in ([], ["jev-9b", "decider-2b"]):  # a continuous learning project has exactly one
+            with pytest.raises(ValueError, match="exactly one base model"):
+                client.projects.create(unique("man"), base_models=bases, kind="managed")
+        assert len(fake.requests) == n  # refused before sending anything
         with pytest.raises(UnprocessableEntityError) as e:
             client.projects.create(unique("base"), base_models=["gpt-9"])
         assert e.value.code == "invalid_input" and e.value.param == "base_models"
@@ -101,8 +119,10 @@ class TestProjects:
             p.remove_base_model("decider-2b")
         m = client.projects.create(unique("man"), base_models=["jev-9b"], kind="managed")
         with pytest.raises(ConflictError) as e:
-            m.remove_base_model("jev-9b")  # a managed project keeps one
+            m.remove_base_model("jev-9b")  # a continuous learning project keeps its one base model
         assert e.value.code == "invalid_state"
+        with pytest.raises(ConflictError):
+            m.add_base_model("decider-2b")  # and takes no other
 
     def test_update_description(self, client: EndorClient, fake: FakeEndor) -> None:
         p = client.projects.create(unique("upd"), base_models=["jev-9b"])
@@ -111,10 +131,33 @@ class TestProjects:
         with pytest.raises(ValueError, match="nothing to update"):
             p.update()
 
-    def test_learning_status_of_a_managed_project(self, client: EndorClient) -> None:
+    def test_learning_status_of_a_continuous_learning_project(self, client: EndorClient, fake: FakeEndor) -> None:
         m = client.projects.create(unique("man"), base_models=["jev-9b"], kind="managed")
         got = m.learning()
-        assert got.status == "waiting" and got.serving.endswith("/jev-9b") and got.trainings == []
+        assert got.status == "waiting" and got.serving.endswith("/jev-9b") and got.trainings == [] and got.drift == []
+        fake.learning[m.name] = {
+            "status": "learning",
+            "trainings": [
+                {
+                    "at": "2026-10-20T12:00:00Z",
+                    "kept": True,
+                    "version": "2026-10-20-1",
+                    "decisions": 400,
+                    "accuracy": 91.5,
+                    "low": 88.0,
+                    "high": 94.0,
+                    "loss": 0.31,
+                    "against": None,
+                    "against_accuracy": 84.0,
+                    "against_loss": 0.52,
+                    "worse": [],
+                }
+            ],
+            "drift": [{"question": "dept", "changed": True, "answer_shift": 0.14, "confidence_change": -0.06}],
+        }
+        got = m.learning()
+        assert got.trainings[0].decisions == 400 and got.trainings[0].version == "2026-10-20-1"
+        assert got.drift[0].question == "dept" and got.drift[0].changed and got.drift[0].answer_shift == 0.14
         p = client.projects.create(unique("cus"), base_models=["jev-9b"])
         with pytest.raises(WrongProjectKindError):
             p.learning()

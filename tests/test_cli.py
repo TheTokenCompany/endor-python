@@ -39,7 +39,7 @@ def test_projects_datasets_runs_models(capsys: pytest.CaptureFixture[str], clien
     removed = run_json(capsys, client, "projects", "remove-base-model", name, "decider-2b")
     assert removed["base_models"] == ["jev-9b"]  # type: ignore[index]
     assert cli.main(["projects", "create", unique("m"), "--kind", "managed"], client=client) == 1
-    assert "needs a base model" in capsys.readouterr().err
+    assert "exactly one base model" in capsys.readouterr().err
     assert name in [p["name"] for p in run_json(capsys, client, "projects", "list")]  # type: ignore[union-attr]
     f = tmp_path / "rows.jsonl"
     endor.data.save_rows(f, rows(4))

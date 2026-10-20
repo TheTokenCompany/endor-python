@@ -4,6 +4,7 @@ Decisions
     Noul, Choice, Score          the three question types (plain dicts in the same shape are accepted too)
     NoulAnswer, ChoiceAnswer, ScoreAnswer, SystemOneResponse, Usage
     ModelMetadata, ListModelsResponse, BaseModelInfo
+    CorrectionInfo, QuestionCorrectionInfo, CorrectionAnswer   a decision's correction (``client.corrections``)
 
 Training
     Datum        one state + one question + its Target (+ weight): the unit of ``forward`` / ``forward_backward``
@@ -12,6 +13,7 @@ Training
 
 Resources (read-only views of what the API returns)
     ProjectInfo, RunInfo, ModelInfo, DatasetInfo, Evaluation, MetricPoint, DownloadedFile, UsageRow, WhoAmI, FutureInfo
+    Learning, Training, Drift    a continuous learning project's learning (``project.learning()``)
 
 Option ids are the only identifiers used for a question's options anywhere in the SDK:
     noul   -> "false", "true"
@@ -25,7 +27,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from functools import cached_property
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import (
     BaseModel,
@@ -65,6 +67,9 @@ __all__ = [
     "ForwardOutput",
     "OptimStepOutput",
     "ProjectInfo",
+    "Learning",
+    "Training",
+    "Drift",
     "WandbSettings",
     "RunInfo",
     "ModelInfo",
@@ -76,6 +81,10 @@ __all__ = [
     "WhoAmI",
     "UserReportKind",
     "UserReportReceipt",
+    "CorrectionAnswer",
+    "QuestionCorrection",
+    "QuestionCorrectionInfo",
+    "CorrectionInfo",
     "FutureInfo",
     "question_dict",
     "option_keys",
@@ -282,6 +291,9 @@ class SystemOneResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
+    id: str | None = None
+    """The decision's id (``req_...``, the same as its ``X-Request-Id``): correct the decision with
+    ``client.corrections.create(res, ...)``. None from a server that doesn't send one."""
     model: str
     """The model that answered: ``"<project>/<base id>"`` or ``"<project>/<name>"``."""
     answers: dict[str, Answer] = Field(default_factory=dict)
@@ -344,7 +356,7 @@ class BaseModelInfo(BaseModel):
     price_per_mtok_decide: float | None = None
     """USD per 1M decision input tokens on this base (None while unpriced)."""
     price_per_mtok_decide_continuous_learning: float | None = None
-    """The same in a managed project (Endor trains it from its decisions): always this price, paused or not."""
+    """The same in a continuous learning project (Endor trains it from its decisions)."""
     price_per_gpu_hour: float | None = None
     """USD per training GPU-hour, from when a run's GPU is requested until it is released (None while unpriced)."""
 
@@ -554,12 +566,13 @@ class ProjectInfo(_View):
     name: str
     description: str | None = None
     kind: str = "custom"
-    """``custom`` (you train models with the SDK) or ``managed`` (Endor trains new versions from the project's
-    decisions). Set at creation; it never changes."""
+    """``custom`` (you train models with the SDK) or ``managed`` (continuous learning: Endor trains new versions from
+    the project's decisions). Set at creation; it never changes."""
     base_models: list[str] = Field(default_factory=list)
     """The project's base model ids, in the order they were added. Each answers as ``"<project>/<base id>"``, and the
-    first also as ``"<project>"`` (in a managed project, until its first version). Change them with
-    ``project.add_base_model`` and ``project.remove_base_model``."""
+    first also as ``"<project>"`` (in a continuous learning project, until its first version). A continuous learning
+    project has exactly one, chosen when it is created. A custom project's change with ``project.add_base_model`` and
+    ``project.remove_base_model``."""
     n_datasets: int = 0
     n_runs: int = 0
     n_models: int = 0
@@ -570,15 +583,19 @@ class ProjectInfo(_View):
 
 
 class Training(_View):
-    """One training run of a managed project's continuous learning."""
+    """One training run of a continuous learning project."""
 
     at: datetime
     kept: bool
-    """Saved as ``version``, which the project then served, or discarded (clearly worse than what it served)."""
+    """Saved as ``version``, which the project then served, or discarded (clearly worse than what it served, on
+    held-back decisions that version wasn't chosen on)."""
     version: str | None = None
+    decisions: int | None = None
+    """The project's decision count when the run started (None from a server that doesn't send it)."""
     accuracy: float | None = None
-    """Percent of the held-back decisions it answered like Endor's labels, with the 95% interval ``low`` to ``high``.
-    None: nothing to check on."""
+    """Percent of the held-back decisions it answered right, with the 95% interval ``low`` to ``high``: right means
+    as your corrections say once a question has enough of them held back, else as the labelling model (a frontier
+    LLM) answers. None: nothing to check on."""
     low: float | None = None
     high: float | None = None
     loss: float | None = None
@@ -591,8 +608,21 @@ class Training(_View):
     """The questions it was clearly worse on."""
 
 
+class Drift(_View):
+    """How the served version's answers to one question over the last 7 days compare with its answers on the
+    held-back decisions it was checked on. Reported only: learning goes on as usual."""
+
+    question: str
+    changed: bool
+    """The traffic moved enough to matter."""
+    answer_shift: float | None = None
+    """How far the mix of answers moved, 0 to 1."""
+    confidence_change: float | None = None
+    """The change in how sure it is (the likeliest answer's mean probability)."""
+
+
 class Learning(_View):
-    """A managed project's continuous learning (``project.learning()``). It is always on."""
+    """A continuous learning project's learning (``project.learning()``). It is always on."""
 
     status: str
     """``learning``, ``training`` (a run is on), ``waiting`` (nothing to learn from yet), ``up_to_date`` (the model
@@ -605,6 +635,9 @@ class Learning(_View):
     trained_at: datetime | None = None
     trainings: list[Training] = Field(default_factory=list)
     """The latest 50 training runs, newest first."""
+    drift: list[Drift] = Field(default_factory=list)
+    """Per question, whether recent traffic moved away from what the served version was checked on (empty until a
+    version has served enough decisions)."""
 
 
 class RunInfo(_View):
@@ -660,12 +693,12 @@ class ModelInfo(_View):
     id: str
     """``"<project>/<name>"`` or ``"<project>/<base id>"``: pass it as ``model`` to ``system_one``."""
     kind: str = "saved"
-    """``"base"`` (one of the project's base models, listed first) or ``"saved"`` (saved by a run, or a managed
-    project's version)."""
+    """``"base"`` (one of the project's base models, listed first) or ``"saved"`` (saved by a run, or a continuous
+    learning project's version)."""
     project: str
     name: str
-    """The base model id for a base model; the saved model's name otherwise. A managed project's versions are named
-    ``YYYY-MM-DD-N``."""
+    """The base model id for a base model; the saved model's name otherwise. A continuous learning project's versions
+    are named ``YYYY-MM-DD-N``."""
     training_run_id: str | None = None
     base_model: str
     contract: str | None = None
@@ -751,14 +784,14 @@ class UsageRow(_View):
     gpu_seconds: float | None = None
     """Training only: seconds of the run's reserved GPU, from request to release."""
     continuous_learning: bool | None = None
-    """Decisions only: whether the project is managed, so billed at the continuous-learning price (managed and
-    custom usage come as separate rows)."""
+    """Decisions only: whether the project is a continuous learning project, so billed at the continuous-learning
+    price (continuous learning and custom usage come as separate rows)."""
     price_per_mtok: float | None = None
     """Decisions only: the price per 1M input tokens applied."""
     base_cost_usd: float | None = None
     """Decisions only: the cost at the base price."""
     continuous_learning_cost_usd: float | None = None
-    """Decisions only: the managed-project extra (0 in a custom project). ``cost_usd`` is the total."""
+    """Decisions only: the continuous-learning extra (0 in a custom project). ``cost_usd`` is the total."""
     cost_usd: float | None = None
 
 
@@ -773,7 +806,7 @@ class WhoAmI(_View):
     ``LimitReachedError`` once reached; a rate raises ``RateLimitError``: ``decisions_per_minute`` (60 by default,
     for the whole org) and the other ``..._per_minute``."""
     managed_projects: bool = False
-    """Whether managed projects can be created here (they are coming soon where they can't)."""
+    """Whether continuous learning projects (``kind="managed"``) can be created here."""
     image_training: bool = False
     """Whether the org may fine-tune with images (``endor.Image`` in rows and datums, ``client.images``). Limited
     access: without it those calls raise ``PermissionDeniedError`` (403 ``image_training_not_enabled``); ask us."""
@@ -791,6 +824,46 @@ class UserReportReceipt(_View):
     """The report's id (``urep_...``)."""
     message: str
     """A thank-you from the Endor team."""
+
+
+CorrectionAnswer = bool | int | str
+"""One question's answer, exactly one of its options as the decision asked it: a choice's option id, a noul's ``True``
+or ``False``, a score's level index (0 is the first level)."""
+
+
+class _QuestionCorrectionBase(TypedDict):
+    correct: bool
+
+
+class QuestionCorrection(_QuestionCorrectionBase, total=False):
+    """One question of a correction you send: ``{"correct": True}``, ``{"correct": False, "answer": ...}`` or
+    ``{"correct": False}``."""
+
+    answer: CorrectionAnswer
+
+
+class QuestionCorrectionInfo(_View):
+    """One question of a decision's correction."""
+
+    correct: bool
+    """Whether the model answered it right."""
+    answer: CorrectionAnswer | None = None
+    """The right answer: what was served when it was right; else the answer sent, or the only other option of a noul
+    or of a choice or score of two; else None (only known to be wrong, never learned from)."""
+    served: CorrectionAnswer
+    """What Endor answered."""
+
+
+class CorrectionInfo(_View):
+    """A decision's correction (``client.corrections``)."""
+
+    request_id: str
+    """The decision's id (``req_...``)."""
+    project: str
+    questions: dict[str, QuestionCorrectionInfo]
+    """The corrected questions, by name."""
+    comment: str | None = None
+    created_at: datetime
 
 
 class FutureInfo(_View):
