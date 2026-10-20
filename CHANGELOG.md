@@ -5,6 +5,10 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- `endor.metrics.decision_metrics`: when k options tie exactly for the top probability, each counts 1/k toward
+  accuracy (so a decision scores the share of its tied top options that are the target's), and a soft target counts
+  each of its tied top options as correct. Before, the first option in the dict won the tie, so accuracy depended on
+  the options' order. Server-side evaluations use the same rule.
 - A row label shaped like a `Datum` target (`{"probs": {...}}` or `{"label": ...}`) raises a ValueError that names
   both shapes, instead of a TypeError from `float()`. A soft label with a non-number value raises ValueError too.
 - A `Target` (or a `Datum`'s `target`) given a bare probability map or an option key raises a ValueError that names

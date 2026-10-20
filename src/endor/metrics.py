@@ -4,7 +4,8 @@
     decision_metrics(out.probabilities, [d.target for d in datums])
 
 Inputs are per-decision option distributions (``{option_id: p}``) and their ``Target`` objects. A soft target counts
-its most likely option as the correct answer for accuracy. The same definitions are used by server-side evaluations.
+its most likely option as the correct answer for accuracy (each of them, when several tie). The same definitions are
+used by server-side evaluations.
 """
 
 from __future__ import annotations
@@ -27,7 +28,8 @@ def decision_metrics(probs: Sequence[dict[str, float]], targets: Sequence[Target
     Returns ``{"n", "accuracy", "nll", "brier", "ece", "mean_confidence", "selective": {"0.5": {"coverage",
     "accuracy"}, ...}}``; ``{"n": 0}`` for empty input.
 
-    - accuracy: argmax(p) equals argmax(y)
+    - accuracy: argmax(p) equals argmax(y). When k options tie exactly for p's top, each counts 1/k (so a decision
+      scores |top(p) ∩ top(y)| / k), and accuracy doesn't depend on the options' order
     - nll: −Σ y log p, averaged
     - brier: Σ (p − y)², averaged
     - ece: expected calibration error with ``bins`` equal-width bins on top-1 confidence
@@ -43,13 +45,12 @@ def decision_metrics(probs: Sequence[dict[str, float]], targets: Sequence[Target
     correct: list[float] = []
     for p, t in zip(probs, targets, strict=False):
         y = t.as_probs()
-        pred = max(p, key=lambda k: p[k])
-        gold = max(y, key=lambda k: y[k])
-        ok = float(pred == gold)
+        pred = _top(p)
+        ok = len(pred & _top(y)) / len(pred)
         acc += ok
         nll += -sum(w * math.log(max(p.get(k, 0.0), 1e-12)) for k, w in y.items() if w > 0)
         brier += sum((p.get(k, 0.0) - y.get(k, 0.0)) ** 2 for k in set(p) | set(y))
-        conf.append(p[pred])
+        conf.append(max(p.values()))
         correct.append(ok)
     ece = 0.0
     for b in range(bins):
@@ -75,3 +76,9 @@ def decision_metrics(probs: Sequence[dict[str, float]], targets: Sequence[Target
         "mean_confidence": sum(conf) / n,
         "selective": selective,
     }
+
+
+def _top(d: dict[str, float]) -> set[str]:
+    """The options tied for the highest value."""
+    m = max(d.values())
+    return {k for k, v in d.items() if v == m}
