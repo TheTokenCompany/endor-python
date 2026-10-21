@@ -5,6 +5,56 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+0.9.0: projects are continuous learning projects, with a production version and a preview like deployments, and custom
+models live outside projects. This release breaks code written for 0.8.0; the table says what to change.
+
+A project's preview is its newest version while that isn't in production. Auto-promote is off by default, so new
+versions land in the preview until you promote one; with auto-promote on, every new version goes to production at once
+and there is no preview. While its base model answers, a project's decisions report `model` as plain `"tickets"`. `"<project>:preview"` without a preview raises `NoPreviewError`.
+
+### Breaking changes and how to migrate
+
+| 0.8.0 | 0.9.0 |
+|---|---|
+| `client.projects.create(name, kind="managed", base_models=["decider-2b"])` | `client.projects.create(name, base_model="decider-2b")`: every project is a continuous learning project, on one base model chosen once. `kind=` and `base_models=` raise a `TypeError` that says this. |
+| `kind="custom"` projects, `project.datasets`, `project.runs`, `project.models`, `project.evaluate`, `project.evaluations` | `client.datasets`, `client.runs`, `client.custom_models`, `client.evaluations.create` and `client.evaluations.list`, at the organization's level |
+| `model="tickets/v1"` (a saved model), `"tickets/decider-2b"` (a project's base model) | a custom model is called by its name, `model="router-2"`, once promoted to production (`client.custom_models.promote("router-2")`); a project is `model="tickets"` (its production version) or `"tickets:preview"` (a newer version not in production yet, while there is one). The `<project>/<name>` form no longer resolves. |
+| `run.save_checkpoint("v1")` → `"tickets/v1"`, callable at once | `run.save_checkpoint("router-2")` → `"router-2"`, saved to the archive: promote it to production to call it. `client.custom_models.create("router-2", base_model=...)` opens a run whose `save_checkpoint()` (no name) saves under that name. Each save is a new model; names are unique in the organization with the projects. |
+| `project.runs.create()` on the project's first base model | `client.runs.create("decider-2b")` (or `from_model=`): a base model is required |
+| `project.add_base_model`, `project.remove_base_model`, `ProjectInfo.kind`, `.base_models`, `.n_datasets`, `.n_runs`, `.n_models`, `.wandb`, `project.update(wandb=...)`, `WandbSettings` | gone. `ProjectInfo` has `base_model`, `production`, `preview`, `auto_promote`, `promoted_at`, `versions` (and `Project` has `.production` and `.preview`). Runs log to Weights & Biases when the organization has connected it (`runs.create(wandb=False)` turns it off per run). |
+| `ModelInfo` (`id`, `kind`, `project`) | `CustomModelInfo` (`name`, `state` production or archived, `production`, `promoted_at`, ...) and, for a project's versions, `VersionInfo` |
+| `RunInfo.project`, `Run.project`, `DatasetInfo.project`, `Evaluation.project` | gone; `RunInfo.model` / `Run.model` is the custom model name a save uses |
+| `WhoAmI.managed_projects` | gone; `limits` has `max_projects_per_org`, `max_production_models_per_org`, `max_custom_models_per_org` and `max_datasets_per_org` |
+| `ModelMetadata.kind` `project`, `base` or `model` | `project` or `custom`; `ModelMetadata.environment` is `production` or `preview` for a project's names |
+| `NoBaseModelError`, `WrongProjectKindError` | gone (they can't happen any more) |
+| `client.predict("tickets/v1", rows)` | `client.predict("router-2", rows)`: a custom model (in production or archived) or a base model id |
+| `SupervisedConfig(project="tickets", model_name="v1")` | `SupervisedConfig(model_name="router-2")`: the recipe saves a custom model to the archive; it scores the untuned base with one server-side prediction |
+| CLI `endor models ...`, `datasets list PROJECT`, `runs list PROJECT`, `eval PROJECT MODEL DATASET`, `projects add-base-model` | `endor custom-models ...`, `datasets list`, `runs list`, `eval MODEL DATASET`; `projects versions`, `promote`, `auto-promote` are new |
+
+### Added
+
+- Continuous learning projects like deployments: `project.ref` (`"tickets"`) and `project.preview_ref`
+  (`"tickets:preview"`, None while the project has no preview); `project.versions() -> list[VersionInfo]` (newest
+  first, `production`, `preview`, never both, `accuracy`, `loss`); `project.promote(version)` (to production;
+  promoting a version older than the newest turns auto-promote off, like a rollback); `project.set_auto_promote(on)`
+  (on: the newest version goes to production at once, and every new version after it; off by default);
+  `project.download(version, path)` (`NotFoundError` for a version without stored weights).
+- `client.custom_models`, in production or in the archive: `list(production=None)` (production ones first),
+  `get(name)`, `create(name, base_model, *, run_name=None, **run_options) -> Run`, `promote(name, replace=None)` (to
+  production; `replace` archives a production model when every slot is taken), `archive(name)`, `set_ttl(name,
+  ttl_seconds)`, `download(name, path)`, `delete(name)`. Every save starts in the archive. New type `CustomModelInfo`.
+- `client.datasets`, `client.runs` (`create(base_model, *, model=None, ...)`, `get`, `list`) and
+  `client.evaluations` (`create(model, dataset=None, run_id=None, *, rows=None)`, `get`, `list`) at the
+  organization's level.
+- Errors: `ModelNotInProductionError` (409 `model_not_in_production`: a decision named an archived custom model),
+  `ProductionFullError` (409 `production_full`, a `LimitReachedError`, never retried), `ModelInProductionError` (409
+  `model_in_production`: deleting a production model or giving it a TTL), `VersionNotCallableError` (404 `version_not_callable`: `"<project>:v3"`),
+  `NoPreviewError` (404 `no_preview`: `"<project>:preview"` while the project has no preview).
+- CLI: `endor projects versions | promote | auto-promote`, `endor custom-models list | info | promote | archive |
+  download | set-ttl | delete`.
+
+### Also in this release
+
 - `client.corrections`: tell Endor whether past decisions were right and, if not, the right answers; continuous
   learning projects learn from them. `create(request_id, questions, *, comment=None) -> CorrectionInfo`
   (`POST /v1/corrections`), `batch(items)` (`POST /v1/corrections/batch`: 1 to 1,000 items, all or none),
@@ -16,11 +66,7 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
   send one.
 - `Learning.drift` (new type `Drift`): per question, whether recent traffic moved away from what the served version
   was checked on. `Training.decisions`: the project's decision count when the run started.
-- A continuous learning project (`kind="managed"`) has exactly one base model, chosen at creation:
-  `projects.create` raises `ValueError` for none or several, and `get_or_create` for an existing one with another base.
-  `add_base_model` and `remove_base_model` are for custom projects. Docstrings, the README and the CLI call managed
-  projects continuous learning projects; the API value stays `managed`. Their versions are named `v1`, `v2`, ...
-  (the docstrings said `YYYY-MM-DD-N`).
+- A continuous learning project's versions are named `v1`, `v2`, ... (the docstrings said `YYYY-MM-DD-N`).
 
 - `endor.metrics.decision_metrics`: when k options tie exactly for the top probability, each counts 1/k toward
   accuracy (so a decision scores the share of its tied top options that are the target's), and a soft target counts
@@ -33,15 +79,15 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 - `recipes.supervised.train` prints a warning before training for each question with options that have no
   training labels (the model can't learn them) or fewer than 10.
 
-- `project.learning() -> Learning`: a managed project's continuous learning (always on): its `status`, `progress` to the
-  next training run, what it serves, and the latest `trainings` (kept or discarded, each with its accuracy and loss on
-  the held-back decisions). New types `Learning` and `Training`.
+- `project.learning() -> Learning`: a continuous learning project's learning (always on): its `status`, `progress` to
+  the next version, what it serves, and the latest `trainings` (kept or discarded, each with its accuracy and loss).
+  New types `Learning` and `Training`.
 - `project.update(paused=...)` and `ProjectInfo.paused` are gone: learning can't be paused (the API refuses `paused`
   with 422).
 
 Fine-tuning with images, in limited access.
 
-- `endor.Image` objects go in training data too, on base models that read images: rows of `project.datasets.upload`
+- `endor.Image` objects go in training data too, on base models that read images: rows of `client.datasets.upload`
   and `client.predict`, datums of `run.forward` / `run.forward_backward`, rows of `run.predict`. The SDK uploads each
   image once (`client.images.upload(images) -> list[Image]` does it by hand: declares them with `POST /v1/images`,
   PUTs the files straight to storage, confirms them) and sends references, `{"type": "image", "sha256": ...}`

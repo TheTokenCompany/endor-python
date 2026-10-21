@@ -46,7 +46,7 @@ def test_from_pil() -> None:
 
 
 def test_images_go_anywhere_in_the_state(client: EndorClient, fake: FakeEndor) -> None:
-    photos = client.projects.create(unique("photos"), base_models=["gev-26b"]).name
+    photos = client.projects.create(unique("photos"), base_model="gev-26b").name
     state = {"photo": Image.from_bytes(PNG), "more": ["caption", Image.from_bytes(JPEG)]}
     res = client.system_one(state, {"u": URGENT}, model=photos)
     sent = fake.requests[-1].body["state"]
@@ -60,9 +60,9 @@ async def test_async_and_text_only_bases(client: EndorClient, decider: str) -> N
     with pytest.raises(UnprocessableEntityError) as e:
         client.system_one({"photo": Image.from_bytes(PNG)}, {"u": URGENT}, model=decider)  # jev-9b reads text only
     assert e.value.code == "unsupported_modality" and e.value.param == "state.photo"
-    photos = client.projects.create(unique("photos"), base_models=["gev-26b"]).name
+    photos = client.projects.create(unique("photos"), base_model="gev-26b").name
     res = await client.system_one_async([Image.from_bytes(PNG)], {"u": URGENT}, model=photos)
-    assert res.model == f"{photos}/gev-26b"
+    assert res.model == photos
 
 
 def test_base_models_say_which_read_images(client: EndorClient) -> None:
@@ -127,7 +127,6 @@ def test_images_are_declared_uploaded_once_and_confirmed(client: EndorClient, fa
 
 
 def test_rows_and_datums_carry_images_as_references(client: EndorClient, fake: FakeEndor) -> None:
-    photos = client.projects.create(unique("photos"), base_models=["gev-26b"])
     rows = [
         {
             "id": f"r{i}",
@@ -137,14 +136,14 @@ def test_rows_and_datums_carry_images_as_references(client: EndorClient, fake: F
         }
         for i in range(6)
     ]
-    info = photos.datasets.upload("imgs", rows)
+    info = client.datasets.upload("imgs", rows)
     assert info.n_images == 6 and info.n_rows == 6
     sent = [r for r in fake.requests if r.path.endswith("/datasets")][-1].body["rows"]
     assert all("data" not in r["state"]["photo"] and r["state"]["photo"]["sha256"] for r in sent)
     assert len({r["state"]["photo"]["sha256"] for r in sent}) == 3 and len(fake.uploads) == 3
     assert sent[0]["state"]["shelf"] == "s0" and sent[0]["labels"] == {"u": True}
     # training: datums with images, uploaded once, sent as references, split by images as well as by datums
-    with photos.runs.create(base_model="gev-26b") as run:
+    with client.custom_models.create("v1", base_model="gev-26b") as run:
         datums = [
             Datum(state={"photo": Image.from_bytes(png(i)), "t": "x"}, question=URGENT, target=Target(label="true"))
             for i in range(300)
@@ -164,30 +163,26 @@ def test_rows_and_datums_carry_images_as_references(client: EndorClient, fake: F
             "media_type": "image/png",
         }
         run.optim_step(learning_rate=1e-4).result()
-        run.save_checkpoint("v1").result()
-    answers = client.predict(
-        f"{photos.name}/v1", [{"state": {"photo": Image.from_bytes(png(7))}, "questions": {"u": URGENT}}]
-    )
+        run.save_checkpoint().result()
+    answers = client.predict("v1", [{"state": {"photo": Image.from_bytes(png(7))}, "questions": {"u": URGENT}}])
     assert len(answers) == 1
     ev = [r for r in fake.requests if r.path.endswith("/evaluations")][-1].body
     assert "data" not in ev["rows"][0]["state"]["photo"] and hashlib.sha256(png(7)).hexdigest() in fake.uploads
 
 
-def test_without_access_the_error_says_how_to_ask(client: EndorClient, fake: FakeEndor, decider: str) -> None:
+def test_without_access_the_error_says_how_to_ask(client: EndorClient, fake: FakeEndor) -> None:
     fake.image_training = False
     assert client.whoami().image_training is False
     with pytest.raises(endor.PermissionDeniedError) as e:
         client.images.upload([png(1)])
     assert e.value.code == "image_training_not_enabled" and "request access" in e.value.message
-    photos = client.projects.create(unique("photos"), base_models=["gev-26b"])
     with pytest.raises(endor.PermissionDeniedError):
-        photos.datasets.upload("imgs", [{"state": [Image.from_bytes(png(1))], "questions": {"u": URGENT}}])
+        client.datasets.upload("imgs", [{"state": [Image.from_bytes(png(1))], "questions": {"u": URGENT}}])
     assert not fake.uploads and not fake.images  # nothing was uploaded
     fake.image_training = True
     assert client.whoami().image_training is True
     # a base that reads text only refuses image datums, after the upload (the API's order)
-    tickets = client.projects.get(decider.partition("/")[0])
-    with tickets.runs.create() as run:
+    with client.runs.create("jev-9b") as run:
         with pytest.raises(UnprocessableEntityError) as err:
             run.forward_backward(
                 [Datum(state=[Image.from_bytes(png(2))], question=URGENT, target=Target(label="true"))]

@@ -1,6 +1,7 @@
-"""Supervised fine-tuning with held-out evaluation: the default way to tune a decision model on your data.
+"""Supervised fine-tuning with held-out evaluation: the default way to train a custom model on your data.
 
-    result = endor.recipes.supervised.train(SupervisedConfig(project="tickets", model_name="v1"), rows)
+    result = endor.recipes.supervised.train(SupervisedConfig(model_name="router-2"), rows)
+    client.custom_models.promote(result.model)               # production: decisions can call it
     client.system_one(state, questions, model=result.model)
 
 What it does:
@@ -8,7 +9,7 @@ What it does:
 1. Splits off a held-out set (unless ``eval_rows`` is given) and expands rows into datums, one per labeled question.
    Prints a warning for each question with an option that no training label (or fewer than 10) gives any
    probability: the model can't learn an option it never sees.
-2. Scores the untuned base model (``"<project>/<base_model>"``) on the held-out rows, so every later number has a
+2. Scores the untuned base model (``base_model``) on the held-out rows, server-side, so every later number has a
    baseline.
 3. Trains one run: batches of ``batch_size``, a learning rate with linear warmup then linear decay,
    ``forward_backward`` and ``optim_step`` submitted together each step, and the next step sent before the last one's
@@ -17,7 +18,8 @@ What it does:
    progress line is printed.
 4. Every ``eval_every`` steps and at the end, scores the held-out datums with the run's current adapter and records
    accuracy, log loss, Brier, ECE and selective accuracy on the run's page.
-5. Saves the final adapter as ``"<project>/<model_name>"`` and closes the run (also when anything fails).
+5. Saves the final adapter as the custom model ``model_name`` (archived until you promote it) and closes the run
+   (also when anything fails).
 """
 
 from __future__ import annotations
@@ -51,13 +53,11 @@ _FEW_LABELS = 10
 class SupervisedConfig:
     """Settings for ``train``."""
 
-    project: str
-    """The custom project that gets the run and the model (created if missing; ``base_model`` is added to it if it
-    doesn't have it)."""
-    base_model: str = "decider-2b"
-    """The base model the run trains on, called as ``"<project>/<base_model>"`` by ``eval_base`` and replay rows."""
     model_name: str | None = None
-    """The saved model's name in the project; default ``"<name or sft>-<timestamp>"``."""
+    """The custom model's name: unique in the organization, and free (``ConflictError`` otherwise). Default
+    ``"<name or sft>-<timestamp>"``."""
+    base_model: str = "decider-2b"
+    """The base model the run trains on; ``eval_base`` and replay rows score the untuned base."""
     rank: int = 16
     learning_rate: float = 1e-4
     lr_schedule: str = "linear"
@@ -91,7 +91,8 @@ class SupervisedConfig:
 class SupervisedResult:
     run_id: str
     model: str
-    """``"<project>/<model_name>"``."""
+    """The custom model's name, saved to the archive: ``client.custom_models.promote(result.model)`` puts it in
+    production."""
     base_metrics: dict[str, Any] | None
     """Held-out metrics of the untuned base, or None when ``eval_base`` was off."""
     history: list[dict[str, Any]] = field(default_factory=list)
@@ -147,16 +148,16 @@ def evaluate_run(run: Run, datums: Sequence[Datum]) -> dict[str, Any]:
 
 
 def evaluate_model(client: EndorClient, model: str, rows: Sequence[Any]) -> dict[str, Any]:
-    """Held-out metrics for any model through ``system_one``: one request per row with all its labeled questions."""
+    """Held-out metrics for a custom model (in production or archived) or a base model: one server-side prediction of
+    the rows (``client.predict``), scored on their labeled questions."""
+    labeled = [r for r in map(D.to_row, rows) if r.labels]
+    if not labeled:
+        return decision_metrics([], [])
     probs, targets = [], []
-    for row in map(D.to_row, rows):
-        asked = {n: row.questions[n] for n in row.labels}
-        if not asked:
-            continue
-        res = client.system_one(row.state, asked, model=model)
-        for n, q in asked.items():
-            probs.append(answer_probabilities(res.answers[n]))
-            targets.append(D.label_target(q, row.labels[n]))
+    for row, answers in zip(labeled, client.predict(model, labeled, progress=False), strict=True):
+        for n, label in row.labels.items():
+            probs.append(answer_probabilities(answers[n]))
+            targets.append(D.label_target(row.questions[n], label))
     return decision_metrics(probs, targets)
 
 
@@ -189,14 +190,15 @@ def _label_warnings(rows: Sequence[DecisionRow]) -> list[str]:
     return lines
 
 
-def _replay_datums(client: EndorClient, cfg: SupervisedConfig, base: str) -> list[Datum]:
+def _replay_datums(client: EndorClient, cfg: SupervisedConfig) -> list[Datum]:
+    """The replay rows answered by the untuned base model (one server-side prediction), as soft targets."""
     if not cfg.replay_rows or cfg.replay_per_batch <= 0:
         return []
+    rows = [D.to_row(r) for r in cfg.replay_rows]
     out = []
-    for row in map(D.to_row, cfg.replay_rows):
-        res = client.system_one(row.state, row.questions, model=base)
+    for row, answers in zip(rows, client.predict(cfg.base_model, rows, progress=False), strict=True):
         out += [
-            Datum(state=row.state, question=q, target=Target(probs=answer_probabilities(res.answers[n])))
+            Datum(state=row.state, question=q, target=Target(probs=answer_probabilities(answers[n])))
             for n, q in row.questions.items()
         ]
     return out
@@ -208,7 +210,7 @@ def train(
     eval_rows: Sequence[Any] | None = None,
     client: EndorClient | None = None,
 ) -> SupervisedResult:
-    """Fine-tune on ``rows`` and return the saved model id with its held-out metrics.
+    """Fine-tune on ``rows`` and return the saved custom model's name with its held-out metrics.
 
     ``rows`` and ``eval_rows`` are decision rows in any supported shape. Without ``eval_rows``, ``cfg.holdout`` of
     ``rows`` is held out. Pass your own ``client`` to reuse it; otherwise one is created from the environment.
@@ -229,13 +231,14 @@ def train(
         own = client is None
         client = client or EndorClient()
         try:
-            project = client.projects.get_or_create(cfg.project, base_models=[cfg.base_model])
-            base = f"{project.name}/{cfg.base_model}"  # decisions name a project: "<project>/<base id>"
+            name = cfg.model_name or f"{cfg.name or 'sft'}-{datetime.now():%Y%m%d-%H%M%S}"
+            base = cfg.base_model
             base_metrics = evaluate_model(client, base, eval_rows) if cfg.eval_base and eval_datums else None
-            replay = _replay_datums(client, cfg, base)
+            replay = _replay_datums(client, cfg)
             total = math.ceil(len(train_datums) / cfg.batch_size) * cfg.epochs
-            with project.runs.create(
+            with client.runs.create(
                 cfg.base_model,
+                model=name,
                 rank=cfg.rank,
                 seed=cfg.seed,
                 name=cfg.name,
@@ -277,8 +280,7 @@ def train(
                             held_out(step)
                 read(steps.wait())
                 held_out(step)
-                name = cfg.model_name or f"{cfg.name or 'sft'}-{datetime.now():%Y%m%d-%H%M%S}"
-                result.model = run.save_checkpoint(name).result()
+                result.model = run.save_checkpoint().result()
             return result
         finally:
             if own:

@@ -30,39 +30,50 @@ def test_whoami_and_base_models(capsys: pytest.CaptureFixture[str], client: Endo
     assert isinstance(bases, list) and {b["id"] for b in bases} >= {"jev-9b"}
 
 
-def test_projects_datasets_runs_models(capsys: pytest.CaptureFixture[str], client: EndorClient, tmp_path: Path) -> None:
+def test_projects(capsys: pytest.CaptureFixture[str], client: EndorClient, fake: FakeEndor) -> None:
     name = unique("cli")
     created = run_json(capsys, client, "projects", "create", name, "--base-model", "jev-9b")
-    assert created["name"] == name and created["base_models"] == ["jev-9b"]  # type: ignore[index]
-    added = run_json(capsys, client, "projects", "add-base-model", name, "decider-2b")
-    assert added["base_models"] == ["jev-9b", "decider-2b"]  # type: ignore[index]
-    removed = run_json(capsys, client, "projects", "remove-base-model", name, "decider-2b")
-    assert removed["base_models"] == ["jev-9b"]  # type: ignore[index]
-    assert cli.main(["projects", "create", unique("m"), "--kind", "managed"], client=client) == 1
-    assert "exactly one base model" in capsys.readouterr().err
+    assert created["name"] == name and created["base_model"] == "jev-9b"  # type: ignore[index]
     assert name in [p["name"] for p in run_json(capsys, client, "projects", "list")]  # type: ignore[union-attr]
-    f = tmp_path / "rows.jsonl"
-    endor.data.save_rows(f, rows(4))
-    ds = run_json(capsys, client, "datasets", "upload", name, "train", str(f))
-    assert ds["n_rows"] == 4  # type: ignore[index]
-    assert [d["name"] for d in run_json(capsys, client, "datasets", "list", name)] == ["train"]  # type: ignore[union-attr]
-    project = client.projects.get(name)
-    r = project.runs.create("jev-9b", name="cli-run")
-    r.save_checkpoint("v1").result()
-    assert "cli-run" in run(capsys, client, "runs", "list", name)
-    assert run_json(capsys, client, "runs", "show", r.id)["name"] == "cli-run"  # type: ignore[index]
-    assert run_json(capsys, client, "models", "info", f"{name}/v1")["step"] == 0  # type: ignore[index]
-    assert run_json(capsys, client, "models", "set-ttl", f"{name}/v1", "7200")["expires_at"]  # type: ignore[index]
-    assert run_json(capsys, client, "models", "set-ttl", f"{name}/v1", "none")["expires_at"] is None  # type: ignore[index]
-    ev = run_json(capsys, client, "eval", name, f"{name}/v1", "train")
-    assert ev["status"] == "completed"  # type: ignore[index]
-    assert run_json(capsys, client, "eval", name, "jev-9b", "train")["model"] == f"{name}/jev-9b"  # type: ignore[index]
-    assert run_json(capsys, client, "runs", "close", r.id)["status"] in ("closing", "closed")  # type: ignore[index]
-    run(capsys, client, "models", "delete", f"{name}/v1")
-    assert [m["name"] for m in run_json(capsys, client, "models", "list", name)] == ["jev-9b"]  # type: ignore[union-attr]
-    run(capsys, client, "datasets", "delete", name, "train")
+    fake.add_version(name)
+    fake.add_version(name)  # auto-promote is off by default: v2 is the preview, nothing live yet
+    versions = run_json(capsys, client, "projects", "versions", name)
+    assert [(v["name"], v["production"], v["preview"]) for v in versions] == [  # type: ignore[index,union-attr]
+        ("v2", False, True),
+        ("v1", False, False),
+    ]
+    promoted = run_json(capsys, client, "projects", "promote", name, "v1")
+    assert promoted["production"] == "v1" and promoted["preview"] == "v2"  # type: ignore[index]
+    assert run_json(capsys, client, "projects", "auto-promote", name, "on")["production"] == "v2"  # type: ignore[index]
     run(capsys, client, "projects", "delete", name)
     assert name not in [p["name"] for p in run_json(capsys, client, "projects", "list")]  # type: ignore[union-attr]
+
+
+def test_custom_models_datasets_runs(capsys: pytest.CaptureFixture[str], client: EndorClient, tmp_path: Path) -> None:
+    f = tmp_path / "rows.jsonl"
+    endor.data.save_rows(f, rows(4))
+    ds = run_json(capsys, client, "datasets", "upload", "train", str(f))
+    assert ds["n_rows"] == 4  # type: ignore[index]
+    assert [d["name"] for d in run_json(capsys, client, "datasets", "list")] == ["train"]  # type: ignore[union-attr]
+    r = client.custom_models.create("v1", base_model="jev-9b", run_name="cli-run")
+    r.save_checkpoint().result()
+    assert "cli-run" in run(capsys, client, "runs", "list")
+    assert run_json(capsys, client, "runs", "show", r.id)["name"] == "cli-run"  # type: ignore[index]
+    info = run_json(capsys, client, "custom-models", "info", "v1")
+    assert info["step"] == 0 and info["state"] == "archived"  # type: ignore[index]
+    assert run_json(capsys, client, "custom-models", "set-ttl", "v1", "7200")["expires_at"]  # type: ignore[index]
+    assert run_json(capsys, client, "custom-models", "set-ttl", "v1", "none")["expires_at"] is None  # type: ignore[index]
+    assert run_json(capsys, client, "custom-models", "promote", "v1")["production"] is True  # type: ignore[index]
+    assert [m["name"] for m in run_json(capsys, client, "custom-models", "list", "--production")] == ["v1"]  # type: ignore[union-attr]
+    assert run_json(capsys, client, "custom-models", "list", "--archived") == []
+    assert run_json(capsys, client, "custom-models", "archive", "v1")["production"] is False  # type: ignore[index]
+    ev = run_json(capsys, client, "eval", "v1", "train")
+    assert ev["status"] == "completed" and ev["model"] == "v1"  # type: ignore[index]
+    assert run_json(capsys, client, "eval", "jev-9b", "train")["model"] == "jev-9b"  # type: ignore[index]
+    assert run_json(capsys, client, "runs", "close", r.id)["status"] in ("closing", "closed")  # type: ignore[index]
+    run(capsys, client, "custom-models", "delete", "v1")
+    assert run_json(capsys, client, "custom-models", "list") == []
+    run(capsys, client, "datasets", "delete", "train")
 
 
 def test_usage(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
@@ -80,8 +91,8 @@ def test_usage(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
 def test_errors_exit_nonzero(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
     assert cli.main(["projects", "create", "Bad Name", "--base-model", "jev-9b"], client=client) == 1
     assert "error: POST /v1/projects: 422 invalid_input" in capsys.readouterr().err
-    assert cli.main(["models", "info", "no-slash"], client=client) == 1
-    assert "<project>/<name>" in capsys.readouterr().err
+    assert cli.main(["custom-models", "info", "missing"], client=client) == 1
+    assert "404" in capsys.readouterr().err
 
 
 def test_version_and_help(capsys: pytest.CaptureFixture[str]) -> None:
@@ -93,16 +104,15 @@ def test_version_and_help(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_download(capsys: pytest.CaptureFixture[str], client: EndorClient, fake: FakeEndor, tmp_path: Path) -> None:
-    project = client.projects.create(unique("dl"), base_models=["jev-9b"])
-    with project.runs.create("jev-9b") as r:
-        r.save_checkpoint("v1", include_optimizer=True).result()
+    with client.custom_models.create("v1", base_model="jev-9b") as r:
+        r.save_checkpoint(include_optimizer=True).result()
     target = tmp_path / "m"
-    out = run_json(capsys, client, "models", "download", f"{project.name}/v1", "-o", str(target))
+    out = run_json(capsys, client, "custom-models", "download", "v1", "-o", str(target))
     assert isinstance(out, list) and [f["name"] for f in out] == [
         "adapter_model.safetensors",
         "adapter_config.json",
         "endor_manifest.json",
     ]
     assert all(Path(f["path"]).parent == target and "url" not in f for f in out)
-    run(capsys, client, "models", "download", f"{project.name}/v1", "-o", str(target), "--include-optimizer")
+    run(capsys, client, "custom-models", "download", "v1", "-o", str(target), "--include-optimizer")
     assert (target / "optimizer.pt").is_file()

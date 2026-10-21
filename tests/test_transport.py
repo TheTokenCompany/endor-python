@@ -22,12 +22,13 @@ from endor import (
     InsufficientBalanceError,
     InternalServerError,
     LimitReachedError,
+    ModelNotInProductionError,
     ModelRequiresProjectError,
-    NoBaseModelError,
     NotFoundError,
     OverloadedError,
     PayloadTooLargeError,
     PermissionDeniedError,
+    ProductionFullError,
     RateLimitError,
     RetryPolicy,
     UnprocessableEntityError,
@@ -123,7 +124,7 @@ class TestRetries:
         monkeypatch.setattr("endor._http.time", fake_time)
         monkeypatch.setattr("endor._retry.time", fake_time)
         c = EndorClient(api_key=API_KEY, base_url=BASE_URL, transport=httpx.MockTransport(handler))
-        name = c.projects.create(unique("cold"), base_models=["jev-9b"]).name
+        name = c.projects.create(unique("cold"), base_model="jev-9b").name
         fake.fail_next.append(HTTPError(503, "warming_up", "the model is starting", headers={"retry-after": "30"}))
         assert c.system_one("x", {"u": endor.Noul()}, model=name).nouls["u"].noul == 0.5
         assert timeouts == [30.0, 330.0, 330.0] and clock[0] == 630
@@ -137,7 +138,7 @@ class TestRetries:
             client.models.list(retry=RetryPolicy(max_retries=0))
 
     async def test_async_retries(self, client: EndorClient, fake: FakeEndor) -> None:
-        name = client.projects.create(unique("retry"), base_models=["jev-9b"]).name
+        name = client.projects.create(unique("retry"), base_model="jev-9b").name
         fake.requests.clear()
         fake.fail_next += [HTTPError(502, "bad_gateway", "x"), httpx.ConnectError("y")]
         res = await client.system_one_async("x", {"u": endor.Noul()}, model=name)
@@ -233,7 +234,10 @@ class TestErrors:
         ("status", "code", "cls", "parent"),
         [
             (409, "limit_reached", LimitReachedError, ConflictError),
-            (409, "no_base_model", NoBaseModelError, ConflictError),
+            (409, "production_full", ProductionFullError, LimitReachedError),
+            (409, "model_not_in_production", ModelNotInProductionError, ConflictError),
+            (409, "model_in_production", endor.ModelInProductionError, ConflictError),
+            (404, "no_preview", endor.NoPreviewError, NotFoundError),
             (422, "model_requires_project", ModelRequiresProjectError, UnprocessableEntityError),
             (409, "conflict", ConflictError, ConflictError),
         ],
@@ -244,11 +248,11 @@ class TestErrors:
 
     def test_limit_reached_from_the_api(self, client: EndorClient, fake: FakeEndor) -> None:
         for _ in range(int(LIMITS["max_projects_per_org"]) - len(fake.projects)):
-            client.projects.create(unique("lim"), base_models=["jev-9b"])
+            client.projects.create(unique("lim"), base_model="jev-9b")
         n = len(fake.requests)
         with pytest.raises(LimitReachedError) as e:
-            client.projects.create(unique("lim"), base_models=["jev-9b"])
-        assert isinstance(e.value, ConflictError) and e.value.status == 409 and "maximum of 7" in str(e.value)
+            client.projects.create(unique("lim"), base_model="jev-9b")
+        assert isinstance(e.value, ConflictError) and e.value.status == 409 and "maximum of 5" in str(e.value)
         assert len(fake.requests) == n + 1  # not retried
 
     def test_bad_key_is_authentication_error(self, fake: FakeEndor) -> None:
@@ -282,16 +286,14 @@ class TestErrors:
 
 
 class TestEncoding:
-    def test_gzip_on_by_default_for_large_bodies(
-        self, client: EndorClient, project: endor.Project, fake: FakeEndor
-    ) -> None:
-        project.datasets.upload("small", rows(2))
+    def test_gzip_on_by_default_for_large_bodies(self, client: EndorClient, fake: FakeEndor) -> None:
+        client.datasets.upload("small", rows(2))
         small = fake.requests[-1]
         assert "content-encoding" not in small.headers and small.headers["content-type"] == "application/json"
-        project.datasets.upload("big", rows(300))
+        client.datasets.upload("big", rows(300))
         big = fake.requests[-1]
         assert big.headers["content-encoding"] == "gzip" and big.body["name"] == "big"
-        assert fake.datasets[(project.name, "big")]["n_rows"] == 300
+        assert fake.datasets["big"]["n_rows"] == 300
 
     def test_gzip_bytes_on_the_wire(self, fake: FakeEndor) -> None:
         seen: list[tuple[dict[str, str], bytes]] = []
@@ -301,29 +303,27 @@ class TestEncoding:
             return fake.handler(request)
 
         c = EndorClient(api_key=API_KEY, base_url=BASE_URL, transport=httpx.MockTransport(handler))
-        p = c.projects.create("gz", base_models=["jev-9b"])
-        p.datasets.upload("d", rows(300))
+        c.datasets.upload("d", rows(300))
         headers, raw = seen[-1]
         assert headers["content-encoding"] == "gzip"
         assert json.loads(gzip.decompress(raw))["name"] == "d" and len(raw) < 20_000
 
     def test_gzip_opt_out(self, fake: FakeEndor) -> None:
         c = EndorClient(api_key=API_KEY, base_url=BASE_URL, transport=httpx.MockTransport(fake.handler), gzip=False)
-        p = c.projects.create("plain", base_models=["jev-9b"])
-        p.datasets.upload("d", rows(300))
+        c.datasets.upload("d", rows(300))
         assert "content-encoding" not in fake.requests[-1].headers
 
-    def test_none_params_are_dropped(self, client: EndorClient, fake: FakeEndor, project: endor.Project) -> None:
-        project.runs.list()
+    def test_none_params_are_dropped(self, client: EndorClient, fake: FakeEndor) -> None:
+        client.runs.list()
         assert fake.requests[-1].params == {"limit": "100", "offset": "0"}
-        project.runs.list(tag="x", limit=5)
+        client.runs.list(tag="x", limit=5)
         assert fake.requests[-1].params == {"limit": "5", "offset": "0", "tag": "x"}
 
     def test_lists_page_through_everything(
         self, client: EndorClient, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(endor._constants, "LIST_PAGE_SIZE", 2)
-        names = {client.projects.create(f"page-{i}", base_models=["jev-9b"]).name for i in range(5)}
+        names = {client.projects.create(f"page-{i}", base_model="jev-9b").name for i in range(5)}
         assert {p.name for p in client.projects.list()} == names
         pages = [r.params for r in fake.requests if r.method == "GET" and r.path == "/v1/projects"]
         assert [p["offset"] for p in pages] == ["0", "2", "4"]

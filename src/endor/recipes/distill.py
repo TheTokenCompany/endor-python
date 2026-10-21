@@ -5,7 +5,7 @@ answer distributions with the supervised recipe.
         def label(self, rows):                       # -> one {question name: label} per row
             return [{"dept": {"billing": 0.7, "technical": 0.3}} for _ in rows]
 
-    cfg = DistillConfig(SupervisedConfig(project="tickets"), teacher=MyTeacher())
+    cfg = DistillConfig(SupervisedConfig(model_name="router-distilled"), teacher=MyTeacher())
     result = distill(cfg, unlabeled_rows, eval_rows)  # eval_rows: rows with gold labels
 """
 

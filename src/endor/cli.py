@@ -2,17 +2,18 @@
 
     endor whoami
     endor base-models
-    endor projects list | create NAME [--base-model BASE ...] [--kind custom|managed] | delete NAME
-    endor projects add-base-model NAME BASE | remove-base-model NAME BASE
-    endor datasets list PROJECT | upload PROJECT NAME FILE | delete PROJECT NAME
-    endor runs list PROJECT | show RUN_ID | close RUN_ID
-    endor models list PROJECT | info MODEL | download MODEL [-o DIR] | set-ttl MODEL SECONDS|none | delete MODEL
-    endor eval PROJECT MODEL DATASET
+    endor projects list | create NAME --base-model BASE | delete NAME
+    endor projects versions NAME | promote NAME VERSION | auto-promote NAME on|off
+    endor custom-models list [--production | --archived] | info NAME | promote NAME [--replace OTHER] | archive NAME
+    endor custom-models download NAME [-o DIR] | set-ttl NAME SECONDS|none | delete NAME
+    endor datasets list | upload NAME FILE | delete NAME
+    endor runs list | show RUN_ID | close RUN_ID
+    endor eval MODEL DATASET
     endor usage --start 2026-10-01 --end 2026-10-06 [--project P] [--csv]
     endor user-report "what you did, what happened, what you expected" [--kind bug|confusing|works] [--request-id REQ]
 
-MODEL is "<project>/<name>", or "<project>/<base id>" for a base model of the project. Every command takes -f json.
-Credentials: ENDOR_API_KEY (and ENDOR_BASE_URL).
+Projects are continuous learning projects; custom models are the ones you train with the SDK. Every command takes
+-f json. Credentials: ENDOR_API_KEY (and ENDOR_BASE_URL).
 """
 
 from __future__ import annotations
@@ -71,53 +72,47 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_parser("list")
     pc = pr.add_parser("create")
     pc.add_argument("name")
-    pc.add_argument(
-        "--base-model",
-        action="append",
-        dest="base_models",
-        metavar="BASE",
-        help="a base model of the project, e.g. decider-2b (repeat for several in a custom project; the first "
-        "answers for NAME; a continuous learning project has exactly one)",
-    )
-    pc.add_argument(
-        "--kind",
-        choices=["custom", "managed"],
-        default="custom",
-        help="managed: continuous learning, Endor trains from the project's decisions (+50%%); custom: you train "
-        "models with the SDK",
-    )
+    pc.add_argument("--base-model", required=True, metavar="BASE", help="the base model it learns on, e.g. decider-2b")
     pr.add_parser("delete").add_argument("name")
-    for action in ("add-base-model", "remove-base-model"):
-        pb = pr.add_parser(action)
-        pb.add_argument("name")
-        pb.add_argument("base_model")
+    pr.add_parser("versions").add_argument("name")
+    pp = pr.add_parser("promote")
+    pp.add_argument("name")
+    pp.add_argument("version", help="v1, v2, ...")
+    pa = pr.add_parser("auto-promote")
+    pa.add_argument("name")
+    pa.add_argument("state", choices=["on", "off"])
+    cm = sub.add_parser("custom-models").add_subparsers(dest="action", required=True)
+    cl = cm.add_parser("list")
+    state = cl.add_mutually_exclusive_group()
+    state.add_argument("--production", action="store_const", const=True, dest="production")
+    state.add_argument("--archived", action="store_const", const=False, dest="production")
+    cm.add_parser("info").add_argument("name")
+    cp = cm.add_parser("promote")
+    cp.add_argument("name")
+    cp.add_argument(
+        "--replace", metavar="OTHER", help="a model in production to archive in the same step, when every slot is taken"
+    )
+    cm.add_parser("archive").add_argument("name")
+    dl = cm.add_parser("download")
+    dl.add_argument("name")
+    dl.add_argument("-o", "--output", help="folder to write the files into (default: NAME)")
+    dl.add_argument("--include-optimizer", action="store_true", help="also optimizer.pt, to resume training")
+    ttl = cm.add_parser("set-ttl")
+    ttl.add_argument("name")
+    ttl.add_argument("seconds", help="seconds, or 'none' to keep the model")
+    cm.add_parser("delete").add_argument("name")
     ds = sub.add_parser("datasets").add_subparsers(dest="action", required=True)
-    ds.add_parser("list").add_argument("project")
+    ds.add_parser("list")
     up = ds.add_parser("upload")
-    up.add_argument("project")
     up.add_argument("name")
     up.add_argument("file", help=".jsonl or .json rows (see 'Data format' in the README)")
-    dd = ds.add_parser("delete")
-    dd.add_argument("project")
-    dd.add_argument("name")
+    ds.add_parser("delete").add_argument("name")
     runs = sub.add_parser("runs").add_subparsers(dest="action", required=True)
-    runs.add_parser("list").add_argument("project")
+    runs.add_parser("list")
     runs.add_parser("show").add_argument("run_id")
     runs.add_parser("close").add_argument("run_id")
-    md = sub.add_parser("models").add_subparsers(dest="action", required=True)
-    md.add_parser("list").add_argument("project")
-    md.add_parser("info").add_argument("model")
-    dl = md.add_parser("download")
-    dl.add_argument("model")
-    dl.add_argument("-o", "--output", help="folder to write the files into (default: <project>-<name>)")
-    dl.add_argument("--include-optimizer", action="store_true", help="also optimizer.pt, to resume training")
-    ttl = md.add_parser("set-ttl")
-    ttl.add_argument("model")
-    ttl.add_argument("seconds", help="seconds, or 'none' to keep the model")
-    md.add_parser("delete").add_argument("model")
     ev = sub.add_parser("eval")
-    ev.add_argument("project")
-    ev.add_argument("model")
+    ev.add_argument("model", help="a custom model's name or a base model id")
     ev.add_argument("dataset")
     us = sub.add_parser("usage")
     us.add_argument("--start", required=True, help="ISO date or datetime")
@@ -153,12 +148,6 @@ def main(argv: Sequence[str] | None = None, client: EndorClient | None = None) -
 
 def _run(a: argparse.Namespace, client: EndorClient) -> None:
     f = a.format
-
-    def project_of(model: str) -> Any:
-        if "/" not in model:
-            raise EndorError("MODEL must be '<project>/<name>'")
-        return client.projects.get(model.split("/", 1)[0])
-
     if a.cmd == "whoami":
         _out({**_dump(client.whoami()), "balance_usd": client.balance()}, f)
     elif a.cmd == "base-models":
@@ -167,47 +156,46 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
         if a.action == "list":
             _out(client.projects.list(), f)
         elif a.action == "create":
-            if a.kind == "managed" and len(a.base_models or []) != 1:
-                raise EndorError("a continuous learning project has exactly one base model: --base-model BASE")
-            _out(client.projects.create(a.name, kind=a.kind, base_models=a.base_models), f)
-        elif a.action == "add-base-model":
-            _out(client.projects.get(a.name).add_base_model(a.base_model), f)
-        elif a.action == "remove-base-model":
-            _out(client.projects.get(a.name).remove_base_model(a.base_model), f)
+            _out(client.projects.create(a.name, base_model=a.base_model), f)
+        elif a.action == "versions":
+            _out(client.projects.get(a.name).versions(), f)
+        elif a.action == "promote":
+            _out(client.projects.get(a.name).promote(a.version), f)
+        elif a.action == "auto-promote":
+            _out(client.projects.get(a.name).set_auto_promote(a.state == "on"), f)
         else:
             client.projects.get(a.name).delete()
-    elif a.cmd == "datasets":
-        p = client.projects.get(a.project)
+    elif a.cmd == "custom-models":
+        cm = client.custom_models
         if a.action == "list":
-            _out(p.datasets.list(), f)
+            _out(cm.list(production=a.production), f)
+        elif a.action == "info":
+            _out(cm.get(a.name), f)
+        elif a.action == "promote":
+            _out(cm.promote(a.name, replace=a.replace), f)
+        elif a.action == "archive":
+            _out(cm.archive(a.name), f)
+        elif a.action == "set-ttl":
+            _out(cm.set_ttl(a.name, None if a.seconds == "none" else int(a.seconds)), f)
+        elif a.action == "delete":
+            cm.delete(a.name)
+        elif a.action == "download":
+            _out(cm.download(a.name, a.output or a.name, include_optimizer=a.include_optimizer), f)
+    elif a.cmd == "datasets":
+        if a.action == "list":
+            _out(client.datasets.list(), f)
         elif a.action == "upload":
-            _out(p.datasets.upload(a.name, D.load_rows(a.file)), f)
+            _out(client.datasets.upload(a.name, D.load_rows(a.file)), f)
         else:
-            p.datasets.delete(a.name)
+            client.datasets.delete(a.name)
     elif a.cmd == "runs":
         if a.action == "list":
-            _out(client.projects.get(a.project).runs.list(), f)
+            _out(client.runs.list(), f)
         else:
-            from .runs import Run
-
-            run = Run(client._t, client._t.request("GET", f"/v1/runs/{a.run_id}", method_name="project.runs.get"))
+            run = client.runs.get(a.run_id)
             _out(run.close() if a.action == "close" else run, f)
-    elif a.cmd == "models":
-        if a.action == "list":
-            _out(client.projects.get(a.project).models.list(), f)
-        else:
-            models = project_of(a.model).models
-            if a.action == "info":
-                _out(models.get(a.model), f)
-            elif a.action == "set-ttl":
-                _out(models.set_ttl(a.model, None if a.seconds == "none" else int(a.seconds)), f)
-            elif a.action == "delete":
-                models.delete(a.model)
-            elif a.action == "download":
-                target = a.output or a.model.replace("/", "-")
-                _out(models.download(a.model, target, include_optimizer=a.include_optimizer), f)
     elif a.cmd == "eval":
-        _out(client.projects.get(a.project).evaluate(a.model, a.dataset).result(), f)
+        _out(client.evaluations.create(a.model, a.dataset).result(), f)
     elif a.cmd == "usage":
         rows = client.usage(datetime.fromisoformat(a.start), datetime.fromisoformat(a.end), a.project)
         if a.csv:

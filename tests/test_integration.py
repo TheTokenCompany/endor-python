@@ -43,34 +43,33 @@ def test_whoami_and_catalog(live: endor.EndorClient, base_model: str) -> None:
 
 
 def test_decision(live: endor.EndorClient, base_model: str) -> None:
-    project = live.projects.get_or_create(f"sdk-it-{uuid.uuid4().hex[:8]}", base_models=[base_model])
+    project = live.projects.get_or_create(f"sdk-it-{uuid.uuid4().hex[:8]}", base_model=base_model)
     try:
-        assert project.info_.base_models == [base_model]
+        assert project.info_.base_model == base_model and project.info_.production is None
         assert project.name in {p.name for p in live.projects.list()}
-        assert live.projects.get(project.name).info_.base_models == [base_model]
-        res = live.system_one({"body": "I was charged twice"}, {"dept": DEPT, "urgent": URGENT}, model=project.name)
-        assert res.model == f"{project.name}/{base_model}"
+        res = live.system_one({"body": "I was charged twice"}, {"dept": DEPT, "urgent": URGENT}, model=project.ref)
+        assert res.model == project.name
         assert abs(sum(res.choices["dept"].probabilities.values()) - 1) < 1e-3
         assert 0 <= res.nouls["urgent"].noul <= 1
-        assert {project.name, f"{project.name}/{base_model}"} <= {m.name for m in live.models.list().models}
-        assert [(m.kind, m.name) for m in project.models.list()] == [("base", base_model)]
+        assert project.ref in {m.name for m in live.models.list().models} and project.preview_ref is None
+        assert project.versions() == []
     finally:
         project.delete()
 
 
 def test_tiny_training_loop(live: endor.EndorClient) -> None:
-    project = live.projects.create(f"sdk-it-{uuid.uuid4().hex[:8]}", base_models=["jev-9b"])
+    name = f"sdk-it-{uuid.uuid4().hex[:8]}"
+    rows = [
+        {
+            "state": {"body": f"ticket {i}"},
+            "questions": {"dept": DEPT, "urgent": URGENT},
+            "labels": {"dept": "billing" if i % 2 else "technical", "urgent": bool(i % 3)},
+        }
+        for i in range(8)
+    ]
+    live.datasets.upload(name, rows)
     try:
-        rows = [
-            {
-                "state": {"body": f"ticket {i}"},
-                "questions": {"dept": DEPT, "urgent": URGENT},
-                "labels": {"dept": "billing" if i % 2 else "technical", "urgent": bool(i % 3)},
-            }
-            for i in range(8)
-        ]
-        project.datasets.upload("train", rows)
-        with project.runs.create(rank=4) as run:  # on the project's first base model
+        with live.custom_models.create(name, base_model="jev-9b", rank=4) as run:
             datums = endor.data.rows_to_datums(rows)
             before = run.forward(datums).result()
             fb = run.forward_backward(datums)
@@ -79,15 +78,18 @@ def test_tiny_training_loop(live: endor.EndorClient) -> None:
             assert out.metrics["n"] == len(datums) and step.step == 1
             after = run.forward(datums).result()
             assert len(before.probabilities) == len(after.probabilities) == len(datums)
-            model = run.save_checkpoint("v1").result()
-        assert model == f"{project.name}/v1"
-        res = live.system_one(rows[0]["state"], {"dept": DEPT}, model=model)
-        assert res.model == model
-        assert any(m.name == "v1" for m in project.models.list())
-        assert next(m for m in project.models.list() if m.name == "v1").loss is not None
-        ev = project.evaluate("v1", "train").result()
+            model = run.save_checkpoint().result()
+        assert model == name and live.custom_models.get(name).state == "archived"
+        with pytest.raises(endor.ModelNotInProductionError):
+            live.system_one(rows[0]["state"], {"dept": DEPT}, model=model)
+        ev = live.evaluations.create(name, name).result()  # an inactive model can be evaluated
         assert ev.status == "completed" and ev.model == model
-        assert ev.status == "completed"
-        project.models.delete("v1")
+        live.custom_models.promote(name)
+        try:
+            assert live.system_one(rows[0]["state"], {"dept": DEPT}, model=model).model == model
+            assert live.custom_models.get(name).loss is not None
+        finally:
+            live.custom_models.archive(name)
+        live.custom_models.delete(name)
     finally:
-        project.delete()
+        live.datasets.delete(name)

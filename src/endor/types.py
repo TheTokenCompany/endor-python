@@ -12,8 +12,10 @@ Training
     Target, LoraConfig, AdamParams, ForwardOutput, OptimStepOutput
 
 Resources (read-only views of what the API returns)
-    ProjectInfo, RunInfo, ModelInfo, DatasetInfo, Evaluation, MetricPoint, DownloadedFile, UsageRow, WhoAmI, FutureInfo
+    ProjectInfo, VersionInfo     a continuous learning project and its versions (``client.projects``)
     Learning, Training, Drift    a continuous learning project's learning (``project.learning()``)
+    CustomModelInfo              a custom model (``client.custom_models``)
+    RunInfo, DatasetInfo, Evaluation, MetricPoint, DownloadedFile, UsageRow, WhoAmI, FutureInfo
 
 Option ids are the only identifiers used for a question's options anywhere in the SDK:
     noul   -> "false", "true"
@@ -67,12 +69,12 @@ __all__ = [
     "ForwardOutput",
     "OptimStepOutput",
     "ProjectInfo",
+    "VersionInfo",
     "Learning",
     "Training",
     "Drift",
-    "WandbSettings",
     "RunInfo",
-    "ModelInfo",
+    "CustomModelInfo",
     "DatasetInfo",
     "Evaluation",
     "MetricPoint",
@@ -295,7 +297,8 @@ class SystemOneResponse(BaseModel):
     """The decision's id (``req_...``, the same as its ``X-Request-Id``): correct the decision with
     ``client.corrections.create(res, ...)``. None from a server that doesn't send one."""
     model: str
-    """The model that answered: ``"<project>/<base id>"`` or ``"<project>/<name>"``."""
+    """What answered: a project's version (``"tickets:v4"``, or ``"tickets"`` while its base model answers) or a
+    custom model (``"router-2"``)."""
     answers: dict[str, Answer] = Field(default_factory=dict)
     """Every answer, by question name."""
     usage: Usage = Field(default_factory=Usage)
@@ -321,8 +324,8 @@ def answer_probabilities(answer: Answer) -> dict[str, float]:
 
 
 class BaseModelInfo(BaseModel):
-    """A base decision model you can fine-tune and decide with, through a project that has it
-    (``"<project>/<id>"``; add it with ``project.add_base_model(id)``)."""
+    """A base decision model: a continuous learning project learns on one (``client.projects.create(name,
+    base_model=id)``), and custom models are trained on one (``client.custom_models.create(name, base_model=id)``)."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -354,9 +357,9 @@ class BaseModelInfo(BaseModel):
     """The pinned commit of ``hf_repo`` that Endor loads."""
     trainer_gpu: str | None = None
     price_per_mtok_decide: float | None = None
-    """USD per 1M decision input tokens on this base (None while unpriced)."""
+    """USD per 1M decision input tokens of a custom model on this base (None while unpriced)."""
     price_per_mtok_decide_continuous_learning: float | None = None
-    """The same in a continuous learning project (Endor trains it from its decisions)."""
+    """The same for a continuous learning project on this base."""
     price_per_gpu_hour: float | None = None
     """USD per training GPU-hour, from when a run's GPU is requested until it is released (None while unpriced)."""
 
@@ -371,17 +374,23 @@ class ModelMetadata(BaseModel):
     description: str = ""
     release_date: str | None = None
     endor: dict[str, Any] = Field(default_factory=dict)
-    """Endor's metadata: ``kind``, ``project`` and ``base_model``; for ``project`` also ``model`` (what ``<project>``
-    calls now), for ``base`` ``contract``, and for saved models ``training_run_id``, ``step`` and
-    ``parent_model``."""
+    """Endor's metadata: ``kind`` and ``base_model``, and for a project's names the ``project``, the ``environment``
+    and the ``model`` the name answers with now (``"tickets:v4"``, or ``"tickets"`` while its base model answers)."""
 
     @property
     def kind(self) -> str:
-        """``"project"`` (``<project>``), ``"base"`` (``<project>/<base id>``) or ``"model"``
-        (``<project>/<name>``)."""
+        """What the name calls, as Endor reports it: a continuous learning project (``"project"``) or a custom model in
+        production (``"custom"``)."""
         if self.endor.get("kind"):
             return str(self.endor["kind"])
-        return "project" if "/" not in self.name else "model"
+        return "project"
+
+    @property
+    def environment(self) -> str | None:
+        """For a project's names: ``"production"`` (``"tickets"``, its production version) or ``"preview"``
+        (``"tickets:preview"``, listed only while it has one). None for a custom model."""
+        env = self.endor.get("environment")
+        return str(env) if env else None
 
 
 class ListModelsResponse(BaseModel):
@@ -551,34 +560,44 @@ class OptimStepOutput(_View):
     learning_rate: float
 
 
-class WandbSettings(_View):
-    """A project's Weights & Biases logging, set in its Settings tab or with ``project.update(wandb=...)``. Endor logs
-    runs from its servers through the organization's W&B connection (dashboard: Settings > Integrations), to the W&B
-    project ``endor-<project name>`` in the connection's entity."""
-
-    enabled: bool = False
-    """New runs log to W&B (``runs.create(wandb=...)`` overrides it per run)."""
-    url: str | None = None
-    """That W&B project's page, while logging is on and the organization is connected."""
-
-
 class ProjectInfo(_View):
+    """A continuous learning project as last fetched (``project.info_``)."""
+
     name: str
     description: str | None = None
-    kind: str = "custom"
-    """``custom`` (you train models with the SDK) or ``managed`` (continuous learning: Endor trains new versions from
-    the project's decisions). Set at creation; it never changes."""
-    base_models: list[str] = Field(default_factory=list)
-    """The project's base model ids, in the order they were added. Each answers as ``"<project>/<base id>"``, and the
-    first also as ``"<project>"`` (in a continuous learning project, until its first version). A continuous learning
-    project has exactly one, chosen when it is created. A custom project's change with ``project.add_base_model`` and
-    ``project.remove_base_model``."""
-    n_datasets: int = 0
-    n_runs: int = 0
-    n_models: int = 0
-    """Saved models plus base models."""
-    wandb: WandbSettings | None = None
-    """Weights & Biases logging of the project's runs."""
+    base_model: str
+    """The base model the project learns on, chosen when it was created. It never changes."""
+    production: str | None = None
+    """The version in production, which ``"<project>"`` answers with (``"v4"``); None until you promote one, while the
+    base model answers."""
+    preview: str | None = None
+    """The newest version while it isn't in production, which ``"<project>:preview"`` answers with. None when the
+    newest version is in production (always, while auto-promote is on) and before the first version."""
+    auto_promote: bool = False
+    """Off by default: new versions land in the preview until you promote one. On (``project.set_auto_promote(True)``):
+    each new version goes to production as soon as it is ready. Promoting an older version turns it off (a rollback)."""
+    promoted_at: datetime | None = None
+    """When the production version last changed."""
+    versions: int = 0
+    """How many versions the project has."""
+    created_at: datetime
+
+
+class VersionInfo(_View):
+    """One version of a continuous learning project (``project.versions()``, newest first)."""
+
+    name: str
+    """``"v1"``, ``"v2"``, ..."""
+    base_model: str
+    production: bool = False
+    """It is in production: ``"<project>"`` answers with it."""
+    preview: bool = False
+    """It is the newest version and isn't in production, so ``"<project>:preview"`` answers with it. Never both."""
+    accuracy: float | None = None
+    """Its accuracy in percent when it was trained (None: nothing to check on)."""
+    loss: float | None = None
+    """Its mean cross-entropy on the same check (lower is better)."""
+    size_bytes: int | None = None
     created_at: datetime
 
 
@@ -587,7 +606,8 @@ class Training(_View):
 
     at: datetime
     kept: bool
-    """Saved as ``version``, which the project then served, or discarded (not better than what it served)."""
+    """Saved as ``version`` (in production at once while auto-promote is on, else the project's preview), or discarded
+    (not better than the version it was compared with)."""
     version: str | None = None
     decisions: int | None = None
     """The project's decision count when the run started (None from a server that doesn't send it)."""
@@ -628,7 +648,8 @@ class Learning(_View):
     progress: float = 0.0
     """The way to the next training run, 0 to 1."""
     serving: str
-    """What ``"<project>"`` answers with now: ``"<project>/<version>"``, or its first base model."""
+    """What ``"<project>"`` answers with now: ``"<project>:<version>"``, or ``"<project>"`` while its base model
+    answers."""
     trained_at: datetime | None = None
     trainings: list[Training] = Field(default_factory=list)
     """The latest 50 training runs, newest first."""
@@ -639,8 +660,11 @@ class Learning(_View):
 
 class RunInfo(_View):
     id: str
-    project: str
     name: str | None = None
+    """The run's own label."""
+    model: str | None = None
+    """The custom model name ``run.save_checkpoint()`` saves under when it is given no name (``client.runs.create(
+    model=...)``, or ``client.custom_models.create(name, ...)``)."""
     base_model: str
     contract: str | None = None
     lora: LoraInfo = Field(default_factory=LoraInfo)
@@ -656,6 +680,7 @@ class RunInfo(_View):
     """The median time per optimizer step over the last 20 steps; None before the second step."""
     next_seq_id: int = 0
     parent_model: str | None = None
+    """The custom model the run started from (``from_model``), if any."""
     tags: list[str] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
     code_hash: str | None = None
@@ -686,37 +711,43 @@ class RunInfo(_View):
         return max(0, self.total_steps - self.step) * self.seconds_per_step
 
 
-class ModelInfo(_View):
-    id: str
-    """``"<project>/<name>"`` or ``"<project>/<base id>"``: pass it as ``model`` to ``system_one``."""
-    kind: str = "saved"
-    """``"base"`` (one of the project's base models, listed first) or ``"saved"`` (saved by a run, or a continuous
-    learning project's version)."""
-    project: str
+class CustomModelInfo(_View):
+    """A custom model (``client.custom_models``): trained with the SDK and saved by a run. One in production is
+    called by its name (``model="router-2"``); an archived one can be downloaded, evaluated, trained from and
+    promoted, but decisions refuse it (``ModelNotInProductionError``)."""
+
     name: str
-    """The base model id for a base model; the saved model's name otherwise. A continuous learning project's versions
-    are named ``v1``, ``v2``, ..."""
-    training_run_id: str | None = None
+    """Its name, unique in the organization (with the continuous learning projects): ``model`` in ``system_one``
+    while it is in production."""
     base_model: str
+    production: bool = False
+    """It is in production: decisions may call it."""
+    state: str = "archived"
+    """``"production"`` or ``"archived"`` (every save starts archived). Treat unknown values as archived."""
+    promoted_at: datetime | None = None
+    """When it last went to production (None while archived)."""
     contract: str | None = None
+    training_run_id: str | None = None
     parent_model: str | None = None
-    """The model the training run started from (``from_model``), if any."""
+    """The custom model its training run started from (``from_model``), if any."""
     step: int = 0
     has_optimizer: bool = False
     size_bytes: int | None = None
     expires_at: datetime | None = None
+    """Archived models only: when it is deleted (a TTL). Models in production never expire."""
     user_metadata: dict[str, Any] = Field(default_factory=dict)
     loss: float | None = None
     """The training loss when the model was saved: its run's ``train/loss`` at ``step``, or the last one before it.
-    None for a base model, or when unknown."""
+    None when unknown."""
     accuracy: float | None = None
     """The training accuracy when the model was saved (``train/accuracy``, the same way as ``loss``)."""
     created_at: datetime
 
 
 class DatasetInfo(_View):
+    """A dataset of decision rows for training and evaluating custom models (``client.datasets``)."""
+
     name: str
-    project: str
     n_rows: int
     n_labelled_questions: int = 0
     question_types: dict[str, int] = Field(default_factory=dict)
@@ -728,8 +759,8 @@ class DatasetInfo(_View):
 
 class Evaluation(_View):
     id: str
-    project: str
     model: str
+    """The custom model or base model it scored."""
     dataset: str | None = None
     """The dataset's name; None for rows sent inline and for client evaluations."""
     training_run_id: str | None = None
@@ -754,7 +785,7 @@ class MetricPoint(_View):
 
 
 class DownloadedFile(_View):
-    """A model file written by ``project.models.download``."""
+    """A model file written by ``client.custom_models.download`` or ``project.download``."""
 
     name: str
     path: Path
@@ -769,11 +800,13 @@ class UsageRow(_View):
     kind: str
     """``decide`` (billed per 1M input tokens per base model) or ``train`` (billed per GPU-hour)."""
     project: str | None = None
+    """The continuous learning project; None for a custom model's decisions and for training."""
     project_deleted: bool = False
     """The project was deleted (``project`` is None when its record is gone)."""
     base_model: str | None = None
     model: str | None = None
-    """Decisions only: the saved model that answered (None for a base model: see ``base_model``)."""
+    """Decisions only: the project version (``"v4"``) or the custom model that answered (None for a base model: see
+    ``base_model``)."""
     training_run_id: str | None = None
     """Training only."""
     input_tokens: int | None = None
@@ -781,14 +814,14 @@ class UsageRow(_View):
     gpu_seconds: float | None = None
     """Training only: seconds of the run's reserved GPU, from request to release."""
     continuous_learning: bool | None = None
-    """Decisions only: whether the project is a continuous learning project, so billed at the continuous-learning
-    price (continuous learning and custom usage come as separate rows)."""
+    """Decisions only: whether a continuous learning project answered, so billed at the continuous-learning price (a
+    custom model's decisions come as separate rows)."""
     price_per_mtok: float | None = None
     """Decisions only: the price per 1M input tokens applied."""
     base_cost_usd: float | None = None
     """Decisions only: the cost at the base price."""
     continuous_learning_cost_usd: float | None = None
-    """Decisions only: the continuous-learning extra (0 in a custom project). ``cost_usd`` is the total."""
+    """Decisions only: the continuous-learning extra (0 for a custom model). ``cost_usd`` is the total."""
     cost_usd: float | None = None
 
 
@@ -799,11 +832,10 @@ class WhoAmI(_View):
     user_id: str | None = None
     key_id: str | None = None
     limits: dict[str, int | float] = Field(default_factory=dict)
-    """The org's limits by name, for example ``max_projects_per_org`` or ``max_active_runs``. A count limit raises
-    ``LimitReachedError`` once reached; a rate raises ``RateLimitError``: ``decisions_per_minute`` (60 by default,
-    for the whole org) and the other ``..._per_minute``."""
-    managed_projects: bool = False
-    """Whether continuous learning projects (``kind="managed"``) can be created here."""
+    """The org's limits by name, for example ``max_projects_per_org``, ``max_production_models_per_org`` (custom
+    models in production), ``max_custom_models_per_org``, ``max_datasets_per_org`` or ``max_active_runs``. A count
+    limit raises ``LimitReachedError`` once reached (``ProductionFullError`` for the production slots); a rate raises
+    ``RateLimitError``: ``decisions_per_minute`` (60 by default, for the whole org) and the other ``..._per_minute``."""
     image_training: bool = False
     """Whether the org may fine-tune with images (``endor.Image`` in rows and datums, ``client.images``). Limited
     access: without it those calls raise ``PermissionDeniedError`` (403 ``image_training_not_enabled``); ask us."""
@@ -856,7 +888,8 @@ class CorrectionInfo(_View):
 
     request_id: str
     """The decision's id (``req_...``)."""
-    project: str
+    project: str | None = None
+    """The continuous learning project that made the decision; None for a custom model's decision."""
     questions: dict[str, QuestionCorrectionInfo]
     """The corrected questions, by name."""
     comment: str | None = None

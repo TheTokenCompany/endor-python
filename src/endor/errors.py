@@ -3,8 +3,10 @@
     EndorError
       APIError (status, code, param, message, body, headers, endpoint, request_id)
         BadRequestError 400 · AuthenticationError 401 · InsufficientBalanceError 402 · PermissionDeniedError 403
-        NotFoundError 404
-        ConflictError 409 (LimitReachedError, NoBaseModelError, WrongProjectKindError) · PayloadTooLargeError 413
+        NotFoundError 404 (NoPreviewError, VersionNotCallableError)
+        ConflictError 409 (LimitReachedError > ProductionFullError, ModelNotInProductionError,
+            ModelInProductionError)
+        PayloadTooLargeError 413
         UnprocessableEntityError 422 (ModelRequiresProjectError)
         RateLimitError 429 (retry_after) · OverloadedError 529 · InternalServerError 5xx
         ResponseValidationError: a 2xx whose body does not have the expected shape
@@ -38,8 +40,11 @@ __all__ = [
     "NotFoundError",
     "ConflictError",
     "LimitReachedError",
-    "NoBaseModelError",
-    "WrongProjectKindError",
+    "ProductionFullError",
+    "ModelNotInProductionError",
+    "ModelInProductionError",
+    "VersionNotCallableError",
+    "NoPreviewError",
     "PayloadTooLargeError",
     "UnprocessableEntityError",
     "ModelRequiresProjectError",
@@ -169,26 +174,46 @@ class NotFoundError(APIError):
     """404: the resource does not exist, or is not yours."""
 
 
+class NoPreviewError(NotFoundError):
+    """404 ``no_preview``: ``"<project>:preview"`` was called, but the project has no preview. A project has one only
+    while its newest version isn't in production, so never while auto-promote is on (each new version goes to
+    production at once): call
+    ``"<project>"``."""
+
+
+class VersionNotCallableError(NotFoundError):
+    """404 ``version_not_callable``: ``"<project>:v3"`` names an older version of a continuous learning project. Only
+    ``"<project>"`` (the production version) and ``"<project>:preview"`` (a newer one) can be called; promote the
+    version
+    (``project.promote("v3")``) to call it as ``"<project>"``."""
+
+
 class ConflictError(APIError):
     """409: a name is taken, a run is closed, a sequence number is out of order, or a limit is reached (see
     ``code``)."""
 
 
 class LimitReachedError(ConflictError):
-    """409 ``limit_reached``: a count limit of the org or project is reached, for example 7 projects, 25 open runs,
-    or 500 models in a project. The message names the limit and its value
-    (``client.whoami().limits`` has them all). Free one first: waiting doesn't help, so it is never retried."""
+    """409 ``limit_reached``: a count limit of the org is reached, for example its projects, custom models, datasets or
+    open runs. The
+    message names the limit and its value (``client.whoami().limits`` has them all). Free one first: waiting doesn't
+    help, so it is never retried."""
 
 
-class NoBaseModelError(ConflictError):
-    """409 ``no_base_model``: ``"<project>"`` was called, but the project has no base model to answer with. Add one
-    with ``project.add_base_model("decider-2b")``."""
+class ProductionFullError(LimitReachedError):
+    """409 ``production_full``: every production slot for custom models is taken (``max_production_models_per_org`` in
+    ``client.whoami().limits``). Promote with ``replace=`` naming the model to move to the archive in the same step, or
+    archive one first. The message names the models in production."""
 
 
-class WrongProjectKindError(ConflictError):
-    """409 ``wrong_project_kind``: the call doesn't apply to this kind of project. Continuous learning projects refuse
-    datasets, training runs, saved models and evaluations (Endor trains them); custom projects refuse ``paused``. The
-    message says what the project is."""
+class ModelNotInProductionError(ConflictError):
+    """409 ``model_not_in_production``: a decision named an archived custom model. Promote it first
+    (``client.custom_models.promote(name)``); archived models can still be downloaded, evaluated and trained from."""
+
+
+class ModelInProductionError(ConflictError):
+    """409 ``model_in_production``: the call doesn't apply to a custom model in production (deleting it, or giving it
+    a TTL: models in production never expire). Archive it first (``client.custom_models.archive(name)``)."""
 
 
 class PayloadTooLargeError(APIError):
@@ -200,10 +225,9 @@ class UnprocessableEntityError(APIError):
 
 
 class ModelRequiresProjectError(UnprocessableEntityError):
-    """422 ``model_requires_project``: ``model`` is a bare base model id. Every decision names a project:
-    ``"<project>/<name>"`` (a saved model), ``"<project>/<base id>"`` (one of its base models) or ``"<project>"`` (a
-    continuous learning project's newest version, else its first base model). Add a base to a project with
-    ``project.add_base_model``."""
+    """422 ``model_requires_project``: ``model`` is a bare base model id. Decisions name a continuous learning project
+    (``"<project>"``, ``"<project>:preview"``) or a custom model in production by its name: create a project on the base
+    (``client.projects.create(name, base_model=...)``) to decide with it."""
 
 
 class RateLimitError(APIError):
@@ -251,7 +275,7 @@ class APITimeoutError(APIConnectionError, TimeoutError):
 
 _HINTS = {
     "trainer_lost": "The run's trainer is gone. Start a new run from your last saved model: "
-    "project.runs.create(from_model=...).",
+    "client.runs.create(from_model=...).",
     "oom": "The trainer ran out of memory. Retry with a smaller batch.",
     "no_gradients": "optim_step found no accumulated gradients. Call forward_backward first, with non-zero weights.",
 }
@@ -304,8 +328,11 @@ _STATUS_ERRORS: dict[int, type[APIError]] = {
 _CODE_ERRORS: dict[str, type[APIError]] = {
     "insufficient_balance": InsufficientBalanceError,
     "limit_reached": LimitReachedError,
-    "no_base_model": NoBaseModelError,
-    "wrong_project_kind": WrongProjectKindError,
+    "production_full": ProductionFullError,
+    "model_not_in_production": ModelNotInProductionError,
+    "model_in_production": ModelInProductionError,
+    "version_not_callable": VersionNotCallableError,
+    "no_preview": NoPreviewError,
     "model_requires_project": ModelRequiresProjectError,
 }
 

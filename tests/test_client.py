@@ -12,7 +12,6 @@ from endor import (
     EndorClient,
     EndorError,
     ModelRequiresProjectError,
-    NoBaseModelError,
     NotFoundError,
     NoulAnswer,
     ScoreAnswer,
@@ -79,7 +78,7 @@ class TestConstructor:
         async with EndorClient(
             api_key=API_KEY, base_url=BASE_URL, async_transport=httpx.MockTransport(fake.handler)
         ) as c:
-            name = fake.create_project({"name": unique("acm"), "base_models": [DECIDE_BASE]})["name"]
+            name = fake.create_project({"name": unique("acm"), "base_model": DECIDE_BASE})["name"]
             res = await c.system_one_async("x", {"u": URGENT}, model=name)
             assert res.nouls["u"].noul == 0.5
 
@@ -97,7 +96,9 @@ class TestDecisions:
             {"body": "charged twice"}, {"dept": DEPT, "urgent": URGENT, "anger": ANGER}, model=decider
         )
         assert isinstance(res, SystemOneResponse)
-        assert res.model == f"{decider}/{DECIDE_BASE}"  # the model that answered: a custom project's first base
+        assert (
+            res.model == decider
+        )  # what answered: the project's base, before a version is promoted (plain "<project>")
         assert isinstance(res.choices["dept"], ChoiceAnswer) and res.choices["dept"].choice in ("billing", "tech")
         assert isinstance(res.nouls["urgent"], NoulAnswer) and res.nouls["urgent"].noul == 0.5
         s = res.scores["anger"]
@@ -155,31 +156,29 @@ class TestDecisions:
             await c.system_one_async("x", {"u": URGENT}, model=decider, exclude_from_training=False)
             assert "exclude_from_training" not in fake.requests[-1].body
 
-    def test_project_model_id(self, client: EndorClient, project: endor.Project) -> None:
-        with project.runs.create() as run:
-            model = run.save_checkpoint("v1").result()
-        assert client.system_one("x", {"d": DEPT}, model=model).model == f"{project.name}/v1"
+    def test_a_live_custom_model_by_its_name(self, client: EndorClient) -> None:
+        with client.custom_models.create("router", base_model=DECIDE_BASE) as run:
+            model = run.save_checkpoint().result()
+        client.custom_models.promote(model)
+        assert client.system_one("x", {"d": DEPT}, model=model).model == "router"
 
-    def test_project_base_and_saved_models(self, client: EndorClient, project: endor.Project) -> None:
-        with project.runs.create() as run:  # on the project's first base model
-            run.save_checkpoint("v1").result()
-        project.add_base_model("decider-2b")
-        name = project.name
-        assert client.system_one("x", {"d": DEPT}, model=name).model == f"{name}/jev-9b"  # custom: its first base
-        assert client.system_one("x", {"d": DEPT}, model=f"{name}/jev-9b").model == f"{name}/jev-9b"
-        assert client.system_one("x", {"d": DEPT}, model=f"{name}/decider-2b").model == f"{name}/decider-2b"
-        assert client.system_one("x", {"d": DEPT}, model=f"{name}/v1").model == f"{name}/v1"
-        with pytest.raises(NotFoundError) as e:  # "<project>/base" is gone
-            client.system_one("x", {"d": DEPT}, model=f"{name}/base")
+    def test_a_projects_live_version_and_preview(self, client: EndorClient, fake: FakeEndor, decider: str) -> None:
+        fake.add_version(decider)  # auto-promote is off by default: v1 waits in the preview
+        assert client.system_one("x", {"d": DEPT}, model=decider).model == decider
+        assert client.system_one("x", {"d": DEPT}, model=f"{decider}:preview").model == f"{decider}:v1"
+        client.projects.get(decider).promote("v1")
+        assert client.system_one("x", {"d": DEPT}, model=decider).model == f"{decider}:v1"
+        with pytest.raises(endor.NoPreviewError):  # the newest is live now, so there is no preview
+            client.system_one("x", {"d": DEPT}, model=f"{decider}:preview")
+        with pytest.raises(NotFoundError) as e:  # the release before's "<project>/<name>" is gone
+            client.system_one("x", {"d": DEPT}, model=f"{decider}/v1")
         assert e.value.code == "unknown_model"
-        with pytest.raises(NotFoundError):  # a base the project doesn't have
-            client.system_one("x", {"d": DEPT}, model=f"{name}/gev-26b")
 
     def test_no_model_fails_before_the_call(self, client: EndorClient, fake: FakeEndor) -> None:
         assert client.default_model is None
         with pytest.raises(EndorError, match="no model") as e:
             client.system_one("x", {"d": DEPT})
-        assert "<project>/<base id>" in str(e.value) and "ENDOR_DEFAULT_MODEL" in str(e.value)
+        assert "<project>:preview" in str(e.value) and "ENDOR_DEFAULT_MODEL" in str(e.value)
         assert not fake.requests
 
     async def test_no_model_fails_before_the_call_async(self, client: EndorClient, fake: FakeEndor) -> None:
@@ -192,12 +191,6 @@ class TestDecisions:
             client.system_one("x", {"d": DEPT}, model="decider-2b")
         assert isinstance(e.value, UnprocessableEntityError)
         assert e.value.status == 422 and e.value.code == "model_requires_project" and e.value.param == "model"
-
-    def test_project_without_base_model(self, client: EndorClient, fake: FakeEndor, project: endor.Project) -> None:
-        project.remove_base_model("jev-9b")
-        with pytest.raises(NoBaseModelError) as e:
-            client.system_one("x", {"d": DEPT}, model=project.name)
-        assert isinstance(e.value, endor.ConflictError) and e.value.status == 409 and e.value.code == "no_base_model"
 
     def test_unknown_model_is_404(self, client: EndorClient) -> None:
         with pytest.raises(NotFoundError) as e:
@@ -228,21 +221,21 @@ class TestDecisions:
 
 
 class TestCatalogAndAccount:
-    def test_models_list_keeps_endor_metadata(self, client: EndorClient, project: endor.Project) -> None:
-        with project.runs.create("jev-9b") as run:
-            run.save_checkpoint("v1").result()
+    def test_models_list_keeps_endor_metadata(self, client: EndorClient, decider: str) -> None:
+        with client.custom_models.create("v1", base_model="jev-9b") as run:
+            run.save_checkpoint().result()
+        client.custom_models.promote("v1")
         listed = client.models.list()
         by_name = {m.name: m for m in listed.models}
         assert "jev-9b" not in by_name  # a bare base model id is not a name a decision can send
-        assert (
-            by_name[project.name].kind == "project" and by_name[project.name].endor["model"] == f"{project.name}/jev-9b"
-        )
-        assert by_name[f"{project.name}/jev-9b"].kind == "base"
-        saved = by_name[f"{project.name}/v1"]
-        assert saved.kind == "model" and saved.endor["base_model"] == "jev-9b" and saved.release_date
+        assert by_name[decider].kind == "project" and by_name[decider].endor["model"] == decider
+        assert by_name[decider].environment == "production" and by_name["v1"].environment is None
+        assert f"{decider}:preview" not in by_name  # no version yet, so no preview
+        saved = by_name["v1"]
+        assert saved.kind == "custom" and saved.endor["base_model"] == "jev-9b" and saved.release_date
 
-    def test_base_models(self, client: EndorClient, project: endor.Project) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_base_models(self, client: EndorClient) -> None:
+        with client.runs.create("jev-9b") as run:
             run.save_checkpoint("v1").result()
         bases = client.base_models()
         assert {b.id for b in bases} == {"pplx-decider-v1.1-27b", "gev-26b", "jev-9b", "decider-2b", "gliner2.5-decide"}
@@ -280,7 +273,7 @@ class TestCatalogAndAccount:
         assert me.org_id and me.key_id and me.user_id is None  # an org API key has no user
         assert not hasattr(me, "key_prefix")
         assert me.limits["max_projects_per_org"] >= 1 and me.limits["max_active_runs"] >= 1
-        assert me.managed_projects is True
+        assert me.limits["max_production_models_per_org"] >= 1 and not hasattr(me, "managed_projects")
 
     def test_balance(self, client: EndorClient) -> None:
         b = client.balance()
