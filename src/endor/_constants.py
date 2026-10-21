@@ -54,6 +54,6 @@ SDK_MODEL_NAME = r"^[a-z0-9][a-z0-9._-]{0,62}$"
 PREVIEW = "preview"  # "<project>:preview": a project's newest version, while it isn't in production
 
 # Error codes that are never retried, whatever their status: waiting a few seconds doesn't fix them.
-NON_RETRYABLE_CODES = frozenset({"limit_reached", "live_models_full", "insufficient_balance"})
+NON_RETRYABLE_CODES = frozenset({"limit_reached", "production_full", "insufficient_balance"})
 
 SECRET_HEADERS = frozenset({"authorization", "proxy-authorization", "x-api-key", "api-key", "cookie", "set-cookie"})

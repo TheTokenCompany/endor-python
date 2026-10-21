@@ -4,7 +4,7 @@
     endor base-models
     endor projects list | create NAME --base-model BASE | delete NAME
     endor projects versions NAME | promote NAME VERSION | auto-promote NAME on|off
-    endor custom-models list [--live | --inactive] | info NAME | promote NAME [--replace LIVE] | demote NAME
+    endor custom-models list [--production | --archived] | info NAME | promote NAME [--replace NAME] | archive NAME
     endor custom-models download NAME [-o DIR] | set-ttl NAME SECONDS|none | delete NAME
     endor datasets list | upload NAME FILE | delete NAME
     endor runs list | show RUN_ID | close RUN_ID
@@ -83,16 +83,16 @@ def build_parser() -> argparse.ArgumentParser:
     pa.add_argument("state", choices=["on", "off"])
     cm = sub.add_parser("custom-models").add_subparsers(dest="action", required=True)
     cl = cm.add_parser("list")
-    live = cl.add_mutually_exclusive_group()
-    live.add_argument("--live", action="store_const", const=True, dest="live")
-    live.add_argument("--inactive", action="store_const", const=False, dest="live")
+    state = cl.add_mutually_exclusive_group()
+    state.add_argument("--production", action="store_const", const=True, dest="production")
+    state.add_argument("--archived", action="store_const", const=False, dest="production")
     cm.add_parser("info").add_argument("name")
     cp = cm.add_parser("promote")
     cp.add_argument("name")
     cp.add_argument(
-        "--replace", metavar="LIVE", help="a live model to demote in the same step, when every slot is taken"
+        "--replace", metavar="NAME", help="a model in production to archive in the same step, when every slot is taken"
     )
-    cm.add_parser("demote").add_argument("name")
+    cm.add_parser("archive").add_argument("name")
     dl = cm.add_parser("download")
     dl.add_argument("name")
     dl.add_argument("-o", "--output", help="folder to write the files into (default: NAME)")
@@ -168,13 +168,13 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
     elif a.cmd == "custom-models":
         cm = client.custom_models
         if a.action == "list":
-            _out(cm.list(live=a.live), f)
+            _out(cm.list(production=a.production), f)
         elif a.action == "info":
             _out(cm.get(a.name), f)
         elif a.action == "promote":
             _out(cm.promote(a.name, replace=a.replace), f)
-        elif a.action == "demote":
-            _out(cm.demote(a.name), f)
+        elif a.action == "archive":
+            _out(cm.archive(a.name), f)
         elif a.action == "set-ttl":
             _out(cm.set_ttl(a.name, None if a.seconds == "none" else int(a.seconds)), f)
         elif a.action == "delete":

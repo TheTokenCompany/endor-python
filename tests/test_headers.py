@@ -71,7 +71,7 @@ def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor, 
     client.custom_models.set_ttl("cm", 7200)
     client.custom_models.download("cm", tmp_path)
     client.custom_models.promote("cm")
-    client.custom_models.demote("cm")
+    client.custom_models.archive("cm")
     client.custom_models.list()
     client.evaluations.create("cm", "d").result()
     client.evaluations.list()
@@ -104,7 +104,7 @@ def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor, 
         ("PATCH", "/v1/custom_models/cm", "custom_models.set_ttl"),
         ("GET", "/v1/custom_models/cm/download", "custom_models.download"),
         ("POST", "/v1/custom_models/cm/promote", "custom_models.promote"),
-        ("POST", "/v1/custom_models/cm/demote", "custom_models.demote"),
+        ("POST", "/v1/custom_models/cm/demote", "custom_models.archive"),
         ("GET", "/v1/custom_models", "custom_models.list"),
         ("POST", "/v1/evaluations", "evaluations.create"),
         ("GET", "/v1/futures/fut_0005", "evaluations.create"),

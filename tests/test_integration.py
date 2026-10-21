@@ -79,8 +79,8 @@ def test_tiny_training_loop(live: endor.EndorClient) -> None:
             after = run.forward(datums).result()
             assert len(before.probabilities) == len(after.probabilities) == len(datums)
             model = run.save_checkpoint().result()
-        assert model == name and not live.custom_models.get(name).live
-        with pytest.raises(endor.ModelNotLiveError):
+        assert model == name and live.custom_models.get(name).state == "archived"
+        with pytest.raises(endor.ModelNotInProductionError):
             live.system_one(rows[0]["state"], {"dept": DEPT}, model=model)
         ev = live.evaluations.create(name, name).result()  # an inactive model can be evaluated
         assert ev.status == "completed" and ev.model == model
@@ -89,7 +89,7 @@ def test_tiny_training_loop(live: endor.EndorClient) -> None:
             assert live.system_one(rows[0]["state"], {"dept": DEPT}, model=model).model == model
             assert live.custom_models.get(name).loss is not None
         finally:
-            live.custom_models.demote(name)
+            live.custom_models.archive(name)
         live.custom_models.delete(name)
     finally:
         live.datasets.delete(name)

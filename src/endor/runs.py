@@ -4,7 +4,7 @@
     fb = run.forward_backward(datums)                 # gradients accumulate
     opt = run.optim_step(learning_rate=1e-4)          # AdamW step, then zero gradients
     fb.result(); opt.result()                         # submit both, then wait: no idle round trip
-    name = run.save_checkpoint().result()             # "router-2", saved inactive
+    name = run.save_checkpoint().result()             # "router-2", saved to the archive
     client.custom_models.promote(name)                # now client.system_one(model="router-2") answers
 
 In a loop, ``endor.Steps`` sends each step before the last one's results are read (see its docstring).
@@ -225,7 +225,7 @@ class Run:
         ttl_seconds: int | None = None,
         user_metadata: dict[str, Any] | None = None,
     ) -> APIFuture[str]:
-        """Save the adapter as a new custom model, inactive until you promote it (``client.custom_models.promote``).
+        """Save the adapter as a new custom model, archived until you promote it (``client.custom_models.promote``).
         The future resolves to the model's name.
 
         ``name``: the custom model's name; None saves under the run's ``model`` (``custom_models.create(name, ...)``
@@ -238,7 +238,7 @@ class Run:
 
         ``include_optimizer`` also stores the optimizer state, so
         ``runs.create(from_model=..., include_optimizer=True)`` resumes exactly. ``ttl_seconds`` (1 hour to 10 years)
-        deletes the inactive model after that time; None keeps it.
+        deletes the archived model after that time; None keeps it.
         """
         body = self._save_body(name, include_optimizer, ttl_seconds, user_metadata)
         r = self._submit("save_checkpoint", body, kind="save")

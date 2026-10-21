@@ -8,7 +8,7 @@ project = client.projects.get_or_create("tickets", base_model="decider-2b")    #
 res = client.system_one({"body": "charged twice"},
                         {"dept": Choice(criteria={"billing": None, "technical": None}),
                          "urgent": Noul(instructions="Does this need an answer today?")},
-                        model="tickets")                            # the project's live version
+                        model="tickets")                            # the project's production version
 res.choices["dept"].choice, res.nouls["urgent"].noul
 client.corrections.create(res, {"urgent": {"correct": False}})     # it was wrong: the project learns from it
 
@@ -18,7 +18,7 @@ with client.custom_models.create("router-2", base_model="decider-2b", rank=16) a
     for batch in endor.data.batches(endor.data.rows_to_datums(rows), 16):
         steps.add(run.forward_backward(batch), run.optim_step(learning_rate=1e-4))
     steps.wait()
-    run.save_checkpoint().result()                                  # "router-2", inactive
+    run.save_checkpoint().result()                                  # "router-2", in the archive
 client.custom_models.promote("router-2")
 client.system_one(state, questions, model="router-2")
 
@@ -43,9 +43,8 @@ from .errors import (
     InsufficientBalanceError,
     InternalServerError,
     LimitReachedError,
-    LiveModelsFullError,
-    ModelIsLiveError,
-    ModelNotLiveError,
+    ModelInProductionError,
+    ModelNotInProductionError,
     ModelRequiresProjectError,
     NoPreviewError,
     NotFoundError,
@@ -53,6 +52,7 @@ from .errors import (
     OverloadedError,
     PayloadTooLargeError,
     PermissionDeniedError,
+    ProductionFullError,
     RateLimitError,
     ResponseValidationError,
     UnprocessableEntityError,
@@ -180,9 +180,9 @@ __all__ = [
     "NotFoundError",
     "ConflictError",
     "LimitReachedError",
-    "LiveModelsFullError",
-    "ModelNotLiveError",
-    "ModelIsLiveError",
+    "ProductionFullError",
+    "ModelNotInProductionError",
+    "ModelInProductionError",
     "VersionNotCallableError",
     "NoPreviewError",
     "DownloadError",

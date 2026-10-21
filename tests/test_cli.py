@@ -60,13 +60,13 @@ def test_custom_models_datasets_runs(capsys: pytest.CaptureFixture[str], client:
     assert "cli-run" in run(capsys, client, "runs", "list")
     assert run_json(capsys, client, "runs", "show", r.id)["name"] == "cli-run"  # type: ignore[index]
     info = run_json(capsys, client, "custom-models", "info", "v1")
-    assert info["step"] == 0 and info["live"] is False  # type: ignore[index]
+    assert info["step"] == 0 and info["state"] == "archived"  # type: ignore[index]
     assert run_json(capsys, client, "custom-models", "set-ttl", "v1", "7200")["expires_at"]  # type: ignore[index]
     assert run_json(capsys, client, "custom-models", "set-ttl", "v1", "none")["expires_at"] is None  # type: ignore[index]
-    assert run_json(capsys, client, "custom-models", "promote", "v1")["live"] is True  # type: ignore[index]
-    assert [m["name"] for m in run_json(capsys, client, "custom-models", "list", "--live")] == ["v1"]  # type: ignore[union-attr]
-    assert run_json(capsys, client, "custom-models", "list", "--inactive") == []
-    assert run_json(capsys, client, "custom-models", "demote", "v1")["live"] is False  # type: ignore[index]
+    assert run_json(capsys, client, "custom-models", "promote", "v1")["production"] is True  # type: ignore[index]
+    assert [m["name"] for m in run_json(capsys, client, "custom-models", "list", "--production")] == ["v1"]  # type: ignore[union-attr]
+    assert run_json(capsys, client, "custom-models", "list", "--archived") == []
+    assert run_json(capsys, client, "custom-models", "archive", "v1")["production"] is False  # type: ignore[index]
     ev = run_json(capsys, client, "eval", "v1", "train")
     assert ev["status"] == "completed" and ev["model"] == "v1"  # type: ignore[index]
     assert run_json(capsys, client, "eval", "jev-9b", "train")["model"] == "jev-9b"  # type: ignore[index]

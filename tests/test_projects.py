@@ -10,12 +10,12 @@ from endor import (
     ConflictError,
     EndorClient,
     LimitReachedError,
-    LiveModelsFullError,
-    ModelIsLiveError,
-    ModelNotLiveError,
+    ModelInProductionError,
+    ModelNotInProductionError,
     ModelRequiresProjectError,
     NoPreviewError,
     NotFoundError,
+    ProductionFullError,
     UnprocessableEntityError,
     VersionNotCallableError,
 )
@@ -225,20 +225,29 @@ class TestCustomModels:
             assert requests_to(fake, "/save_checkpoint")[-1].body["name"] is None
         assert saved == name
         m = client.custom_models.get(name)
-        assert (m.name, m.base_model, m.live, m.live_at, m.step) == (name, BASE, False, None, 1)
+        assert (m.name, m.base_model, m.production, m.state, m.promoted_at, m.step) == (
+            name,
+            BASE,
+            False,
+            "archived",
+            None,
+            1,
+        )  # every save starts in the archive
         assert m.training_run_id == run.id and m.loss is not None
-        with pytest.raises(ModelNotLiveError) as e:
+        with pytest.raises(ModelNotInProductionError) as e:
             client.system_one("x", Q, model=name)
-        assert isinstance(e.value, ConflictError) and e.value.code == "model_not_live"
-        live = client.custom_models.promote(name)
-        assert live.live and live.live_at is not None
+        assert isinstance(e.value, ConflictError) and e.value.code == "model_not_in_production"
+        prod = client.custom_models.promote(name)
+        assert prod.production and prod.state == "production" and prod.promoted_at is not None
         assert requests_to(fake, f"/custom_models/{name}/promote")[-1].body == {}
         assert client.system_one("x", Q, model=name).model == name
-        assert client.custom_models.promote(name).live  # promoting a live model changes nothing
-        assert not client.custom_models.demote(name).live
-        with pytest.raises(ModelNotLiveError):
+        assert client.custom_models.promote(name).production  # promoting it again changes nothing
+        archived = client.custom_models.archive(name)
+        assert (archived.production, archived.state) == (False, "archived")
+        assert requests_to(fake, f"/custom_models/{name}/demote", "POST")  # the archive route
+        with pytest.raises(ModelNotInProductionError):
             client.system_one("x", Q, model=name)
-        assert not client.custom_models.demote(name).live  # nor demoting an inactive one
+        assert not client.custom_models.archive(name).production  # nor archiving it again
 
     def test_each_save_is_a_new_model(self, client: EndorClient) -> None:
         name = unique("cm")
@@ -255,49 +264,49 @@ class TestCustomModels:
         with pytest.raises(TypeError, match="first argument"):
             client.custom_models.create(name, base_model=BASE, model="x")
 
-    def test_list_puts_live_ones_first(self, client: EndorClient, fake: FakeEndor) -> None:
+    def test_list_puts_production_ones_first(self, client: EndorClient, fake: FakeEndor) -> None:
         a, b, c = (train_one(client, unique(x)) for x in ("a", "b", "c"))
         client.custom_models.promote(a)
         names = [m.name for m in client.custom_models.list()]
         assert names[0] == a and set(names[1:]) == {b, c}
-        assert [m.name for m in client.custom_models.list(live=True)] == [a]
-        assert {m.name for m in client.custom_models.list(live=False)} == {b, c}
-        assert requests_to(fake, "/custom_models", "GET")[-1].params["live"] == "false"
+        assert [m.name for m in client.custom_models.list(production=True)] == [a]
+        assert {m.name for m in client.custom_models.list(production=False)} == {b, c}
+        assert requests_to(fake, "/custom_models", "GET")[-1].params["production"] == "false"
         assert len(client.custom_models.list(limit=2)) == 2
 
-    def test_live_slots_and_replace(self, client: EndorClient, fake: FakeEndor) -> None:
+    def test_production_slots_and_replace(self, client: EndorClient, fake: FakeEndor) -> None:
         names = [train_one(client, unique(f"m{i}")) for i in range(4)]
         for n in names[:3]:
             client.custom_models.promote(n)
-        with pytest.raises(LiveModelsFullError) as e:
+        with pytest.raises(ProductionFullError) as e:
             client.custom_models.promote(names[3])
-        assert isinstance(e.value, LimitReachedError) and e.value.code == "live_models_full"
+        assert isinstance(e.value, LimitReachedError) and e.value.code == "production_full"
         assert all(n in str(e.value) for n in names[:3])
         assert len(requests_to(fake, f"/custom_models/{names[3]}/promote")) == 1  # never retried
         got = client.custom_models.promote(names[3], replace=names[0])
-        assert got.live and requests_to(fake, f"/{names[3]}/promote")[-1].body == {"replace": names[0]}
-        assert not client.custom_models.get(names[0]).live
+        assert got.production and requests_to(fake, f"/{names[3]}/promote")[-1].body == {"replace": names[0]}
+        assert client.custom_models.get(names[0]).state == "archived"
         with pytest.raises(NotFoundError):
-            client.custom_models.promote(names[0], replace=names[0])  # not a live model
+            client.custom_models.promote(names[0], replace=names[0])  # not in production
 
-    def test_ttl_and_delete_refuse_a_live_model(self, client: EndorClient) -> None:
+    def test_ttl_and_delete_refuse_a_production_model(self, client: EndorClient) -> None:
         name = train_one(client, unique("ttl"))
         assert client.custom_models.set_ttl(name, 3600).expires_at is not None
         assert client.custom_models.set_ttl(name, None).expires_at is None
         client.custom_models.promote(name)
-        with pytest.raises(ModelIsLiveError):
+        with pytest.raises(ModelInProductionError):
             client.custom_models.set_ttl(name, 3600)
-        with pytest.raises(ModelIsLiveError) as e:
+        with pytest.raises(ModelInProductionError) as e:
             client.custom_models.delete(name)
-        assert e.value.code == "model_is_live"
-        client.custom_models.demote(name)
+        assert e.value.code == "model_in_production"
+        client.custom_models.archive(name)
         client.custom_models.delete(name)
         with pytest.raises(NotFoundError):
             client.custom_models.get(name)
 
     def test_models_list_names_what_decisions_can_call(self, client: EndorClient, fake: FakeEndor) -> None:
         p = client.projects.create(unique("cat"), base_model=BASE)
-        live, inactive = train_one(client, unique("live")), train_one(client, unique("idle"))
+        live, inactive = train_one(client, unique("prod")), train_one(client, unique("idle"))
         client.custom_models.promote(live)
         got = {m.name: m.kind for m in client.models.list().models}
         assert got == {p.name: "project", live: "custom"}  # no preview: the project has no version that isn't live

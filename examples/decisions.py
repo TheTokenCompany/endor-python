@@ -45,6 +45,7 @@ if info.preview:
     print(client.system_one(state, questions, model=project.preview_ref).model)  # "tickets:preview" answers
     project.promote(info.preview)  # in production: "tickets" answers with it now
 
-# Every name a decision can send: your projects, their previews (when they have one) and your live custom models.
+# Every name a decision can send: your projects, their previews (when they have one) and your custom models in
+# production.
 for m in client.models.list().models:
     print(m.name, m.kind)

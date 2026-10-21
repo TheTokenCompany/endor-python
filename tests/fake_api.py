@@ -2,9 +2,10 @@
 
 It implements the public contract the SDK relies on: bearer auth, the error envelope, strict sequence numbers with
 idempotent retries, ``Idempotency-Key`` on creates, long-polled futures (optionally pending for N polls), the
-decision answer formulas, the model references (``<project>``, ``<project>:preview``, a live custom model's name),
-continuous learning projects with a live version and a preview (the newest version while it isn't live), custom models
-with live slots, the count limits (409 ``limit_reached``, ``live_models_full``), ``no_gradients``, 402 for a blocked
+decision answer formulas, the model references (``<project>``, ``<project>:preview``, a production custom model's
+name), continuous learning projects with a production version and a preview (the newest version while it isn't in
+production), custom models in production or archived, the count limits (409 ``limit_reached``, ``production_full``),
+``no_gradients``, 402 for a blocked
 org, and fault injection for retry tests.
 It is a test double, not a reference server.
 """
@@ -38,7 +39,7 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
 LIMITS: dict[str, float] = {
     "max_projects_per_org": 5,
-    "max_live_models_per_org": 3,
+    "max_production_models_per_org": 3,
     "max_custom_models_per_org": 500,
     "max_datasets_per_org": 100,
     "max_api_keys_per_org": 20,
@@ -378,9 +379,12 @@ class FakeEndor:
         return {k: v for k, v in r.items() if not k.startswith("_")}
 
     def model_view(self, m: dict) -> dict:
+        """A custom model as the API shows it (`live_at` is the fake's own field, as in the API's table)."""
         return {
-            **{k: v for k, v in m.items() if not k.startswith("_")},
-            "live": m["live_at"] is not None,
+            **{k: v for k, v in m.items() if not k.startswith("_") and k != "live_at"},
+            "production": m["live_at"] is not None,
+            "state": "production" if m["live_at"] is not None else "archived",
+            "promoted_at": m["live_at"],
             "loss": self.loss_at(m),
         }
 
@@ -939,7 +943,7 @@ class FakeEndor:
         if cm is None or not cm["_ready"]:
             raise HTTPError(404, "unknown_model", f"No model {model!r}.", "model")
         if cm["live_at"] is None:
-            raise HTTPError(409, "model_not_live", f"{model} isn't live: promote it first.", "model")
+            raise HTTPError(409, "model_not_in_production", f"{model} is archived: promote it first.", "model")
         return cm["base_model"], model, None
 
     def systemone(self, body: dict) -> dict:
@@ -1419,10 +1423,10 @@ class FakeEndor:
     def custom_models_route(self, m: str, tail: list[str], body: Any, params: dict) -> tuple[int, Any]:
         if not tail and m == "GET":
             mine = [x for x in self.models.values() if x["_ready"]]
-            if params.get("live") is not None:
-                want = params["live"] == "true"
+            if params.get("production") is not None:
+                want = params["production"] == "true"
                 mine = [x for x in mine if (x["live_at"] is not None) == want]
-            live = sorted((x for x in mine if x["live_at"]), key=lambda x: x["live_at"], reverse=True)
+            live = sorted((x for x in mine if x["live_at"]), key=lambda x: x["live_at"])  # in the order promoted
             rest = sorted((x for x in mine if not x["live_at"]), key=lambda x: x["created_at"], reverse=True)
             return 200, self.page([self.model_view(x) for x in live + rest], params)
         mod = self.custom_model(tail[0])
@@ -1432,14 +1436,14 @@ class FakeEndor:
             if "ttl_seconds" in body:
                 ttl = body["ttl_seconds"]
                 if ttl is not None and mod["live_at"] is not None:
-                    raise HTTPError(409, "model_is_live", f"{mod['name']} is live: live models never expire.")
+                    raise HTTPError(409, "model_in_production", f"{mod['name']} is in production: it never expires.")
                 if ttl is not None and not 3600 <= ttl <= 10 * 365 * 86400:
                     raise HTTPError(422, "invalid_input", "ttl 1h..10y", "ttl_seconds")
                 mod["expires_at"] = (now() + timedelta(seconds=ttl)).isoformat() if ttl else None
             return 200, self.model_view(mod)
         if len(tail) == 1 and m == "DELETE":
             if mod["live_at"] is not None:
-                raise HTTPError(409, "model_is_live", f"{mod['name']} is live: demote it first.")
+                raise HTTPError(409, "model_in_production", f"{mod['name']} is in production: archive it first.")
             del self.models[mod["name"]]
             return 204, None
         if tail[1:] == ["promote"] and m == "POST":
@@ -1450,14 +1454,14 @@ class FakeEndor:
             if replace is not None:
                 r = self.models.get(replace)
                 if r is None or r["live_at"] is None:
-                    raise HTTPError(404, "not_found", f"{replace} isn't a live custom model.", "replace")
+                    raise HTTPError(404, "not_found", f"{replace} isn't a custom model in production.", "replace")
                 r["live_at"] = None
                 live.remove(r)
-            cap = int(LIMITS["max_live_models_per_org"])
+            cap = int(LIMITS["max_production_models_per_org"])
             if len(live) >= cap:
                 names = ", ".join(x["name"] for x in live)
                 raise HTTPError(
-                    409, "live_models_full", f"Every live slot is taken ({cap}): {names}. Send replace with one."
+                    409, "production_full", f"Every production slot is taken ({cap}): {names}. Send replace with one."
                 )
             mod["live_at"], mod["expires_at"] = now().isoformat(), None
             return 200, self.model_view(mod)

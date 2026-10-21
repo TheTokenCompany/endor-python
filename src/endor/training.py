@@ -4,10 +4,10 @@
     with client.runs.create("decider-2b", model="router-2") as run:    # or client.custom_models.create("router-2", ...)
         ...                                                             # forward_backward, optim_step
         run.save_checkpoint().result()                                  # saved as the custom model "router-2"
-    client.evaluations.create("router-2", "heldout").result()          # live or not
+    client.evaluations.create("router-2", "heldout").result()          # in production or archived
     client.custom_models.promote("router-2")                            # now model="router-2" answers
 
-A save makes a custom model, which starts inactive: it can be downloaded and evaluated, and decisions can call it once
+A save makes a custom model, which starts archived: it can be downloaded and evaluated, and decisions can call it once
 it is promoted (``client.custom_models``).
 """
 
@@ -209,7 +209,8 @@ class Runs:
 
 
 class Evaluations:
-    """``client.evaluations``: how good a custom model (live or not) or a base model is on decision rows."""
+    """``client.evaluations``: how good a custom model (in production or archived) or a base model is on decision
+    rows."""
 
     def __init__(self, transport: Transport, images: Images | None = None) -> None:
         self._t = transport
@@ -225,7 +226,8 @@ class Evaluations:
     ) -> APIFuture[Evaluation]:
         """Score a model server-side on a dataset, or on ``rows`` sent with the call (decision rows in any shape
         ``client.datasets.upload`` takes, at most 50,000 and 32 MB; nothing is stored as a dataset). One of the two.
-        ``model`` is a custom model's name (live or not) or a base model id (the untuned base, as a baseline).
+        ``model`` is a custom model's name (in production or archived) or a base model id (the untuned base, as a
+        baseline).
 
         A row with labels is scored on its labeled questions; a row without labels is answered on every question and
         not scored (``client.predict`` returns those answers). The result's ``results`` has ``n`` (the questions

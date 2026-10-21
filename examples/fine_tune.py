@@ -21,7 +21,7 @@ if result.base_metrics:
 print("held-out accuracy, tuned:", round(result.final_metrics["accuracy"], 3))
 
 client = endor.EndorClient()
-client.custom_models.promote(result.model)  # saved inactive: live now, so decisions can call it
+client.custom_models.promote(result.model)  # in production now, so decisions can call it
 row = rows[0]
 res = client.system_one(row.state, row.questions, model=result.model)  # "router-1"
 print(res.answers)

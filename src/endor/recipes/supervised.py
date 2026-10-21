@@ -1,7 +1,7 @@
 """Supervised fine-tuning with held-out evaluation: the default way to train a custom model on your data.
 
     result = endor.recipes.supervised.train(SupervisedConfig(model_name="router-2"), rows)
-    client.custom_models.promote(result.model)               # live: decisions can call it
+    client.custom_models.promote(result.model)               # production: decisions can call it
     client.system_one(state, questions, model=result.model)
 
 What it does:
@@ -18,7 +18,7 @@ What it does:
    progress line is printed.
 4. Every ``eval_every`` steps and at the end, scores the held-out datums with the run's current adapter and records
    accuracy, log loss, Brier, ECE and selective accuracy on the run's page.
-5. Saves the final adapter as the custom model ``model_name`` (inactive until you promote it) and closes the run
+5. Saves the final adapter as the custom model ``model_name`` (archived until you promote it) and closes the run
    (also when anything fails).
 """
 
@@ -91,7 +91,8 @@ class SupervisedConfig:
 class SupervisedResult:
     run_id: str
     model: str
-    """The custom model's name, saved inactive: ``client.custom_models.promote(result.model)`` makes it live."""
+    """The custom model's name, saved to the archive: ``client.custom_models.promote(result.model)`` puts it in
+    production."""
     base_metrics: dict[str, Any] | None
     """Held-out metrics of the untuned base, or None when ``eval_base`` was off."""
     history: list[dict[str, Any]] = field(default_factory=list)
@@ -147,8 +148,8 @@ def evaluate_run(run: Run, datums: Sequence[Datum]) -> dict[str, Any]:
 
 
 def evaluate_model(client: EndorClient, model: str, rows: Sequence[Any]) -> dict[str, Any]:
-    """Held-out metrics for a custom model (live or not) or a base model: one server-side prediction of the rows
-    (``client.predict``), scored on their labeled questions."""
+    """Held-out metrics for a custom model (in production or archived) or a base model: one server-side prediction of
+    the rows (``client.predict``), scored on their labeled questions."""
     labeled = [r for r in map(D.to_row, rows) if r.labels]
     if not labeled:
         return decision_metrics([], [])

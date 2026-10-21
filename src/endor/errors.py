@@ -4,7 +4,8 @@
       APIError (status, code, param, message, body, headers, endpoint, request_id)
         BadRequestError 400 · AuthenticationError 401 · InsufficientBalanceError 402 · PermissionDeniedError 403
         NotFoundError 404 (NoPreviewError, VersionNotCallableError)
-        ConflictError 409 (LimitReachedError > LiveModelsFullError, ModelNotLiveError, ModelIsLiveError)
+        ConflictError 409 (LimitReachedError > ProductionFullError, ModelNotInProductionError,
+            ModelInProductionError)
         PayloadTooLargeError 413
         UnprocessableEntityError 422 (ModelRequiresProjectError)
         RateLimitError 429 (retry_after) · OverloadedError 529 · InternalServerError 5xx
@@ -39,9 +40,9 @@ __all__ = [
     "NotFoundError",
     "ConflictError",
     "LimitReachedError",
-    "LiveModelsFullError",
-    "ModelNotLiveError",
-    "ModelIsLiveError",
+    "ProductionFullError",
+    "ModelNotInProductionError",
+    "ModelInProductionError",
     "VersionNotCallableError",
     "NoPreviewError",
     "PayloadTooLargeError",
@@ -199,20 +200,20 @@ class LimitReachedError(ConflictError):
     help, so it is never retried."""
 
 
-class LiveModelsFullError(LimitReachedError):
-    """409 ``live_models_full``: every live custom model slot is taken (``max_live_models_per_org`` in
-    ``client.whoami().limits``). Promote with ``replace=`` naming the live model to demote in the same step, or demote
-    one first. The message names the live models."""
+class ProductionFullError(LimitReachedError):
+    """409 ``production_full``: every production slot for custom models is taken (``max_production_models_per_org`` in
+    ``client.whoami().limits``). Promote with ``replace=`` naming the model to move to the archive in the same step, or
+    archive one first. The message names the models in production."""
 
 
-class ModelNotLiveError(ConflictError):
-    """409 ``model_not_live``: a decision named a custom model that isn't live. Promote it first
-    (``client.custom_models.promote(name)``); inactive models can still be downloaded and evaluated."""
+class ModelNotInProductionError(ConflictError):
+    """409 ``model_not_in_production``: a decision named an archived custom model. Promote it first
+    (``client.custom_models.promote(name)``); archived models can still be downloaded, evaluated and trained from."""
 
 
-class ModelIsLiveError(ConflictError):
-    """409 ``model_is_live``: the call doesn't apply to a live custom model (deleting it, or giving it a TTL: live
-    models never expire). Demote it first (``client.custom_models.demote(name)``)."""
+class ModelInProductionError(ConflictError):
+    """409 ``model_in_production``: the call doesn't apply to a custom model in production (deleting it, or giving it
+    a TTL: models in production never expire). Archive it first (``client.custom_models.archive(name)``)."""
 
 
 class PayloadTooLargeError(APIError):
@@ -225,7 +226,7 @@ class UnprocessableEntityError(APIError):
 
 class ModelRequiresProjectError(UnprocessableEntityError):
     """422 ``model_requires_project``: ``model`` is a bare base model id. Decisions name a continuous learning project
-    (``"<project>"``, ``"<project>:preview"``) or a live custom model by its name: create a project on the base
+    (``"<project>"``, ``"<project>:preview"``) or a custom model in production by its name: create a project on the base
     (``client.projects.create(name, base_model=...)``) to decide with it."""
 
 
@@ -327,9 +328,9 @@ _STATUS_ERRORS: dict[int, type[APIError]] = {
 _CODE_ERRORS: dict[str, type[APIError]] = {
     "insufficient_balance": InsufficientBalanceError,
     "limit_reached": LimitReachedError,
-    "live_models_full": LiveModelsFullError,
-    "model_not_live": ModelNotLiveError,
-    "model_is_live": ModelIsLiveError,
+    "production_full": ProductionFullError,
+    "model_not_in_production": ModelNotInProductionError,
+    "model_in_production": ModelInProductionError,
     "version_not_callable": VersionNotCallableError,
     "no_preview": NoPreviewError,
     "model_requires_project": ModelRequiresProjectError,

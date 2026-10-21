@@ -39,14 +39,14 @@ with client.custom_models.create("router-2", base_model="decider-2b", rank=16, t
     for out, step in steps.wait():  # the last step
         print(f"step {step.step}: loss {out.loss:.3f}")
 
-    model = run.save_checkpoint(include_optimizer=True).result()  # "router-2", saved inactive
+    model = run.save_checkpoint(include_optimizer=True).result()  # "router-2", saved to the archive
 
 print("saved", model)
-evaluation = client.evaluations.create(model, "heldout", run_id=run.id).result()  # server-side scoring, not live yet
+evaluation = client.evaluations.create(model, "heldout", run_id=run.id).result()  # server-side scoring, still archived
 print(evaluation.results)
 print(client.evaluations.create("decider-2b", "heldout").result().results)  # the untuned base
 
-client.custom_models.promote(model)  # live: client.system_one(..., model="router-2") answers now
+client.custom_models.promote(model)  # production: client.system_one(..., model="router-2") answers now
 
 # Resume exactly where that run stopped (a new run, so a new GPU; it saves under a new name; close it when done):
 with client.custom_models.create("router-3", from_model=model, include_optimizer=True) as resumed:

@@ -10,8 +10,8 @@
     client.user_report("what you did, what happened, what you expected", kind="bug")      # tell the Endor team
 
 ``model`` is ``"<project>"`` (a continuous learning project's production version), ``"<project>:preview"`` (its
-newest version, while that isn't in production) or a live custom model's name (``"router-2"``). A bare base model id
-is refused (``ModelRequiresProjectError``).
+newest version, while that isn't in production) or the name of a custom model in production (``"router-2"``). A bare
+base model id is refused (``ModelRequiresProjectError``).
 
 Environment: ``ENDOR_API_KEY``, ``ENDOR_BASE_URL``, ``ENDOR_DEFAULT_MODEL``, ``ENDOR_LOG_LEVEL``,
 ``ENDOR_REPORT_LATENCY``.
@@ -158,7 +158,7 @@ class EndorClient:
         self.evaluations = Evaluations(self._t, self.images)
         """``client.evaluations``: how good a custom model or a base model is on decision rows."""
         self.custom_models = CustomModels(self._t, self.runs)
-        """``client.custom_models``: models you train yourself (list, create, promote, demote, download)."""
+        """``client.custom_models``: models you train yourself (list, create, promote, archive, download)."""
         self.corrections = Corrections(self._t)
         """``client.corrections``: whether past decisions were right and, if not, the right answers (``create``,
         ``batch``, ``get``, ``delete``). Continuous learning projects learn from them."""
@@ -217,9 +217,8 @@ class EndorClient:
                 it may hold ``endor.Image`` objects (as the state, a list item or an object value).
             questions: 1 to 64 named questions (``Noul``, ``Choice``, ``Score`` or dicts in the same shape).
             model: ``"<project>"`` (a continuous learning project's production version, its base model until one is
-                promoted), ``"<project>:preview"`` (its newest version, while that isn't in production) or a live
-                custom model's name.
-                Defaults to the client's model.
+                promoted), ``"<project>:preview"`` (its newest version, while that isn't in production) or the name
+                of a custom model in production. Defaults to the client's model.
             retry, timeout: Overrides for this call.
             extra_headers: Extra request headers.
             extra_body: Extra top-level request fields, merged last.
@@ -235,7 +234,7 @@ class EndorClient:
             EndorError: No ``model`` was given and the client has no default model.
             APIError: ``NotFoundError`` for an unknown model (``NoPreviewError`` for ``"<project>:preview"`` when
                 the project has no preview, ``VersionNotCallableError`` for an older version, ``"<project>:v3"``),
-                ``ModelNotLiveError`` for an inactive custom model, ``ModelRequiresProjectError``
+                ``ModelNotInProductionError`` for an archived custom model, ``ModelRequiresProjectError``
                 for a bare base model id, ``UnprocessableEntityError`` naming a bad question, ``RateLimitError`` and
                 ``OverloadedError`` when told to wait.
         """
@@ -292,7 +291,7 @@ class EndorClient:
         model = model or self.default_model
         if not model and not (extra_body and extra_body.get("model")):
             raise EndorError(
-                'no model: pass model="<project>", "<project>:preview" or a live custom model\'s name, '
+                'no model: pass model="<project>", "<project>:preview" or a custom model in production\'s name, '
                 f"or set a default with EndorClient(model=...) or {C.DEFAULT_MODEL_ENV}"
             )
         body: dict[str, Any] = {
@@ -316,7 +315,7 @@ class EndorClient:
         a backfill) instead of a ``system_one`` call per row; billed as decisions, the same per row.
 
         Args:
-            model: A custom model's name (live or not) or a base model id.
+            model: A custom model's name (in production or archived) or a base model id.
             rows: Decision rows in any shape ``client.datasets.upload`` takes (``{"state", "questions"}``; labels
                 are ignored), at most 50,000 and 32 MB per call.
             progress: Print a progress line to stderr every 10 s while the evaluation runs
@@ -477,9 +476,9 @@ class Models:
         extra_headers: Mapping[str, str] | None = None,
     ) -> ListModelsResponse:
         """Every name you can pass as ``model``: for each continuous learning project ``"<project>"`` (its production
-        version) and, while it has one, ``"<project>:preview"``, then every live custom model's name. ``.kind`` is
-        ``project`` or ``custom``, and ``.environment`` ``production`` or ``preview`` for a project's names. The base
-        model catalog is ``client.base_models()``."""
+        version) and, while it has one, ``"<project>:preview"``, then the name of every custom model in production.
+        ``.kind`` is ``project`` or ``custom``, and ``.environment`` ``production`` or ``preview`` for a project's
+        names. The base model catalog is ``client.base_models()``."""
         raw = self._t.request(
             "GET",
             "/v1/models",

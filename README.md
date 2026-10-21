@@ -42,8 +42,8 @@ API keys belong to an organization (`edk_...`, created in the dashboard); everyt
 ## Continuous learning projects
 
 Create a project on a base model, then send it decisions. It answers at once with the base model and learns from its
-own decisions and your corrections, making new versions that you promote (or that go live by themselves with
-auto-promote on):
+own decisions and your corrections, making new versions that you promote to production (or that go there by
+themselves with auto-promote on):
 
 ```python
 import endor
@@ -79,7 +79,7 @@ every new version goes to production as soon as it is ready instead:
 |---|---|
 | `"tickets"` (`project.ref`) | the production version (`project.production`); the base model until you promote one |
 | `"tickets:preview"` (`project.preview_ref`) | the preview (`project.preview`), the newest version while it isn't in production. Without one (always while auto-promote is on) it raises `NoPreviewError`, and `project.preview_ref` is None |
-| `"router-2"` | a live custom model (see "Advanced: custom models") |
+| `"router-2"` | a custom model in production (see "Advanced: custom models") |
 
 Promote any version yourself, for example to roll back:
 
@@ -138,7 +138,7 @@ client.corrections.create(res, {
 
 ## Decisions
 
-`model` is `"<project>"`, `"<project>:preview"` (while the project has a preview) or a live custom model's name. A bare base model id such as
+`model` is `"<project>"`, `"<project>:preview"` (while the project has a preview) or the name of a custom model in production. A bare base model id such as
 `"decider-2b"` raises `ModelRequiresProjectError` (422 `model_requires_project`): create a project on it. There is no
 default model: pass `model=` or set one with `EndorClient(model="tickets")` or `ENDOR_DEFAULT_MODEL`, else
 `system_one` raises `EndorError` before sending anything.
@@ -186,14 +186,14 @@ approved these calls raise `PermissionDeniedError` (403 `image_training_not_enab
 says), and the message says how to ask.
 
 **The catalog.** `client.models.list()` returns every name you can pass as `model` (`GET /v1/models`): for each
-project `"<project>"` and, while it has a preview, `"<project>:preview"`, then every live custom model (`.kind` is
+project `"<project>"` and, while it has a preview, `"<project>:preview"`, then every custom model in production (`.kind` is
 `project` or `custom`; `.environment` is `production` or `preview` for a project's names). `client.base_models()` returns the base models (`GET /v1/base_models`) with their option limits,
 `modalities`, `hf_repo`, `contract` and prices (`price_per_mtok_decide` for custom models,
 `price_per_mtok_decide_continuous_learning` for projects, `price_per_gpu_hour` for training).
 
 **Many rows at once.** `client.predict(model, rows)` returns the answers to every question of every row, in the rows'
 order, from one server-side evaluation of them: nothing to upload, nothing scored, billed as the same decisions.
-`model` is a custom model's name (live or not) or a base model id. Rows are `{"state", "questions"}` (any shape
+`model` is a custom model's name (in production or archived) or a base model id. Rows are `{"state", "questions"}` (any shape
 `client.datasets.upload` takes; labels are ignored), at most 50,000 and 32 MB per call. While it runs it prints a
 progress line every 10 seconds (`progress=False` turns it off); `timeout=` bounds the wait.
 
@@ -238,25 +238,29 @@ row label, and is refused with a ValueError that says so.
 ## Advanced: custom models
 
 A custom model is one you train yourself with the SDK, on a base model, from your own labeled data. Each save is a new
-model with its own name, unique in the organization together with your projects. A saved model starts **inactive**:
-it can be downloaded and evaluated, and decisions can call it by its name once you **promote** it to live:
+model with its own name, unique in the organization together with your projects. A saved model starts in the
+**archive**: it can be downloaded, evaluated and trained from, and decisions can call it by its name once you
+**promote** it to **production**:
 
 ```python
 with client.custom_models.create("router-2", base_model="decider-2b") as run:   # a run that saves as "router-2"
     ...                                          # forward_backward, optim_step (below), or use the recipe
-    run.save_checkpoint().result()               # "router-2", inactive
-client.custom_models.promote("router-2")         # live: model="router-2" answers
+    run.save_checkpoint().result()               # "router-2", in the archive
+client.custom_models.promote("router-2")         # production: model="router-2" answers
 client.system_one(state, questions, model="router-2")
+client.custom_models.archive("router-2")         # back to the archive: decisions refuse it
 ```
 
-- `client.custom_models.list()` lists your custom models, the live ones first (`live=True` or `live=False` keeps one
-  of the two); `get(name)` has `live`, `live_at`, `base_model`, `step`, `loss` and `accuracy` at save time.
-- An organization has a few live models at once (`max_live_models_per_org` in `client.whoami().limits`). When every
-  slot is taken, `promote` raises `LiveModelsFullError` naming the live models; `promote(name, replace="router-1")`
-  demotes that one in the same step. `demote(name)` frees a slot. Ask us for more live models.
-- Decisions refuse an inactive model with `ModelNotLiveError` (409 `model_not_live`). Live models never expire:
-  `set_ttl(name, seconds)` gives an inactive model a lifetime, and `delete(name)` removes an inactive one
-  (`ModelIsLiveError` for a live one: demote it first).
+- `client.custom_models.list()` lists your custom models, the ones in production first (`production=True` or
+  `production=False` keeps one of the two); `get(name)` has `state` (`"production"` or `"archived"`), `production`,
+  `promoted_at`, `base_model`, `step`, `loss` and `accuracy` at save time.
+- An organization has a few models in production at once (`max_production_models_per_org` in
+  `client.whoami().limits`). When every slot is taken, `promote` raises `ProductionFullError` naming the models in
+  production; `promote(name, replace="router-1")` archives that one in the same step. `archive(name)` frees a slot.
+  Ask us for more production slots.
+- Decisions refuse an archived model with `ModelNotInProductionError` (409 `model_not_in_production`). Models in
+  production never expire: `set_ttl(name, seconds)` gives an archived model a lifetime, and `delete(name)` removes an
+  archived one (`ModelInProductionError` for one in production: archive it first).
 - Datasets (`client.datasets`), runs (`client.runs`) and evaluations (`client.evaluations`) belong to the
   organization. `client.runs.create(base_model, model="router-2", ...)` is the same as
   `client.custom_models.create("router-2", base_model, ...)`.
@@ -265,7 +269,7 @@ client.system_one(state, questions, model="router-2")
 client.datasets.upload("train", endor.data.load_rows("train.jsonl"))     # rows: see "Data format"
 client.datasets.upload("heldout", endor.data.load_rows("heldout.jsonl"))
 client.evaluations.create("decider-2b", "heldout").result()              # the untuned base, as a baseline
-client.evaluations.create("router-2", "heldout").result()                # a custom model, live or not
+client.evaluations.create("router-2", "heldout").result()                # a custom model, in production or not
 client.evaluations.create("router-2", rows=more_rows).result()          # or rows sent with the call, no dataset
 ```
 
@@ -288,13 +292,13 @@ cfg = SupervisedConfig(model_name="router-2")   # base_model="decider-2b" by def
 result = supervised.train(cfg, endor.data.load_rows("train.jsonl"))
 
 result.base_metrics["accuracy"], result.final_metrics["accuracy"]   # held-out: the untuned base, then yours
-client.custom_models.promote(result.model)                          # live
+client.custom_models.promote(result.model)                          # to production
 client.system_one(state, questions, model=result.model)             # "router-2"
 ```
 
 The recipe holds out 10% of the rows, scores the untuned base model on them, trains one epoch (learning rate `1e-4`
 with warmup then linear decay, batches of 16), scores the held-out rows during and after training, and saves the
-final adapter as the custom model `model_name`, inactive. Every number appears on the run's dashboard page.
+final adapter as the custom model `model_name`, in the archive. Every number appears on the run's dashboard page.
 `SupervisedConfig` has the knobs: base model, rank, learning rate and schedule, batch size, epochs, loss, how often to
 evaluate. The recipe sets the run's `total_steps` from the data size and epochs, so the dashboard shows a progress bar
 with an ETA, and it prints a progress line (`step 37/120 (31%) · loss 0.4120 · ~3 min left`; `progress=False` turns it
@@ -320,7 +324,7 @@ Add rows for those options, or drop them from the question.
 - **25 open runs per org.** Every run that isn't closed counts, idle ones included. A 26th `runs.create` raises
   `LimitReachedError` (409, code `limit_reached`), whose message lists the open runs; close one (`run.close()` or
   `endor runs close RUN_ID`). It is not retried.
-- **Other limits.** Projects, live custom models and API keys also have limits (`LimitReachedError` once reached).
+- **Other limits.** Projects, custom models (and those in production), datasets and API keys also have limits (`LimitReachedError` once reached).
   `client.whoami().limits` lists every limit with its value.
 - **Close your runs.** Use `with client.runs.create(...) as run:` (or `async with`): the run is closed when the block
   ends, also on errors. `runs.create(wait=True)` closes the run if you interrupt it while it provisions, and the
@@ -350,7 +354,7 @@ with client.custom_models.create("router-2", base_model="decider-2b", rank=16) a
     scored = run.forward(heldout).result()          # option probabilities with the current adapter
     metrics = endor.metrics.decision_metrics(scored.probabilities, [d.target for d in heldout])
     run.log({"heldout/accuracy": metrics["accuracy"]})   # at the run's current step
-    model = run.save_checkpoint(include_optimizer=True).result()   # "router-2", inactive
+    model = run.save_checkpoint(include_optimizer=True).result()   # "router-2", in the archive
 
 resumed = client.custom_models.create("router-3", from_model="router-2", include_optimizer=True)  # continue exactly
 ```
@@ -421,7 +425,7 @@ result = distill.distill(cfg, unlabeled_rows, eval_rows=gold_rows)
 
 ### Download a trained model
 
-A custom model (live or not) or a project's version is a LoRA adapter (PEFT) for its base model. Download its files
+A custom model (in production or archived) or a project's version is a LoRA adapter (PEFT) for its base model. Download its files
 to run it yourself:
 
 ```python
@@ -442,14 +446,14 @@ Every API error is an `endor.APIError` subclass named after its status (`NotFoun
 `invalid_datum`, `seq_conflict`, ...), the offending `param` when there is one, and the `request_id`.
 `InsufficientBalanceError` (402, `insufficient_balance`) means your org's balance is used up: add credit in the
 dashboard. A few codes have their own subclass: `LimitReachedError` (409 `limit_reached`) and its
-`LiveModelsFullError` (409 `live_models_full`), `ModelNotLiveError` (409 `model_not_live`) and `ModelIsLiveError`
-(409 `model_is_live`), all `ConflictError`s; `NoPreviewError` (404 `no_preview`) and `VersionNotCallableError`
+`ProductionFullError` (409 `production_full`), `ModelNotInProductionError` (409 `model_not_in_production`) and
+`ModelInProductionError` (409 `model_in_production`), all `ConflictError`s; `NoPreviewError` (404 `no_preview`) and `VersionNotCallableError`
 (404 `version_not_callable`), both `NotFoundError`s; and `ModelRequiresProjectError` (422 `model_requires_project`), an `UnprocessableEntityError`. A training operation that fails on the trainer raises `OperationFailedError` from `.result()`, with codes
 such as `oom`, `no_gradients` or `trainer_lost`. Connection problems raise `APIConnectionError` and
 `APITimeoutError`.
 
 Requests that fail with a connection error, a timeout, a 408, a 429 or a 5xx are retried with exponential backoff
-and `Retry-After`, except `limit_reached`, `live_models_full` and `insufficient_balance`, which waiting doesn't
+and `Retry-After`, except `limit_reached`, `production_full` and `insufficient_balance`, which waiting doesn't
 fix. Configure it with
 `RetryPolicy`:
 
@@ -536,7 +540,7 @@ endor whoami
 endor base-models
 endor projects list | create NAME --base-model BASE | delete NAME
 endor projects versions NAME | promote NAME VERSION | auto-promote NAME on|off
-endor custom-models list [--live | --inactive] | info NAME | promote NAME [--replace LIVE] | demote NAME
+endor custom-models list [--production | --archived] | info NAME | promote NAME [--replace NAME] | archive NAME
 endor custom-models download NAME [-o DIR] [--include-optimizer] | set-ttl NAME SECONDS|none | delete NAME
 endor datasets list | upload NAME FILE | delete NAME
 endor runs list | show RUN_ID | close RUN_ID
@@ -561,7 +565,7 @@ decisions; a custom model's decisions have no project.
 | `client.projects` | `create(name, base_model, description=None)`, `get(name)`, `get_or_create(name, base_model, description=None)`, `list(limit=None, offset=0)` (all pages) |
 | `Project` | `.name`, `.info_`, `.ref` (`"<project>"`), `.preview_ref` (`"<project>:preview"`, or None without a preview), `.production`, `.preview`, `info()`, `learning()` → `Learning`, `versions()` → `list[VersionInfo]`, `promote(version)`, `set_auto_promote(on)`, `download(version, path, include_optimizer=False)`, `update(*, description)`, `delete()` |
 | `client.corrections` | `create(request_id, questions, *, comment=None)` → `CorrectionInfo`, `batch(items)` → `list[CorrectionInfo]`, `get(request_id)`, `delete(request_id)`, each with an `_async` variant; `request_id` is a `SystemOneResponse` or its id |
-| `client.custom_models` | `list(live=None, limit=None, offset=0)` → `list[CustomModelInfo]` (live first), `get(name)`, `create(name, base_model=None, *, run_name=None, **run_options)` → `Run`, `promote(name, replace=None)`, `demote(name)`, `set_ttl(name, ttl_seconds)`, `download(name, path, include_optimizer=False)`, `delete(name)` |
+| `client.custom_models` | `list(production=None, limit=None, offset=0)` → `list[CustomModelInfo]` (production first), `get(name)`, `create(name, base_model=None, *, run_name=None, **run_options)` → `Run`, `promote(name, replace=None)`, `archive(name)`, `set_ttl(name, ttl_seconds)`, `download(name, path, include_optimizer=False)`, `delete(name)` |
 | `client.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
 | `client.runs` | `create(base_model=None, *, model, rank, alpha, seed, train_attn, train_mlp, train_readout, from_model, include_optimizer, name, tags, config, user_metadata, total_steps, wandb, wait)` → `Run`, `get(run_id)`, `list(tag=None, limit=None, offset=0)` |
 | `client.evaluations` | `create(model, dataset=None, run_id=None, *, rows=None)` → `APIFuture[Evaluation]`, `get(evaluation_id)`, `list(run_id=None, model=None)` |
@@ -573,7 +577,7 @@ decisions; a custom model's decisions have no project.
 | `endor.recipes.supervised` | `SupervisedConfig`, `SupervisedResult`, `train(cfg, rows, eval_rows=None, client=None)`, `evaluate_run(run, datums)`, `evaluate_model(client, model, rows)`, `lr_at(cfg, step, total)` |
 | `endor.recipes.distill` | `Teacher` (protocol), `DistillConfig(supervised, teacher, budget, seed)`, `label_with_teacher(rows, cfg)`, `distill(cfg, unlabeled_rows, eval_rows, client=None)` |
 | Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `CorrectionInfo`, `QuestionCorrectionInfo`, `QuestionCorrection`, `CorrectionAnswer`; `ProjectInfo`, `VersionInfo`, `Learning`, `Training`, `Drift`, `CustomModelInfo`, `RunInfo`, `LoraInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `DownloadedFile`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
-| Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError` (`NoPreviewError`, `VersionNotCallableError`), `ConflictError` (`LimitReachedError` > `LiveModelsFullError`, `ModelNotLiveError`, `ModelIsLiveError`), `PayloadTooLargeError`, `UnprocessableEntityError` (`ModelRequiresProjectError`), `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
+| Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError` (`NoPreviewError`, `VersionNotCallableError`), `ConflictError` (`LimitReachedError` > `ProductionFullError`, `ModelNotInProductionError`, `ModelInProductionError`), `PayloadTooLargeError`, `UnprocessableEntityError` (`ModelRequiresProjectError`), `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
 
 Every public member has a docstring with the details.
 

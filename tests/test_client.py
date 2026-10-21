@@ -273,7 +273,7 @@ class TestCatalogAndAccount:
         assert me.org_id and me.key_id and me.user_id is None  # an org API key has no user
         assert not hasattr(me, "key_prefix")
         assert me.limits["max_projects_per_org"] >= 1 and me.limits["max_active_runs"] >= 1
-        assert me.limits["max_live_models_per_org"] >= 1 and not hasattr(me, "managed_projects")
+        assert me.limits["max_production_models_per_org"] >= 1 and not hasattr(me, "managed_projects")
 
     def test_balance(self, client: EndorClient) -> None:
         b = client.balance()

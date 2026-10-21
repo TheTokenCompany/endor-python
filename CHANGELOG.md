@@ -18,17 +18,17 @@ and there is no preview. While its base model answers, a project's decisions rep
 |---|---|
 | `client.projects.create(name, kind="managed", base_models=["decider-2b"])` | `client.projects.create(name, base_model="decider-2b")`: every project is a continuous learning project, on one base model chosen once. `kind=` and `base_models=` raise a `TypeError` that says this. |
 | `kind="custom"` projects, `project.datasets`, `project.runs`, `project.models`, `project.evaluate`, `project.evaluations` | `client.datasets`, `client.runs`, `client.custom_models`, `client.evaluations.create` and `client.evaluations.list`, at the organization's level |
-| `model="tickets/v1"` (a saved model), `"tickets/decider-2b"` (a project's base model) | a custom model is called by its name, `model="router-2"`, once promoted (`client.custom_models.promote("router-2")`); a project is `model="tickets"` (its production version) or `"tickets:preview"` (a newer version not in production yet, while there is one). The `<project>/<name>` form no longer resolves. |
-| `run.save_checkpoint("v1")` → `"tickets/v1"`, callable at once | `run.save_checkpoint("router-2")` → `"router-2"`, saved inactive: promote it to call it. `client.custom_models.create("router-2", base_model=...)` opens a run whose `save_checkpoint()` (no name) saves under that name. Each save is a new model; names are unique in the organization with the projects. |
+| `model="tickets/v1"` (a saved model), `"tickets/decider-2b"` (a project's base model) | a custom model is called by its name, `model="router-2"`, once promoted to production (`client.custom_models.promote("router-2")`); a project is `model="tickets"` (its production version) or `"tickets:preview"` (a newer version not in production yet, while there is one). The `<project>/<name>` form no longer resolves. |
+| `run.save_checkpoint("v1")` → `"tickets/v1"`, callable at once | `run.save_checkpoint("router-2")` → `"router-2"`, saved to the archive: promote it to production to call it. `client.custom_models.create("router-2", base_model=...)` opens a run whose `save_checkpoint()` (no name) saves under that name. Each save is a new model; names are unique in the organization with the projects. |
 | `project.runs.create()` on the project's first base model | `client.runs.create("decider-2b")` (or `from_model=`): a base model is required |
 | `project.add_base_model`, `project.remove_base_model`, `ProjectInfo.kind`, `.base_models`, `.n_datasets`, `.n_runs`, `.n_models`, `.wandb`, `project.update(wandb=...)`, `WandbSettings` | gone. `ProjectInfo` has `base_model`, `production`, `preview`, `auto_promote`, `promoted_at`, `versions` (and `Project` has `.production` and `.preview`). Runs log to Weights & Biases when the organization has connected it (`runs.create(wandb=False)` turns it off per run). |
-| `ModelInfo` (`id`, `kind`, `project`) | `CustomModelInfo` (`name`, `live`, `live_at`, ...) and, for a project's versions, `VersionInfo` |
+| `ModelInfo` (`id`, `kind`, `project`) | `CustomModelInfo` (`name`, `state` production or archived, `production`, `promoted_at`, ...) and, for a project's versions, `VersionInfo` |
 | `RunInfo.project`, `Run.project`, `DatasetInfo.project`, `Evaluation.project` | gone; `RunInfo.model` / `Run.model` is the custom model name a save uses |
-| `WhoAmI.managed_projects` | gone; `limits` has `max_projects_per_org`, `max_live_models_per_org`, `max_custom_models_per_org` and `max_datasets_per_org` |
+| `WhoAmI.managed_projects` | gone; `limits` has `max_projects_per_org`, `max_production_models_per_org`, `max_custom_models_per_org` and `max_datasets_per_org` |
 | `ModelMetadata.kind` `project`, `base` or `model` | `project` or `custom`; `ModelMetadata.environment` is `production` or `preview` for a project's names |
 | `NoBaseModelError`, `WrongProjectKindError` | gone (they can't happen any more) |
-| `client.predict("tickets/v1", rows)` | `client.predict("router-2", rows)`: a custom model (live or not) or a base model id |
-| `SupervisedConfig(project="tickets", model_name="v1")` | `SupervisedConfig(model_name="router-2")`: the recipe saves a custom model, inactive; it scores the untuned base with one server-side prediction |
+| `client.predict("tickets/v1", rows)` | `client.predict("router-2", rows)`: a custom model (in production or archived) or a base model id |
+| `SupervisedConfig(project="tickets", model_name="v1")` | `SupervisedConfig(model_name="router-2")`: the recipe saves a custom model to the archive; it scores the untuned base with one server-side prediction |
 | CLI `endor models ...`, `datasets list PROJECT`, `runs list PROJECT`, `eval PROJECT MODEL DATASET`, `projects add-base-model` | `endor custom-models ...`, `datasets list`, `runs list`, `eval MODEL DATASET`; `projects versions`, `promote`, `auto-promote` are new |
 
 ### Added
@@ -39,17 +39,18 @@ and there is no preview. While its base model answers, a project's decisions rep
   promoting a version older than the newest turns auto-promote off, like a rollback); `project.set_auto_promote(on)`
   (on: the newest version goes to production at once, and every new version after it; off by default);
   `project.download(version, path)` (`NotFoundError` for a version without stored weights).
-- `client.custom_models`: `list(live=None)` (live ones first), `get(name)`, `create(name, base_model, *, run_name=None,
-  **run_options) -> Run`, `promote(name, replace=None)` (`replace` swaps out a live model when every slot is taken),
-  `demote(name)`, `set_ttl(name, ttl_seconds)`, `download(name, path)`, `delete(name)`. New type `CustomModelInfo`.
+- `client.custom_models`, in production or in the archive: `list(production=None)` (production ones first),
+  `get(name)`, `create(name, base_model, *, run_name=None, **run_options) -> Run`, `promote(name, replace=None)` (to
+  production; `replace` archives a production model when every slot is taken), `archive(name)`, `set_ttl(name,
+  ttl_seconds)`, `download(name, path)`, `delete(name)`. Every save starts in the archive. New type `CustomModelInfo`.
 - `client.datasets`, `client.runs` (`create(base_model, *, model=None, ...)`, `get`, `list`) and
   `client.evaluations` (`create(model, dataset=None, run_id=None, *, rows=None)`, `get`, `list`) at the
   organization's level.
-- Errors: `ModelNotLiveError` (409 `model_not_live`: a decision named an inactive custom model), `LiveModelsFullError`
-  (409 `live_models_full`, a `LimitReachedError`, never retried), `ModelIsLiveError` (409 `model_is_live`: deleting a
-  live model or giving it a TTL), `VersionNotCallableError` (404 `version_not_callable`: `"<project>:v3"`),
+- Errors: `ModelNotInProductionError` (409 `model_not_in_production`: a decision named an archived custom model),
+  `ProductionFullError` (409 `production_full`, a `LimitReachedError`, never retried), `ModelInProductionError` (409
+  `model_in_production`: deleting a production model or giving it a TTL), `VersionNotCallableError` (404 `version_not_callable`: `"<project>:v3"`),
   `NoPreviewError` (404 `no_preview`: `"<project>:preview"` while the project has no preview).
-- CLI: `endor projects versions | promote | auto-promote`, `endor custom-models list | info | promote | demote |
+- CLI: `endor projects versions | promote | auto-promote`, `endor custom-models list | info | promote | archive |
   download | set-ttl | delete`.
 
 ### Also in this release

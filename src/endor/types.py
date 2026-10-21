@@ -379,8 +379,8 @@ class ModelMetadata(BaseModel):
 
     @property
     def kind(self) -> str:
-        """What the name calls, as Endor reports it: a continuous learning project (``"project"``) or a live custom
-        model (``"custom"``)."""
+        """What the name calls, as Endor reports it: a continuous learning project (``"project"``) or a custom model in
+        production (``"custom"``)."""
         if self.endor.get("kind"):
             return str(self.endor["kind"])
         return "project"
@@ -712,17 +712,20 @@ class RunInfo(_View):
 
 
 class CustomModelInfo(_View):
-    """A custom model (``client.custom_models``): trained with the SDK and saved by a run. A live one is called by
-    its name (``model="router-2"``); an inactive one can be downloaded, evaluated and promoted, but decisions refuse
-    it (``ModelNotLiveError``)."""
+    """A custom model (``client.custom_models``): trained with the SDK and saved by a run. One in production is
+    called by its name (``model="router-2"``); an archived one can be downloaded, evaluated, trained from and
+    promoted, but decisions refuse it (``ModelNotInProductionError``)."""
 
     name: str
     """Its name, unique in the organization (with the continuous learning projects): ``model`` in ``system_one``
-    while it is live."""
+    while it is in production."""
     base_model: str
-    live: bool = False
-    live_at: datetime | None = None
-    """When it was promoted (None while inactive)."""
+    production: bool = False
+    """It is in production: decisions may call it."""
+    state: str = "archived"
+    """``"production"`` or ``"archived"`` (every save starts archived). Treat unknown values as archived."""
+    promoted_at: datetime | None = None
+    """When it last went to production (None while archived)."""
     contract: str | None = None
     training_run_id: str | None = None
     parent_model: str | None = None
@@ -731,7 +734,7 @@ class CustomModelInfo(_View):
     has_optimizer: bool = False
     size_bytes: int | None = None
     expires_at: datetime | None = None
-    """Inactive models only: when it is deleted (a TTL). Live models never expire."""
+    """Archived models only: when it is deleted (a TTL). Models in production never expire."""
     user_metadata: dict[str, Any] = Field(default_factory=dict)
     loss: float | None = None
     """The training loss when the model was saved: its run's ``train/loss`` at ``step``, or the last one before it.
@@ -829,9 +832,9 @@ class WhoAmI(_View):
     user_id: str | None = None
     key_id: str | None = None
     limits: dict[str, int | float] = Field(default_factory=dict)
-    """The org's limits by name, for example ``max_projects_per_org``, ``max_live_models_per_org`` (live custom
-    models), ``max_custom_models_per_org``, ``max_datasets_per_org`` or ``max_active_runs``. A count limit raises
-    ``LimitReachedError`` once reached (``LiveModelsFullError`` for the live custom models); a rate raises
+    """The org's limits by name, for example ``max_projects_per_org``, ``max_production_models_per_org`` (custom
+    models in production), ``max_custom_models_per_org``, ``max_datasets_per_org`` or ``max_active_runs``. A count
+    limit raises ``LimitReachedError`` once reached (``ProductionFullError`` for the production slots); a rate raises
     ``RateLimitError``: ``decisions_per_minute`` (60 by default, for the whole org) and the other ``..._per_minute``."""
     image_training: bool = False
     """Whether the org may fine-tune with images (``endor.Image`` in rows and datums, ``client.images``). Limited
