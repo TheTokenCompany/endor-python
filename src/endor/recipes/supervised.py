@@ -81,7 +81,8 @@ class SupervisedConfig:
     the tuned model close to the base on everything outside your task. Off unless ``replay_per_batch`` > 0."""
     replay_per_batch: int = 0
     progress: bool = True
-    """Print a progress line (step, loss, ETA) about 20 times over the run, and at the end."""
+    """Print a progress line (step, loss, ETA) about 20 times over the run, and at the end, and a line while the run
+    waits over 10 s for a GPU (``runs.create(progress=...)``)."""
     steps_in_flight: int = 2
     """Training steps sent before the oldest one's results are read (``endor.Steps``); 1 waits for each step before
     sending the next. Results, metrics and evaluations are the same either way."""
@@ -245,6 +246,7 @@ def train(
                 tags=cfg.tags,
                 config={k: v for k, v in asdict(cfg).items() if k != "replay_rows"},
                 total_steps=total,
+                progress=cfg.progress,
             ) as run:  # closed on success and on any error, so its GPU is released
                 if base_metrics is not None:
                     run.log_eval(base, base_metrics, step=0, name="heldout")

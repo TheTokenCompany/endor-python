@@ -232,6 +232,8 @@ class FakeEndor:
     """What GET /v1/balance answers (None: a server without billing)."""
     image_training: bool = True
     """Whether the org may fine-tune with images (403 image_training_not_enabled otherwise)."""
+    continuous_learning: bool = True
+    """What GET /v1/whoami says about the org's continuous learning switch."""
     images: dict[str, dict] = field(default_factory=dict)  # sha256 -> {media_type, bytes, status}
     uploads: dict[str, bytes] = field(default_factory=dict)  # sha256 -> the bytes PUT to its link
     upload_requests: list[Recorded] = field(default_factory=list)  # PUTs to the upload links
@@ -379,12 +381,17 @@ class FakeEndor:
         return {k: v for k, v in r.items() if not k.startswith("_")}
 
     def model_view(self, m: dict) -> dict:
-        """A custom model as the API shows it (`live_at` is the fake's own field, as in the API's table)."""
+        """A custom model as the API shows it (`live_at` is the fake's own field, as in the API's table). A promoted
+        model is `serving` live at once; set its `_serving` (and `_serving_error`) to show another state."""
+        live = m["live_at"] is not None
+        serving = m.get("_serving", "live") if live else None
         return {
             **{k: v for k, v in m.items() if not k.startswith("_") and k != "live_at"},
-            "production": m["live_at"] is not None,
-            "state": "production" if m["live_at"] is not None else "archived",
+            "production": live,
+            "state": "production" if live else "archived",
             "promoted_at": m["live_at"],
+            "serving": serving,
+            "serving_error": m.get("_serving_error") if serving == "failed" else None,
             "loss": self.loss_at(m),
         }
 
@@ -661,6 +668,7 @@ class FakeEndor:
                 "org_id": "org_test",
                 "key_id": "key_test",
                 "limits": dict(LIMITS),
+                "continuous_learning": self.continuous_learning,
                 "image_training": self.image_training,
             }
         if p == ["images"] and m == "POST":
@@ -1448,6 +1456,8 @@ class FakeEndor:
             return 204, None
         if tail[1:] == ["promote"] and m == "POST":
             if mod["live_at"] is not None:
+                if mod.get("_serving") == "failed":  # deployed again
+                    mod["_serving"], mod["_serving_error"] = "live", None
                 return 200, self.model_view(mod)
             live = [x for x in self.models.values() if x["live_at"] is not None]
             replace = (body or {}).get("replace")
@@ -1464,6 +1474,7 @@ class FakeEndor:
                     409, "production_full", f"Every production slot is taken ({cap}): {names}. Send replace with one."
                 )
             mod["live_at"], mod["expires_at"] = now().isoformat(), None
+            mod["_serving"], mod["_serving_error"] = "live", None  # loaded at once
             return 200, self.model_view(mod)
         if tail[1:] == ["demote"] and m == "POST":
             mod["live_at"] = None
@@ -1498,7 +1509,7 @@ class FakeEndor:
         else:
             raise HTTPError(404, "unknown_model", f"No custom model or base model {model!r}.", "model")
         self.check_images(rows, "rows.", BASE_MODELS[base])
-        lines, n = [], 0
+        lines, n, by_question = [], 0, Counter()
         for i, row in enumerate(rows):
             labels = row.get("labels") or {}
             asked = {k: q for k, q in row["questions"].items() if k in labels} or row["questions"]
@@ -1509,6 +1520,7 @@ class FakeEndor:
                 probs = uniform(q)
                 target = label_target(q, labels[name]) if name in labels else None
                 n += target is not None
+                by_question[name] += target is not None
                 lines.append(
                     {
                         "row": row.get("id"),
@@ -1531,6 +1543,7 @@ class FakeEndor:
             "results": {
                 "n": n,
                 "overall": {"n": n, "accuracy": 0.5} if n else {"n": 0},
+                "by_question": {q: {"n": k, "accuracy": 0.5} for q, k in by_question.items() if k},
                 "rows_url": f"https://{FILES_HOST}/{token}/rows.jsonl?X-Amz-Signature=sig{token}&X-Amz-Expires=3600",
             },
             "rows_total": len(rows),

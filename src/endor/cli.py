@@ -48,17 +48,41 @@ def _dump(obj: Any) -> Any:
     return obj
 
 
-def _out(obj: Any, fmt: str) -> None:
+def _out(obj: Any, fmt: str, empty: str = "") -> None:
+    """Print ``obj``: indented JSON, or in table mode one ``key=value`` line per item (``empty`` for an empty list)."""
     obj = _dump(obj)
     if fmt == "json":
         print(json.dumps(obj, indent=1, default=str))
         return
     rows = obj if isinstance(obj, list) else [obj]
+    if not rows and empty:
+        print(empty)
     for r in rows:
         if isinstance(r, dict):
             print("  ".join(f"{k}={v}" for k, v in r.items() if not isinstance(v, (dict, list))))
         else:
             print(r)
+
+
+def _block(title: str, values: dict[str, Any]) -> None:
+    """Table mode: ``title:`` and one indented ``key=value`` line per entry (nothing when empty)."""
+    if values:
+        print(f"{title}:")
+        for k, v in values.items():
+            print(f"  {k}={v}")
+
+
+def _accuracy(results: dict[str, Any] | None) -> None:
+    """Table mode: an evaluation's accuracy, overall and per question, with the questions scored."""
+    overall = (results or {}).get("overall")
+    if not overall:
+        return
+    rows = [("overall", overall), *((results or {}).get("by_question") or {}).items()]
+    width = max(len(name) for name, _ in rows)
+    print(f"{'':<{width}}  {'n':>6}  accuracy")
+    for name, m in rows:
+        acc = m.get("accuracy")
+        print(f"{name:<{width}}  {m.get('n', 0):>6}  {'-' if acc is None else f'{acc:.1%}':>8}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -149,16 +173,19 @@ def main(argv: Sequence[str] | None = None, client: EndorClient | None = None) -
 def _run(a: argparse.Namespace, client: EndorClient) -> None:
     f = a.format
     if a.cmd == "whoami":
-        _out({**_dump(client.whoami()), "balance_usd": client.balance()}, f)
+        me = {**_dump(client.whoami()), "balance_usd": client.balance()}
+        _out(me, f)
+        if f == "table":
+            _block("limits", me["limits"])
     elif a.cmd == "base-models":
         _out(client.base_models(), f)
     elif a.cmd == "projects":
         if a.action == "list":
-            _out(client.projects.list(), f)
+            _out(client.projects.list(), f, "No projects")
         elif a.action == "create":
             _out(client.projects.create(a.name, base_model=a.base_model), f)
         elif a.action == "versions":
-            _out(client.projects.get(a.name).versions(), f)
+            _out(client.projects.get(a.name).versions(), f, "No versions")
         elif a.action == "promote":
             _out(client.projects.get(a.name).promote(a.version), f)
         elif a.action == "auto-promote":
@@ -168,7 +195,7 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
     elif a.cmd == "custom-models":
         cm = client.custom_models
         if a.action == "list":
-            _out(cm.list(production=a.production), f)
+            _out(cm.list(production=a.production), f, "No custom models")
         elif a.action == "info":
             _out(cm.get(a.name), f)
         elif a.action == "promote":
@@ -183,19 +210,22 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
             _out(cm.download(a.name, a.output or a.name, include_optimizer=a.include_optimizer), f)
     elif a.cmd == "datasets":
         if a.action == "list":
-            _out(client.datasets.list(), f)
+            _out(client.datasets.list(), f, "No datasets")
         elif a.action == "upload":
             _out(client.datasets.upload(a.name, D.load_rows(a.file)), f)
         else:
             client.datasets.delete(a.name)
     elif a.cmd == "runs":
         if a.action == "list":
-            _out(client.runs.list(), f)
+            _out(client.runs.list(), f, "No runs")
         else:
             run = client.runs.get(a.run_id)
             _out(run.close() if a.action == "close" else run, f)
     elif a.cmd == "eval":
-        _out(client.evaluations.create(a.model, a.dataset).result(), f)
+        ev = client.evaluations.create(a.model, a.dataset).result()
+        _out(ev, f)
+        if f == "table":
+            _accuracy(ev.results)
     elif a.cmd == "usage":
         rows = client.usage(datetime.fromisoformat(a.start), datetime.fromisoformat(a.end), a.project)
         if a.csv:
@@ -219,7 +249,7 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
             for u in rows:
                 w.writerow(["" if v is None else v for v in (u.model_dump(mode="json")[c] for c in cols)])
         else:
-            _out(rows, f)
+            _out(rows, f, "No usage")
 
 
 if __name__ == "__main__":

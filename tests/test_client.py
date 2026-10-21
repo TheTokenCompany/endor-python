@@ -274,6 +274,13 @@ class TestCatalogAndAccount:
         assert not hasattr(me, "key_prefix")
         assert me.limits["max_projects_per_org"] >= 1 and me.limits["max_active_runs"] >= 1
         assert me.limits["max_production_models_per_org"] >= 1 and not hasattr(me, "managed_projects")
+        assert isinstance(me.continuous_learning, bool)
+
+    def test_whoami_continuous_learning(self, client: EndorClient, fake: FakeEndor) -> None:
+        assert client.whoami().continuous_learning is True
+        fake.continuous_learning = False
+        assert client.whoami().continuous_learning is False
+        assert endor.WhoAmI.model_validate({"org_id": "org_1"}).continuous_learning is False  # an older server
 
     def test_balance(self, client: EndorClient) -> None:
         b = client.balance()

@@ -52,6 +52,29 @@ and there is no preview. While its base model answers, a project's decisions rep
   `NoPreviewError` (404 `no_preview`: `"<project>:preview"` while the project has no preview).
 - CLI: `endor projects versions | promote | auto-promote`, `endor custom-models list | info | promote | archive |
   download | set-ttl | delete`.
+- `CustomModelInfo.serving` and `.serving_error`: a model in production is `"deploying"` until a decision server has
+  loaded it (decisions are accepted; the first ones may wait), then `"live"`, or `"failed"` with `serving_error`
+  saying why (`promote(name)` again retries); None while archived. `endor custom-models list` and `info` show it.
+- `WhoAmI.continuous_learning`: whether the organization has continuous learning projects (off until we turn it on;
+  while off, projects and decisions on a project raise `PermissionDeniedError`, 403
+  `continuous_learning_not_enabled`).
+- `runs.create(progress=True)` (also through `custom_models.create` and `SupervisedConfig.progress`): a wait for a GPU
+  over 10 seconds prints one line to stderr, `run run_...: waiting for a GPU (starting a cold one can take a few
+  minutes)…`, since a cold start takes minutes and Python hides the INFO logs that were the only output.
+  `progress=False` leaves it out; the `endor` logger logs the wait as before.
+
+### Fixed
+
+- `client.runs.get(run_id)` keeps an open run open like `runs.create`: the handle sends the heartbeat until the run is
+  closed or the handle is garbage collected. Before, only a `with` block started it, so a run continued without one
+  could be closed after an hour between calls. `runs.list()` handles still send none.
+- `endor whoami` shows `continuous_learning` and every limit in table mode, not only with `-f json`.
+- `endor eval MODEL DATASET` prints the accuracy overall and per question (with the questions scored), not only the
+  evaluation's id and status.
+- `endor custom-models list`, `datasets list`, `runs list` and `projects list` print `No custom models` (and so on)
+  when there is nothing, instead of nothing at all.
+- Docstrings and the README: a run left open is closed an hour after its process ended (not "a few minutes"); the
+  open-run limit is the organization's `max_active_runs` (`client.whoami().limits`, `endor whoami`), not a fixed 25.
 
 ### Also in this release
 

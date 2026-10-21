@@ -249,6 +249,26 @@ class TestCustomModels:
             client.system_one("x", Q, model=name)
         assert not client.custom_models.archive(name).production  # nor archiving it again
 
+    def test_serving_state(self, client: EndorClient, fake: FakeEndor) -> None:
+        """In production, ``serving`` says whether a decision server has the model loaded; None while archived."""
+        name = train_one(client, unique("srv"))
+        archived = client.custom_models.get(name)
+        assert (archived.serving, archived.serving_error) == (None, None)
+        assert client.custom_models.promote(name).serving == "live"
+        fake.models[name]["_serving"], fake.models[name]["_serving_error"] = "failed", "the adapter didn't load"
+        failed = client.custom_models.get(name)
+        assert (failed.serving, failed.serving_error) == ("failed", "the adapter didn't load")
+        assert [(m.name, m.serving) for m in client.custom_models.list()] == [(name, "failed")]
+        again = client.custom_models.promote(name)  # promoting a failed one deploys it again
+        assert (again.serving, again.serving_error) == ("live", None)
+        fake.models[name]["_serving"] = "deploying"
+        assert client.custom_models.get(name).serving == "deploying"
+        assert client.custom_models.archive(name).serving is None
+        unknown = endor.CustomModelInfo.model_validate(
+            {**fake.model_view(fake.models[name]), "serving": "warming", "serving_error": None}
+        )
+        assert unknown.serving == "warming"  # a value a newer server sends doesn't break the SDK
+
     def test_each_save_is_a_new_model(self, client: EndorClient) -> None:
         name = unique("cm")
         with client.custom_models.create(name, base_model=BASE) as run:
@@ -454,7 +474,7 @@ class TestRunsResource:
     ) -> None:
         fake.provisioning_polls = 10**6
 
-        def interrupted(run: endor.Run, log_every: float = 30.0) -> None:
+        def interrupted(run: endor.Run, log_every: float = 30.0, progress: bool = True) -> None:
             raise KeyboardInterrupt
 
         monkeypatch.setattr(endor.training, "_wait_ready", interrupted)
@@ -487,6 +507,35 @@ class TestRunsResource:
         assert run.ready.done() and run.info_.status == "ready"
         assert len([r for r in fake.requests if r.path == f"/v1/futures/{run.info_.ready_future_id}"]) == 3
         run.close()
+
+    def test_a_long_wait_for_a_gpu_prints_one_line(
+        self,
+        client: EndorClient,
+        fake: FakeEndor,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Python hides INFO logs by default, so a wait over WAIT_NOTICE_S (a cold GPU takes minutes) also prints one
+        line to stderr, unless ``progress=False``."""
+        with client.runs.create(BASE):  # ready at once: nothing printed
+            pass
+        assert capsys.readouterr().err == ""
+        monkeypatch.setattr(endor.training, "WAIT_NOTICE_S", 0.0)
+        fake.provisioning_polls = 3
+        with client.custom_models.create(unique("cold"), base_model=BASE) as run:
+            pass
+        notice = "waiting for a GPU (starting a cold one can take a few minutes)…"
+        assert capsys.readouterr().err.splitlines() == [f"run {run.id}: {notice}"]
+        fake.provisioning_polls = 3
+        with client.runs.create(BASE, progress=False):
+            pass
+        assert capsys.readouterr().err == ""
+        fake.provisioning_polls = 4
+        with client.runs.create(BASE, wait=False) as run, caplog.at_level(logging.INFO, logger="endor"):
+            endor.training._wait_ready(run, log_every=0.0)  # many timeouts, each logged
+        assert capsys.readouterr().err.splitlines() == [f"run {run.id}: {notice}"]  # once
+        assert len([r for r in caplog.records if "still provisioning" in r.getMessage()]) >= 2
 
     def test_no_wait(self, client: EndorClient, fake: FakeEndor) -> None:
         fake.provisioning_polls = 1
