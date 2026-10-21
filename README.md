@@ -42,7 +42,8 @@ API keys belong to an organization (`edk_...`, created in the dashboard); everyt
 ## Continuous learning projects
 
 Create a project on a base model, then send it decisions. It answers at once with the base model and learns from its
-own decisions and your corrections, serving a new version when it is better:
+own decisions and your corrections, making new versions that you promote (or that go live by themselves with
+auto-promote on):
 
 ```python
 import endor
@@ -70,9 +71,9 @@ res.model, res.usage.input_tokens         # what answered, e.g. "tickets:v4"
 res.id                                    # the decision's id ("req_..."), to correct it later
 ```
 
-**Live and preview, like deployments.** A project has one **live** version. With **auto-promote** on (the
-default), every new version goes live as soon as it is ready. With it off, a newer version than the live one waits as
-the **preview** until you promote it:
+**Live and preview, like deployments.** A project has one **live** version. A new version lands in the **preview**
+and waits there until you promote it. Turn **auto-promote** on (it is off by default) and every new version goes live
+as soon as it is ready instead:
 
 | `model` | Answers with |
 |---|---|
@@ -85,7 +86,7 @@ Promote any version yourself, for example to roll back:
 ```python
 project.versions()               # v1, v2, ... newest first: .live, .preview (never both), .accuracy, .loss
 project.promote("v3")            # "tickets" answers with v3 now; a version older than the newest turns auto-promote off
-project.set_auto_promote(True)   # the newest version goes live at once, and every new version after it
+project.set_auto_promote(True)   # the newest version goes live at once, and every new version after it (off by default)
 project.info()                   # .live, .preview, .auto_promote, .promoted_at, .versions, .base_model
 project.download("v3", "./tickets-v3")   # a version's LoRA adapter (PEFT), to run it yourself
 ```

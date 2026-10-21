@@ -567,9 +567,9 @@ class ProjectInfo(_View):
     preview: str | None = None
     """The newest version while it isn't live, which ``"<project>:preview"`` answers with. None when the newest version
     is live (always, while auto-promote is on) and before the first version."""
-    auto_promote: bool = True
-    """Each new version goes live as soon as it is ready. Promoting an older version turns it off (a rollback);
-    ``project.set_auto_promote(True)`` turns it back on."""
+    auto_promote: bool = False
+    """Off by default: new versions land in the preview until you promote one. On (``project.set_auto_promote(True)``):
+    each new version goes live as soon as it is ready. Promoting an older version turns it off (a rollback)."""
     promoted_at: datetime | None = None
     """When the live version last changed."""
     versions: int = 0

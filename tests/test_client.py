@@ -161,13 +161,13 @@ class TestDecisions:
         assert client.system_one("x", {"d": DEPT}, model=model).model == "router"
 
     def test_a_projects_live_version_and_preview(self, client: EndorClient, fake: FakeEndor, decider: str) -> None:
-        fake.add_version(decider)
+        fake.add_version(decider)  # auto-promote is off by default: v1 waits in the preview
+        assert client.system_one("x", {"d": DEPT}, model=decider).model == f"{decider}:jev-9b"
+        assert client.system_one("x", {"d": DEPT}, model=f"{decider}:preview").model == f"{decider}:v1"
+        client.projects.get(decider).promote("v1")
         assert client.system_one("x", {"d": DEPT}, model=decider).model == f"{decider}:v1"
-        with pytest.raises(endor.NoPreviewError):  # auto-promote is on: the newest is live, so there is no preview
+        with pytest.raises(endor.NoPreviewError):  # the newest is live now, so there is no preview
             client.system_one("x", {"d": DEPT}, model=f"{decider}:preview")
-        client.projects.get(decider).set_auto_promote(False)
-        fake.add_version(decider)
-        assert client.system_one("x", {"d": DEPT}, model=f"{decider}:preview").model == f"{decider}:v2"
         with pytest.raises(NotFoundError) as e:  # the release before's "<project>/<name>" is gone
             client.system_one("x", {"d": DEPT}, model=f"{decider}/v1")
         assert e.value.code == "unknown_model"

@@ -3,15 +3,15 @@ corrections, starting from the base model you choose when you create it.
 
     project = client.projects.get_or_create("tickets", base_model="decider-2b")
     client.system_one(state, questions, model=project.ref)            # "tickets": the live version
-    project.versions()               # v1, v2, ... newest first, with which one is live
-    project.promote("v3")            # make v3 live (an older one: a rollback, which turns auto-promote off)
-    client.system_one(state, questions, model=project.preview_ref)    # "tickets:preview": the newer version
-    project.set_auto_promote(True)   # every new version goes live as soon as it is ready (the default)
+    client.system_one(state, questions, model=project.preview_ref)    # "tickets:preview": a new version, not live yet
+    project.versions()               # v1, v2, ... newest first, with which one is live and which is the preview
+    project.promote("v3")            # make v3 live (an older one: a rollback)
+    project.set_auto_promote(True)   # every new version goes live as soon as it is ready (off by default)
 
-A project has one live version, which ``"<project>"`` answers with (its base model before the first version). While
-auto-promote is on, each new version goes live at once. With it off, a newest version that isn't live yet is the
-preview, which ``"<project>:preview"`` answers with; without a preview, that name raises ``NoPreviewError``. Custom
-models you train yourself are ``client.custom_models``.
+A project has one live version, which ``"<project>"`` answers with (its base model before the first version). New
+versions land in the preview, the newest version while it isn't live, which ``"<project>:preview"`` answers with,
+until you promote one; without a preview, that name raises ``NoPreviewError``. With auto-promote on, each new version
+goes live at once, so there is no preview. Custom models you train yourself are ``client.custom_models``.
 """
 
 from __future__ import annotations
@@ -39,7 +39,8 @@ class Projects:
         self, name: str, base_model: str | None = None, description: str | None = None, **removed: Any
     ) -> Project:
         """A new continuous learning project on ``base_model`` (an id from ``client.base_models()``, for example
-        ``"decider-2b"``), chosen here for good. ``"<project>"`` answers with the base model until the first version.
+        ``"decider-2b"``), chosen here for good. ``"<project>"`` answers with the base model until you promote a
+        version. Auto-promote starts off: new versions wait in the preview (``set_auto_promote(True)`` changes that).
 
         Names are lowercase, ``[a-z0-9._-]``, up to 63 characters, and unique in the organization together with your
         custom models. Raises ``ConflictError`` if a project or custom model already has the name, and

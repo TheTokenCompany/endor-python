@@ -1,6 +1,6 @@
 """Ask a continuous learning project named questions about a state. "tickets" answers with the project's live version
-(its base model until the first version). The project learns from its decisions and from your corrections, and each new
-version goes live by itself while auto-promote is on.
+(its base model until you promote a version). The project learns from its decisions and from your corrections: new
+versions wait in "tickets:preview" until you promote one, or every new version goes live with auto-promote on.
 
 ENDOR_API_KEY=edk_... python examples/decisions.py
 """
@@ -39,9 +39,11 @@ class Triage(SystemOneResponse):
 triage = client.system_one(state, questions, response_model=Triage)
 print(triage.department.choice, triage.urgent.noul)
 
-# With auto-promote off, a newer version waits as the preview until you promote it.
-if project.info().preview:
+# A new version waits as the preview: try it, then promote it (or project.set_auto_promote(True) for every new one).
+info = project.info()
+if info.preview:
     print(client.system_one(state, questions, model=project.preview_ref).model)  # "tickets:preview" answers
+    project.promote(info.preview)  # "tickets" answers with it now
 
 # Every name a decision can send: your projects, their previews (when they have one) and your live custom models.
 for m in client.models.list().models:

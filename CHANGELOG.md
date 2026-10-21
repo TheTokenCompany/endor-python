@@ -8,8 +8,9 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 0.9.0: projects are continuous learning projects, with a live version and a preview like deployments, and custom
 models live outside projects. This release breaks code written for 0.8.0; the table says what to change.
 
-A project's preview is its newest version while that isn't live: with auto-promote on (the default) every new version
-goes live at once, so there is no preview. `"<project>:preview"` without a preview raises `NoPreviewError`.
+A project's preview is its newest version while that isn't live. Auto-promote is off by default, so new versions
+land in the preview until you promote one; with auto-promote on, every new version goes live at once and there is no
+preview. `"<project>:preview"` without a preview raises `NoPreviewError`.
 
 ### Breaking changes and how to migrate
 
@@ -35,7 +36,7 @@ goes live at once, so there is no preview. `"<project>:preview"` without a previ
   (`"tickets:preview"`, None while the project has no preview); `project.versions() -> list[VersionInfo]` (newest
   first, `live`, `preview`, never both, `accuracy`, `loss`); `project.promote(version)` (promoting a version older
   than the newest turns auto-promote off, like a rollback); `project.set_auto_promote(on)` (on: the newest version goes
-  live at once, and every new version after it; the default); `project.download(version, path)`.
+  live at once, and every new version after it; off by default); `project.download(version, path)`.
 - `client.custom_models`: `list(live=None)` (live ones first), `get(name)`, `create(name, base_model, *, run_name=None,
   **run_options) -> Run`, `promote(name, replace=None)` (`replace` swaps out a live model when every slot is taken),
   `demote(name)`, `set_ttl(name, ttl_seconds)`, `download(name, path)`, `delete(name)`. New type `CustomModelInfo`.

@@ -1067,7 +1067,7 @@ class FakeEndor:
             "description": body.get("description"),
             "base_model": base,
             "live": None,
-            "auto_promote": True,
+            "auto_promote": False,
             "promoted_at": None,
             "created_at": now().isoformat(),
         }
