@@ -115,6 +115,12 @@ class Project:
         """The preview version, the newest while it isn't in production; None without one. As last fetched."""
         return self.info_.preview
 
+    @property
+    def auto_promote(self) -> bool:
+        """Whether each new version goes to production as soon as it is ready (off by default). As last fetched;
+        ``set_auto_promote`` changes it."""
+        return self.info_.auto_promote
+
     def info(self) -> ProjectInfo:
         """Fetch the project again: its production and preview versions, auto-promote and description."""
         self.info_ = ProjectInfo.model_validate(

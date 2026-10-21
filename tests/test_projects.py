@@ -112,7 +112,7 @@ class TestProjects:
         assert (req.method, req.path) == ("POST", f"/v1/projects/{p.name}/versions/v1/promote")
         assert (info.production, info.preview, info.auto_promote) == ("v1", None, False) and p.info_ is info
         assert info.promoted_at is not None and p.preview_ref is None
-        assert (p.production, p.preview) == ("v1", None)  # the Project's shortcuts to info_
+        assert (p.production, p.preview, p.auto_promote) == ("v1", None, False)  # the Project's shortcuts to info_
         with pytest.raises(NoPreviewError):
             client.system_one("x", Q, model=f"{p.name}:preview")
         fake.add_version(p.name, accuracy=84.5, loss=0.4)  # v2 waits in the preview
@@ -123,7 +123,7 @@ class TestProjects:
         assert vs[0].accuracy == 84.5 and vs[1].loss == 0.5 and vs[0].base_model == BASE
 
         info = p.set_auto_promote(True)  # the newest goes live at once: no preview any more
-        assert fake.requests[-1].body == {"auto_promote": True}
+        assert fake.requests[-1].body == {"auto_promote": True} and p.auto_promote is True
         assert (info.production, info.preview, info.auto_promote) == ("v2", None, True)
         fake.add_version(p.name)  # with auto-promote on, v3 goes live by itself
         assert (p.info().production, p.info_.preview) == ("v3", None)

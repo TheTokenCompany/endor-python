@@ -88,6 +88,7 @@ project.versions()               # v1, v2, ... newest first: .production, .previ
 project.promote("v3")            # v3 to production; a version older than the newest turns auto-promote off
 project.set_auto_promote(True)   # the newest goes to production at once, and every new version after it (off by default)
 project.info()                   # .production, .preview, .auto_promote, .promoted_at, .versions, .base_model
+project.production, project.preview, project.auto_promote   # the same, as last fetched
 project.download("v3", "./tickets-v3")   # a version's LoRA adapter (PEFT), to run it yourself
 ```
 
@@ -563,7 +564,7 @@ decisions; a custom model's decisions have no project.
 | `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, exclude_from_training, gzip, http_client, async_http_client, transport, async_transport, report_latency)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, exclude_from_training, response_model)`, `system_one_async`, `predict(model, rows, *, progress=True, timeout=None)` → one `{question: answer}` per row, `predict_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `custom_models`, `datasets`, `runs`, `evaluations`, `corrections`, `whoami()`, `balance()` → USD, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
 | `endor.user_report(message, *, kind="bug", request_id=None, context=None, api_key=None, base_url=None, timeout=None)` | `endor.user_report_async(...)`; returns `UserReportReceipt` (`id`, `message`) |
 | `client.projects` | `create(name, base_model, description=None)`, `get(name)`, `get_or_create(name, base_model, description=None)`, `list(limit=None, offset=0)` (all pages) |
-| `Project` | `.name`, `.info_`, `.ref` (`"<project>"`), `.preview_ref` (`"<project>:preview"`, or None without a preview), `.production`, `.preview`, `info()`, `learning()` → `Learning`, `versions()` → `list[VersionInfo]`, `promote(version)`, `set_auto_promote(on)`, `download(version, path, include_optimizer=False)`, `update(*, description)`, `delete()` |
+| `Project` | `.name`, `.info_`, `.ref` (`"<project>"`), `.preview_ref` (`"<project>:preview"`, or None without a preview), `.production`, `.preview`, `.auto_promote`, `info()`, `learning()` → `Learning`, `versions()` → `list[VersionInfo]`, `promote(version)`, `set_auto_promote(on)`, `download(version, path, include_optimizer=False)`, `update(*, description)`, `delete()` |
 | `client.corrections` | `create(request_id, questions, *, comment=None)` → `CorrectionInfo`, `batch(items)` → `list[CorrectionInfo]`, `get(request_id)`, `delete(request_id)`, each with an `_async` variant; `request_id` is a `SystemOneResponse` or its id |
 | `client.custom_models` | `list(production=None, limit=None, offset=0)` → `list[CustomModelInfo]` (production first), `get(name)`, `create(name, base_model=None, *, run_name=None, **run_options)` → `Run`, `promote(name, replace=None)`, `archive(name)`, `set_ttl(name, ttl_seconds)`, `download(name, path, include_optimizer=False)`, `delete(name)` |
 | `client.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
