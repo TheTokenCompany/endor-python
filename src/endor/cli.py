@@ -76,13 +76,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         dest="base_models",
         metavar="BASE",
-        help="a base model of the project, e.g. decider-2b (repeat for several; the first answers for NAME)",
+        help="a base model of the project, e.g. decider-2b (repeat for several in a custom project; the first "
+        "answers for NAME; a continuous learning project has exactly one)",
     )
     pc.add_argument(
         "--kind",
         choices=["custom", "managed"],
         default="custom",
-        help="custom: you train models with the SDK; managed: Endor trains from the project's decisions (+50%%)",
+        help="managed: continuous learning, Endor trains from the project's decisions (+50%%); custom: you train "
+        "models with the SDK",
     )
     pr.add_parser("delete").add_argument("name")
     for action in ("add-base-model", "remove-base-model"):
@@ -165,8 +167,8 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
         if a.action == "list":
             _out(client.projects.list(), f)
         elif a.action == "create":
-            if a.kind == "managed" and not a.base_models:
-                raise EndorError("a managed project needs a base model: --base-model BASE")
+            if a.kind == "managed" and len(a.base_models or []) != 1:
+                raise EndorError("a continuous learning project has exactly one base model: --base-model BASE")
             _out(client.projects.create(a.name, kind=a.kind, base_models=a.base_models), f)
         elif a.action == "add-base-model":
             _out(client.projects.get(a.name).add_base_model(a.base_model), f)

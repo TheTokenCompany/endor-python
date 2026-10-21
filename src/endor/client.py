@@ -6,11 +6,12 @@
     client.models.list()                                       # every name you can pass as model
     client.base_models()                                       # the base models, with limits and prices
     project = client.projects.get_or_create("tickets", base_models=["decider-2b"])   # datasets, runs, models
+    client.corrections.create(res, {"urgent": {"correct": False}})   # a decision was wrong: its project learns
     client.user_report("what you did, what happened, what you expected", kind="bug")      # tell the Endor team
 
 ``model`` always names a project: ``"<project>/<name>"`` (one saved model), ``"<project>/<base id>"`` (one of its base
-models) or ``"<project>"`` (a managed project's newest version, else its first base model). A bare base model id is
-refused (``ModelRequiresProjectError``).
+models) or ``"<project>"`` (a continuous learning project's newest version, else its first base model). A bare base
+model id is refused (``ModelRequiresProjectError``).
 
 Environment: ``ENDOR_API_KEY``, ``ENDOR_BASE_URL``, ``ENDOR_DEFAULT_MODEL``, ``ENDOR_LOG_LEVEL``,
 ``ENDOR_REPORT_LATENCY``.
@@ -28,6 +29,7 @@ from pydantic import BaseModel, ValidationError
 
 from . import _constants as C
 from . import _predict, _user_report
+from ._corrections import Corrections
 from ._http import Transport
 from ._images import Images
 from ._retry import RetryPolicy
@@ -147,6 +149,9 @@ class EndorClient:
         datasets, runs and predictions below do it for the ``endor.Image`` objects in your rows and datums)."""
         self.projects = Projects(self._t, capture, self.images)
         """``client.projects``: create, fetch and list projects."""
+        self.corrections = Corrections(self._t)
+        """``client.corrections``: whether past decisions were right and, if not, the right answers (``create``,
+        ``batch``, ``get``, ``delete``). Continuous learning projects learn from them."""
 
     def __repr__(self) -> str:
         return f"EndorClient(base_url={self.base_url!r}, model={self.default_model!r})"
@@ -202,8 +207,8 @@ class EndorClient:
                 it may hold ``endor.Image`` objects (as the state, a list item or an object value).
             questions: 1 to 64 named questions (``Noul``, ``Choice``, ``Score`` or dicts in the same shape).
             model: ``"<project>/<name>"`` (a saved model), ``"<project>/<base id>"`` (one of its base models) or
-                ``"<project>"`` (a managed project's newest version, else its first base model). Defaults to the
-                client's model.
+                ``"<project>"`` (a continuous learning project's newest version, else its first base model).
+                Defaults to the client's model.
             retry, timeout: Overrides for this call.
             extra_headers: Extra request headers.
             extra_body: Extra top-level request fields, merged last.
@@ -315,7 +320,7 @@ class EndorClient:
             ValueError: No rows, or more than 50,000.
             APIError: As for ``project.evaluate``: ``NotFoundError`` for an unknown project or model,
                 ``UnprocessableEntityError`` naming a bad row (``rows.<i>...``) or a question the model can't read,
-                ``WrongProjectKindError`` for a managed project, ``RateLimitError``.
+                ``WrongProjectKindError`` for a continuous learning project, ``RateLimitError``.
             OperationFailedError: The evaluation failed (for example a row too long for the model,
                 ``context_too_long``).
         """
@@ -471,9 +476,9 @@ class Models:
         timeout: float | None = None,
         extra_headers: Mapping[str, str] | None = None,
     ) -> ListModelsResponse:
-        """Every name you can pass as ``model``: for each project with a base model, ``"<project>"`` (a managed
-        project's newest version, else its first base model) and ``"<project>/<base id>"`` for each of its base
-        models; then ``"<project>/<name>"`` for each saved, unexpired model. ``.kind`` is ``project``, ``base`` or
+        """Every name you can pass as ``model``: for each project with a base model, ``"<project>"`` (a continuous
+        learning project's newest version, else its first base model) and ``"<project>/<base id>"`` for each of its
+        base models; then ``"<project>/<name>"`` for each saved, unexpired model. ``.kind`` is ``project``, ``base`` or
         ``model``. The base model catalog is ``client.base_models()``."""
         raw = self._t.request(
             "GET",

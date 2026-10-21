@@ -1,5 +1,5 @@
 """Ask a model named questions about a state. Every decision goes through a project: "tickets/v1" is a saved model,
-"tickets/decider-2b" one of its base models, and "tickets" a managed project's newest version (a custom project's
+"tickets/decider-2b" one of its base models, and "tickets" a continuous learning project's newest version (a custom project's
 first base model).
 
 ENDOR_API_KEY=edk_... python examples/decisions.py

@@ -5,6 +5,23 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- `client.corrections`: tell Endor whether past decisions were right and, if not, the right answers; continuous
+  learning projects learn from them. `create(request_id, questions, *, comment=None) -> CorrectionInfo`
+  (`POST /v1/corrections`), `batch(items)` (`POST /v1/corrections/batch`: 1 to 1,000 items, all or none),
+  `get(request_id)` and `delete(request_id)`, each with an `_async` variant. `request_id` is a `SystemOneResponse` or
+  its id. Each question is `{"correct": True}`, `{"correct": False, "answer": ...}` or `{"correct": False}`; an answer
+  must be exactly one of the question's options. New types `CorrectionInfo`, `QuestionCorrectionInfo`,
+  `QuestionCorrection` and `CorrectionAnswer`.
+- `SystemOneResponse.id`: the decision's id (`req_...`, also its `X-Request-Id`). It is None from a server that doesn't
+  send one.
+- `Learning.drift` (new type `Drift`): per question, whether recent traffic moved away from what the served version
+  was checked on. `Training.decisions`: the project's decision count when the run started.
+- A continuous learning project (`kind="managed"`) has exactly one base model, chosen at creation:
+  `projects.create` raises `ValueError` for none or several, and `get_or_create` for an existing one with another base.
+  `add_base_model` and `remove_base_model` are for custom projects. Docstrings, the README and the CLI call managed
+  projects continuous learning projects; the API value stays `managed`. Their versions are named `v1`, `v2`, ...
+  (the docstrings said `YYYY-MM-DD-N`).
+
 - `endor.metrics.decision_metrics`: when k options tie exactly for the top probability, each counts 1/k toward
   accuracy (so a decision scores the share of its tied top options that are the target's), and a soft target counts
   each of its tied top options as correct. Before, the first option in the dict won the tie, so accuracy depended on

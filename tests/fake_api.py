@@ -237,6 +237,10 @@ class FakeEndor:
     projects: dict[str, dict] = field(default_factory=dict)
     wandb_connected: bool = False  # the org's W&B connection (dashboard only)
     user_reports: list[dict] = field(default_factory=list)  # POST /v1/user_reports, with "org_id"
+    decisions: dict[str, dict] = field(default_factory=dict)  # request id -> {"project", "answers"} of a decision
+    corrections: dict[str, dict] = field(default_factory=dict)  # request id -> its active correction
+    learning: dict[str, dict] = field(default_factory=dict)  # project -> fields its GET .../learning answers with
+    request_id: str = ""  # the current request's X-Request-Id
     datasets: dict[tuple[str, str], dict] = field(default_factory=dict)
     runs: dict[str, dict] = field(default_factory=dict)
     models: dict[str, dict] = field(default_factory=dict)
@@ -498,6 +502,7 @@ class FakeEndor:
         if request.url.host == UPLOADS_HOST:
             self.upload_requests.append(Recorded(request.method, request.url.path, dict(request.headers), None, {}))
             return self.store_upload(request)
+        self.request_id = self.new_id("req")
         raw = request.content
         if raw and request.headers.get("content-encoding") == "gzip":
             raw = gzip.decompress(raw)
@@ -529,7 +534,7 @@ class FakeEndor:
             return self._error(e)
 
     def _json(self, status: int, payload: Any, replay: bool = False) -> httpx.Response:
-        headers = {"x-request-id": self.new_id("req")}
+        headers = {"x-request-id": self.request_id}
         if replay:
             headers["idempotent-replayed"] = "true"
         if status == 204:
@@ -540,7 +545,7 @@ class FakeEndor:
         err = {"code": e.code, "message": e.message}
         if e.param:
             err["param"] = e.param
-        return httpx.Response(e.status, json={"error": err}, headers={"x-request-id": self.new_id("req"), **e.headers})
+        return httpx.Response(e.status, json={"error": err}, headers={"x-request-id": self.request_id, **e.headers})
 
     def user_report(self, body: Any, org_id: str) -> dict:
         if not isinstance(body, dict) or body.get("kind") not in ("bug", "confusing", "works"):
@@ -564,6 +569,21 @@ class FakeEndor:
         m = method
         if p == ["systemone"] and m == "POST":
             return 200, self.systemone(body)
+        if p == ["corrections"] and m == "POST":
+            return 200, self.keep_correction(self.check_correction(body, ""))
+        if p == ["corrections", "batch"] and m == "POST":
+            items = body.get("items") if isinstance(body, dict) else None
+            if not isinstance(items, list) or not 1 <= len(items) <= 1000:
+                raise HTTPError(422, "invalid_input", "send 1 to 1,000 items", "items")
+            checked = [self.check_correction(it, f"items[{i}].") for i, it in enumerate(items)]
+            return 200, {"items": [self.keep_correction(c) for c in checked]}
+        if len(p) == 2 and p[0] == "corrections" and m in ("GET", "DELETE"):
+            if p[1] not in self.decisions or p[1] not in self.corrections:
+                raise HTTPError(404, "not_found", f"No correction of decision {p[1]!r}.")
+            if m == "GET":
+                return 200, self.corrections[p[1]]
+            del self.corrections[p[1]]
+            return 204, None
         if p == ["models"] and m == "GET":
             return 200, self.list_models()
         if p == ["base_models"] and m == "GET":
@@ -574,7 +594,7 @@ class FakeEndor:
                 "org_id": "org_test",
                 "key_id": "key_test",
                 "limits": dict(LIMITS),
-                "managed_projects": False,
+                "managed_projects": True,
                 "image_training": self.image_training,
             }
         if p == ["images"] and m == "POST":
@@ -677,9 +697,15 @@ class FakeEndor:
                     "serving": f"{project}/{proj['base_models'][0]}",
                     "trained_at": None,
                     "trainings": [],
+                    "drift": [],
+                    **self.learning.get(project, {}),
                 }
             if sub == "base_models" and len(p) == 3 and m == "POST":
                 b = body.get("base_model")
+                if proj["kind"] == "managed":
+                    raise HTTPError(
+                        409, "invalid_state", f"{project} keeps the base model it was created with.", "base_model"
+                    )
                 if b not in BASE_MODELS:
                     raise HTTPError(422, "invalid_input", f"Not a base model: {b!r}.", "base_model")
                 if b in proj["base_models"]:
@@ -887,11 +913,72 @@ class FakeEndor:
             if len(option_keys(q)) > base["max_options"]:
                 raise HTTPError(422, "invalid_options", f"questions.{name}: more than {base['max_options']} options")
             answers[name] = answer_from_probs(q, uniform(q))
+        self.decisions[self.request_id] = {"project": answered.partition("/")[0], "answers": answers}
         return {
+            "id": self.request_id,
             "model": answered,
             "answers": answers,
             "usage": {"input_tokens": (7 + 280 * len(images)) * len(answers), "output_tokens": 0},
         }
+
+    def check_correction(self, item: Any, where: str) -> dict:
+        """One correction checked against its decision's answers (as the API's services/corrections.py), not kept:
+        an answer must be exactly one of the question's options, in value and type."""
+        rid = item.get("request_id") if isinstance(item, dict) else None
+        d = self.decisions.get(rid) if isinstance(rid, str) else None
+        if d is None:
+            raise HTTPError(404, "not_found", f"No decision {rid!r}.", f"{where}request_id" if where else None)
+        questions, comment = item.get("questions"), item.get("comment")
+        if not isinstance(questions, dict) or not questions:
+            raise HTTPError(422, "invalid_input", "send 1 or more questions", f"{where}questions")
+        if comment is not None and not (isinstance(comment, str) and len(comment) <= 1000):
+            raise HTTPError(422, "invalid_input", "at most 1,000 characters", f"{where}comment")
+        out = {}
+        for name, q in questions.items():
+            a, param = d["answers"].get(name), f"{where}questions.{name}"
+            if not isinstance(q, dict) or not isinstance(q.get("correct"), bool):
+                raise HTTPError(422, "invalid_input", f"{param}.correct: send true or false", f"{param}.correct")
+            kind = a["type"] if a else None
+            if kind == "noul":
+                options: list = [False, True]
+                served: Any = a["noul"] >= 0.5
+            elif kind == "choice":
+                options, served = list(a["probabilities"]), a["choice"]
+            elif kind == "score":
+                options = list(range(len(a["probabilities"])))
+                served = max(options, key=lambda i: a["probabilities"][str(i)])
+            else:
+                raise HTTPError(422, "invalid_input", f"the decision has no question {name!r}", param)
+            v = q.get("answer")
+            if v is not None and not any(v == o and type(v) is type(o) for o in options):
+                raise HTTPError(422, "invalid_input", f"{param}.answer: send one of {options}", f"{param}.answer")
+            if q["correct"]:
+                if v is not None and v != served:
+                    raise HTTPError(422, "invalid_input", f"{param}.answer: send correct: false", f"{param}.answer")
+                answer = served
+            elif v is not None:
+                if v == served:
+                    raise HTTPError(422, "invalid_input", f"{param}.answer: send correct: true", f"{param}.answer")
+                answer = v
+            else:
+                others = [o for o in options if o != served]
+                answer = others[0] if len(others) == 1 else None
+            out[name] = {"correct": q["correct"], "answer": answer, "served": served}
+        return {
+            "request_id": rid,
+            "project": d["project"],
+            "questions": out,
+            "comment": comment,
+            "created_at": now().isoformat(),
+        }
+
+    def keep_correction(self, c: dict) -> dict:
+        """The active correction after `c`: the same questions and comment keep the active one, else `c` replaces it."""
+        cur = self.corrections.get(c["request_id"])
+        if cur is not None and (cur["questions"], cur["comment"]) == (c["questions"], c["comment"]):
+            return cur
+        self.corrections[c["request_id"]] = c
+        return c
 
     def list_models(self) -> dict:
         """GET /v1/models: the names a decision can send (`<project>`, `<project>/<base id>`, `<project>/<name>`)."""
@@ -986,8 +1073,10 @@ class FakeEndor:
         if kind not in ("custom", "managed"):
             raise HTTPError(422, "invalid_input", "kind is custom or managed", "kind")
         bases = body.get("base_models") or []
-        if not bases and kind == "managed":
-            raise HTTPError(422, "invalid_input", "A managed project needs at least one base model.", "base_models")
+        if len(bases) != 1 and kind == "managed":
+            raise HTTPError(
+                422, "invalid_input", "A continuous learning project has exactly one base model.", "base_models"
+            )
         for b in bases:
             if b not in BASE_MODELS:
                 raise HTTPError(422, "invalid_input", f"Not a base model: {b!r}.", "base_models")
