@@ -540,7 +540,7 @@ endor whoami
 endor base-models
 endor projects list | create NAME --base-model BASE | delete NAME
 endor projects versions NAME | promote NAME VERSION | auto-promote NAME on|off
-endor custom-models list [--production | --archived] | info NAME | promote NAME [--replace NAME] | archive NAME
+endor custom-models list [--production | --archived] | info NAME | promote NAME [--replace OTHER] | archive NAME
 endor custom-models download NAME [-o DIR] [--include-optimizer] | set-ttl NAME SECONDS|none | delete NAME
 endor datasets list | upload NAME FILE | delete NAME
 endor runs list | show RUN_ID | close RUN_ID

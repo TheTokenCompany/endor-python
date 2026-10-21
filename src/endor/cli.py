@@ -4,7 +4,7 @@
     endor base-models
     endor projects list | create NAME --base-model BASE | delete NAME
     endor projects versions NAME | promote NAME VERSION | auto-promote NAME on|off
-    endor custom-models list [--production | --archived] | info NAME | promote NAME [--replace NAME] | archive NAME
+    endor custom-models list [--production | --archived] | info NAME | promote NAME [--replace OTHER] | archive NAME
     endor custom-models download NAME [-o DIR] | set-ttl NAME SECONDS|none | delete NAME
     endor datasets list | upload NAME FILE | delete NAME
     endor runs list | show RUN_ID | close RUN_ID
@@ -90,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     cp = cm.add_parser("promote")
     cp.add_argument("name")
     cp.add_argument(
-        "--replace", metavar="NAME", help="a model in production to archive in the same step, when every slot is taken"
+        "--replace", metavar="OTHER", help="a model in production to archive in the same step, when every slot is taken"
     )
     cm.add_parser("archive").add_argument("name")
     dl = cm.add_parser("download")
