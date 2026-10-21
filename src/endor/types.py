@@ -380,7 +380,8 @@ class ModelMetadata(BaseModel):
     @property
     def kind(self) -> str:
         """What the name calls, as Endor reports it: a continuous learning project's live version (``"project"``,
-        ``"tickets"``), its preview (``"preview"``, ``"tickets:preview"``) or a live custom model (``"custom"``)."""
+        ``"tickets"``), its preview (``"preview"``, ``"tickets:preview"``, listed only while it has one) or a live
+        custom model (``"custom"``)."""
         if self.endor.get("kind"):
             return str(self.endor["kind"])
         return "preview" if ":" in self.name else "project"
@@ -564,7 +565,8 @@ class ProjectInfo(_View):
     """The version ``"<project>"`` answers with (``"v4"``); None before the first version, when it answers with the
     base model."""
     preview: str | None = None
-    """The newest version, which ``"<project>:preview"`` answers with; None before the first version."""
+    """The newest version while it isn't live, which ``"<project>:preview"`` answers with. None when the newest version
+    is live (always, while auto-promote is on) and before the first version."""
     auto_promote: bool = True
     """Each new version goes live as soon as it is ready. Promoting an older version turns it off (a rollback);
     ``project.set_auto_promote(True)`` turns it back on."""
@@ -584,7 +586,8 @@ class VersionInfo(_View):
     live: bool = False
     """``"<project>"`` answers with it."""
     preview: bool = False
-    """It is the newest version, which ``"<project>:preview"`` answers with."""
+    """It is the newest version and isn't live, so ``"<project>:preview"`` answers with it. Never both live and
+    preview."""
     accuracy: float | None = None
     """Its accuracy in percent when it was trained (None: nothing to check on)."""
     loss: float | None = None
@@ -598,8 +601,8 @@ class Training(_View):
 
     at: datetime
     kept: bool
-    """Saved as ``version`` (the project's preview, and live too while auto-promote is on), or discarded (not better
-    than the version it was compared with)."""
+    """Saved as ``version`` (live at once while auto-promote is on, else the project's preview), or discarded (not
+    better than the version it was compared with)."""
     version: str | None = None
     decisions: int | None = None
     """The project's decision count when the run started (None from a server that doesn't send it)."""

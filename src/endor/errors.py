@@ -3,7 +3,7 @@
     EndorError
       APIError (status, code, param, message, body, headers, endpoint, request_id)
         BadRequestError 400 · AuthenticationError 401 · InsufficientBalanceError 402 · PermissionDeniedError 403
-        NotFoundError 404 (VersionNotCallableError)
+        NotFoundError 404 (NoPreviewError, VersionNotCallableError)
         ConflictError 409 (LimitReachedError > LiveModelsFullError, ModelNotLiveError, ModelIsLiveError)
         PayloadTooLargeError 413
         UnprocessableEntityError 422 (ModelRequiresProjectError)
@@ -43,6 +43,7 @@ __all__ = [
     "ModelNotLiveError",
     "ModelIsLiveError",
     "VersionNotCallableError",
+    "NoPreviewError",
     "PayloadTooLargeError",
     "UnprocessableEntityError",
     "ModelRequiresProjectError",
@@ -172,9 +173,15 @@ class NotFoundError(APIError):
     """404: the resource does not exist, or is not yours."""
 
 
+class NoPreviewError(NotFoundError):
+    """404 ``no_preview``: ``"<project>:preview"`` was called, but the project has no preview. A project has one only
+    while its newest version isn't live, so never while auto-promote is on (each new version goes live): call
+    ``"<project>"``."""
+
+
 class VersionNotCallableError(NotFoundError):
     """404 ``version_not_callable``: ``"<project>:v3"`` names an older version of a continuous learning project. Only
-    ``"<project>"`` (the live version) and ``"<project>:preview"`` (the newest) can be called; promote the version
+    ``"<project>"`` (the live version) and ``"<project>:preview"`` (a newer one) can be called; promote the version
     (``project.promote("v3")``) to call it as ``"<project>"``."""
 
 
@@ -321,6 +328,7 @@ _CODE_ERRORS: dict[str, type[APIError]] = {
     "model_not_live": ModelNotLiveError,
     "model_is_live": ModelIsLiveError,
     "version_not_callable": VersionNotCallableError,
+    "no_preview": NoPreviewError,
     "model_requires_project": ModelRequiresProjectError,
 }
 

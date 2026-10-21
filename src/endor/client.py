@@ -10,7 +10,7 @@
     client.user_report("what you did, what happened, what you expected", kind="bug")      # tell the Endor team
 
 ``model`` is ``"<project>"`` (a continuous learning project's live version), ``"<project>:preview"`` (its newest
-version) or a live custom model's name (``"router-2"``). A bare base model id is refused
+version, while that isn't live) or a live custom model's name (``"router-2"``). A bare base model id is refused
 (``ModelRequiresProjectError``).
 
 Environment: ``ENDOR_API_KEY``, ``ENDOR_BASE_URL``, ``ENDOR_DEFAULT_MODEL``, ``ENDOR_LOG_LEVEL``,
@@ -217,8 +217,8 @@ class EndorClient:
                 it may hold ``endor.Image`` objects (as the state, a list item or an object value).
             questions: 1 to 64 named questions (``Noul``, ``Choice``, ``Score`` or dicts in the same shape).
             model: ``"<project>"`` (a continuous learning project's live version, its base model before the first),
-                ``"<project>:preview"`` (its newest version) or a live custom model's name. Defaults to the client's
-                model.
+                ``"<project>:preview"`` (its newest version, while that isn't live) or a live custom model's name.
+                Defaults to the client's model.
             retry, timeout: Overrides for this call.
             extra_headers: Extra request headers.
             extra_body: Extra top-level request fields, merged last.
@@ -232,8 +232,9 @@ class EndorClient:
 
         Raises:
             EndorError: No ``model`` was given and the client has no default model.
-            APIError: ``NotFoundError`` for an unknown model (``VersionNotCallableError`` for an older version,
-                ``"<project>:v3"``), ``ModelNotLiveError`` for an inactive custom model, ``ModelRequiresProjectError``
+            APIError: ``NotFoundError`` for an unknown model (``NoPreviewError`` for ``"<project>:preview"`` when
+                the project has no preview, ``VersionNotCallableError`` for an older version, ``"<project>:v3"``),
+                ``ModelNotLiveError`` for an inactive custom model, ``ModelRequiresProjectError``
                 for a bare base model id, ``UnprocessableEntityError`` naming a bad question, ``RateLimitError`` and
                 ``OverloadedError`` when told to wait.
         """
@@ -475,8 +476,8 @@ class Models:
         extra_headers: Mapping[str, str] | None = None,
     ) -> ListModelsResponse:
         """Every name you can pass as ``model``: for each continuous learning project ``"<project>"`` (its live
-        version) and ``"<project>:preview"`` (its newest), then every live custom model's name. ``.kind`` says which
-        (``project``, ``preview`` or ``custom``). The base model catalog is ``client.base_models()``."""
+        version) and, while it has one, ``"<project>:preview"``, then every live custom model's name. ``.kind`` says
+        which (``project``, ``preview`` or ``custom``). The base model catalog is ``client.base_models()``."""
         raw = self._t.request(
             "GET",
             "/v1/models",

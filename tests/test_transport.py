@@ -236,6 +236,7 @@ class TestErrors:
             (409, "limit_reached", LimitReachedError, ConflictError),
             (409, "live_models_full", LiveModelsFullError, LimitReachedError),
             (409, "model_not_live", ModelNotLiveError, ConflictError),
+            (404, "no_preview", endor.NoPreviewError, NotFoundError),
             (422, "model_requires_project", ModelRequiresProjectError, UnprocessableEntityError),
             (409, "conflict", ConflictError, ConflictError),
         ],

@@ -3,14 +3,15 @@ corrections, starting from the base model you choose when you create it.
 
     project = client.projects.get_or_create("tickets", base_model="decider-2b")
     client.system_one(state, questions, model=project.ref)            # "tickets": the live version
-    client.system_one(state, questions, model=project.preview_ref)    # "tickets:preview": the newest version
     project.versions()               # v1, v2, ... newest first, with which one is live
     project.promote("v3")            # make v3 live (an older one: a rollback, which turns auto-promote off)
+    client.system_one(state, questions, model=project.preview_ref)    # "tickets:preview": the newer version
     project.set_auto_promote(True)   # every new version goes live as soon as it is ready (the default)
 
-A project has one live version, which ``"<project>"`` answers with, and one preview, the newest version, which
-``"<project>:preview"`` answers with; before the first version both answer with the base model. Custom models you train
-yourself are ``client.custom_models``.
+A project has one live version, which ``"<project>"`` answers with (its base model before the first version). While
+auto-promote is on, each new version goes live at once. With it off, a newest version that isn't live yet is the
+preview, which ``"<project>:preview"`` answers with; without a preview, that name raises ``NoPreviewError``. Custom
+models you train yourself are ``client.custom_models``.
 """
 
 from __future__ import annotations
@@ -94,10 +95,11 @@ class Project:
         return self.name
 
     @property
-    def preview_ref(self) -> str:
-        """``"<project>:preview"``: the ``model`` that answers with the newest version (the base model before the
-        first)."""
-        return f"{self.name}:{C.PREVIEW}"
+    def preview_ref(self) -> str | None:
+        """``"<project>:preview"``: the ``model`` that answers with the preview, the newest version while it isn't
+        live. None while the project has no preview (as last fetched: ``info()`` refreshes it), when that name raises
+        ``NoPreviewError``."""
+        return f"{self.name}:{C.PREVIEW}" if self.info_.preview else None
 
     def info(self) -> ProjectInfo:
         """Fetch the project again: its live and preview versions, auto-promote and description."""
@@ -115,16 +117,16 @@ class Project:
         )
 
     def versions(self) -> builtins.list[VersionInfo]:
-        """Every version, newest first (the first is the preview), with which one is live and how each did when it
-        was trained."""
+        """Every version, newest first, with which one is live, which one is the preview (the newest, while it isn't
+        live) and how each did when it was trained."""
         items = list_all(self._t, f"/v1/projects/{self.name}/versions", {}, "project.versions")
         return [VersionInfo.model_validate(v) for v in items]
 
     def promote(self, version: str) -> ProjectInfo:
         """Make ``version`` (``"v3"``) live: ``"<project>"`` answers with it from now on. Promoting a version older
-        than the preview is a rollback: it turns auto-promote off, so new versions only reach ``"<project>:preview"``
-        until you promote again or call ``set_auto_promote(True)``. Promoting the live version changes nothing.
-        ``NotFoundError`` for a version the project doesn't have."""
+        than the newest is a rollback: it turns auto-promote off, so the newest becomes the preview and new versions
+        only reach ``"<project>:preview"`` until you promote again or call ``set_auto_promote(True)``. Promoting the
+        live version changes nothing. ``NotFoundError`` for a version the project doesn't have."""
         self.info_ = ProjectInfo.model_validate(
             self._t.request(
                 "POST", f"/v1/projects/{self.name}/versions/{version}/promote", method_name="project.promote"
@@ -133,8 +135,8 @@ class Project:
         return self.info_
 
     def set_auto_promote(self, on: bool) -> ProjectInfo:
-        """Turn auto-promote on (the preview goes live at once, and every new version after it) or off (the live
-        version stays until you promote one)."""
+        """Turn auto-promote on (the newest version goes live at once, and every new version after it, so there is no
+        preview) or off (the live version stays until you promote one; newer versions are the preview)."""
         self.info_ = ProjectInfo.model_validate(
             self._t.request(
                 "PATCH",

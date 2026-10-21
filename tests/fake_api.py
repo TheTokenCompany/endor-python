@@ -3,8 +3,9 @@
 It implements the public contract the SDK relies on: bearer auth, the error envelope, strict sequence numbers with
 idempotent retries, ``Idempotency-Key`` on creates, long-polled futures (optionally pending for N polls), the
 decision answer formulas, the model references (``<project>``, ``<project>:preview``, a live custom model's name),
-continuous learning projects with live and preview versions, custom models with live slots, the count limits (409
-``limit_reached``, ``live_models_full``), ``no_gradients``, 402 for a blocked org, and fault injection for retry tests.
+continuous learning projects with a live version and a preview (the newest version while it isn't live), custom models
+with live slots, the count limits (409 ``limit_reached``, ``live_models_full``), ``no_gradients``, 402 for a blocked
+org, and fault injection for retry tests.
 It is a test double, not a reference server.
 """
 
@@ -294,6 +295,11 @@ class FakeEndor:
         f = self.futures[future_id]
         f["_error"], f["_result"] = {"code": code, "message": message}, None
 
+    def preview(self, p: dict) -> str | None:
+        """The project's preview: its newest version while that isn't live (so never while auto-promote is on)."""
+        vs = self.versions.get(p["name"], [])
+        return vs[-1]["name"] if vs and vs[-1]["name"] != p["live"] else None
+
     def project_view(self, p: dict) -> dict:
         vs = self.versions.get(p["name"], [])
         return {
@@ -301,7 +307,7 @@ class FakeEndor:
             "description": p["description"],
             "base_model": p["base_model"],
             "live": p["live"],
-            "preview": vs[-1]["name"] if vs else None,
+            "preview": self.preview(p),
             "auto_promote": p["auto_promote"],
             "promoted_at": p["promoted_at"],
             "versions": len(vs),
@@ -309,12 +315,16 @@ class FakeEndor:
         }
 
     def version_view(self, p: dict, v: dict) -> dict:
-        vs = self.versions[p["name"]]
-        return {**v, "base_model": p["base_model"], "live": v["name"] == p["live"], "preview": v is vs[-1]}
+        return {
+            **v,
+            "base_model": p["base_model"],
+            "live": v["name"] == p["live"],
+            "preview": v["name"] == self.preview(p),
+        }
 
     def add_version(self, project: str, accuracy: float | None = None, loss: float | None = None) -> str:
-        """What learning does when it keeps a version: the next ``v<n>`` becomes the preview, and the live version
-        too while auto-promote is on. Returns its name."""
+        """What learning does when it keeps a version: the next ``v<n>`` goes live while auto-promote is on, else it is
+        the preview. Returns its name."""
         p, vs = self.project(project), self.versions.setdefault(project, [])
         v = {
             "name": f"v{len(vs) + 1}",
@@ -848,7 +858,8 @@ class FakeEndor:
     # ------------------------------------------------------------------ decisions
     def resolve_model(self, model: str) -> tuple[str, str, str | None]:
         """(base model id, what answered, project) for a decision's ``model``, as the API's services/references.py:
-        ``<project>`` (its live version, else its base), ``<project>:preview`` (its newest version, else its base) or
+        ``<project>`` (its live version, else its base), ``<project>:preview`` (its newest version while that isn't
+        live; else 404 no_preview) or
         a live custom model's name."""
         if "/" in model:
             raise HTTPError(
@@ -862,9 +873,12 @@ class FakeEndor:
             p = self.projects.get(name)
             if p is None:
                 raise HTTPError(404, "unknown_model", f"No project {name!r}.", "model")
-            vs = self.versions.get(name, [])
             if env == "preview":
-                v = vs[-1]["name"] if vs else p["base_model"]
+                v = self.preview(p)
+                if v is None:
+                    raise HTTPError(
+                        404, "no_preview", f"{name} has no preview: its newest version is live. Call {name}.", "model"
+                    )
                 return p["base_model"], f"{name}:{v}", name
             if re.fullmatch(r"v[1-9]\d*", env):
                 raise HTTPError(
@@ -983,7 +997,8 @@ class FakeEndor:
         """GET /v1/models: the names a decision can send (`<project>`, `<project>:preview`, live custom models)."""
         items: list[dict] = []
         for name, p in sorted(self.projects.items()):
-            for ref, kind in ((name, "project"), (f"{name}:preview", "preview")):
+            refs = [(name, "project")] + ([(f"{name}:preview", "preview")] if self.preview(p) else [])
+            for ref, kind in refs:
                 _, serves, _ = self.resolve_model(ref)
                 items.append(
                     {

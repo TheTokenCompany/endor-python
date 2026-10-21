@@ -14,6 +14,7 @@ from endor import (
     ModelIsLiveError,
     ModelNotLiveError,
     ModelRequiresProjectError,
+    NoPreviewError,
     NotFoundError,
     UnprocessableEntityError,
     VersionNotCallableError,
@@ -89,35 +90,47 @@ class TestProjects:
         with pytest.raises(ValueError, match="nothing to update"):
             p.update()
 
-    def test_refs_answer_with_the_base_until_the_first_version(self, client: EndorClient) -> None:
+    def test_ref_answers_with_the_base_until_the_first_version(self, client: EndorClient) -> None:
         p = client.projects.create(unique("ref"), base_model=BASE)
-        assert p.ref == p.name and p.preview_ref == f"{p.name}:preview"
+        assert p.ref == p.name and p.preview_ref is None  # no version yet, so no preview
         assert client.system_one("x", Q, model=p.ref).model == f"{p.name}:{BASE}"
-        assert client.system_one("x", Q, model=p.preview_ref).model == f"{p.name}:{BASE}"
+        with pytest.raises(NoPreviewError) as e:
+            client.system_one("x", Q, model=f"{p.name}:preview")
+        assert isinstance(e.value, NotFoundError) and e.value.code == "no_preview"
 
     def test_versions_live_preview_promote_and_auto_promote(self, client: EndorClient, fake: FakeEndor) -> None:
         p = client.projects.create(unique("ver"), base_model=BASE)
         fake.add_version(p.name, accuracy=81.0, loss=0.5)
-        fake.add_version(p.name, accuracy=84.5, loss=0.4)  # auto-promote is on: v2 is live
+        fake.add_version(p.name, accuracy=84.5, loss=0.4)  # auto-promote is on: v2 is live, no preview
         info = p.info()
-        assert (info.live, info.preview, info.versions, info.auto_promote) == ("v2", "v2", 2, True)
+        assert (info.live, info.preview, info.versions, info.auto_promote) == ("v2", None, 2, True)
+        assert p.preview_ref is None
         assert client.system_one("x", Q, model=p.ref).model == f"{p.name}:v2"
+        with pytest.raises(NoPreviewError):
+            client.system_one("x", Q, model=f"{p.name}:preview")
         vs = p.versions()
-        assert [(v.name, v.live, v.preview) for v in vs] == [("v2", True, True), ("v1", False, False)]
+        assert [(v.name, v.live, v.preview) for v in vs] == [("v2", True, False), ("v1", False, False)]
         assert vs[0].accuracy == 84.5 and vs[1].loss == 0.5 and vs[0].base_model == BASE
 
-        info = p.promote("v1")  # a rollback: auto-promote turns off
+        info = p.promote("v1")  # a rollback: auto-promote turns off, and the newest is the preview
         req = fake.requests[-1]
         assert (req.method, req.path) == ("POST", f"/v1/projects/{p.name}/versions/v1/promote")
         assert (info.live, info.preview, info.auto_promote) == ("v1", "v2", False) and p.info_ is info
-        assert info.promoted_at is not None
+        assert info.promoted_at is not None and p.preview_ref == f"{p.name}:preview"
         fake.add_version(p.name)  # v3 only reaches the preview
         assert client.system_one("x", Q, model=p.ref).model == f"{p.name}:v1"
-        assert client.system_one("x", Q, model=p.preview_ref).model == f"{p.name}:v3"
+        assert client.system_one("x", Q, model=f"{p.name}:preview").model == f"{p.name}:v3"
+        vs = p.versions()
+        assert [(v.name, v.live, v.preview) for v in vs] == [
+            ("v3", False, True),
+            ("v2", False, False),
+            ("v1", True, False),
+        ]
+        assert not any(v.live and v.preview for v in vs)
 
-        info = p.set_auto_promote(True)  # the preview goes live at once
+        info = p.set_auto_promote(True)  # the newest goes live at once: no preview any more
         assert fake.requests[-1].body == {"auto_promote": True}
-        assert (info.live, info.auto_promote) == ("v3", True)
+        assert (info.live, info.preview, info.auto_promote) == ("v3", None, True)
         assert p.set_auto_promote(False).auto_promote is False
         with pytest.raises(NotFoundError):
             p.promote("v9")
@@ -277,13 +290,17 @@ class TestCustomModels:
         with pytest.raises(NotFoundError):
             client.custom_models.get(name)
 
-    def test_models_list_names_what_decisions_can_call(self, client: EndorClient) -> None:
+    def test_models_list_names_what_decisions_can_call(self, client: EndorClient, fake: FakeEndor) -> None:
         p = client.projects.create(unique("cat"), base_model=BASE)
         live, inactive = train_one(client, unique("live")), train_one(client, unique("idle"))
         client.custom_models.promote(live)
         got = {m.name: m.kind for m in client.models.list().models}
-        assert got == {p.name: "project", f"{p.name}:preview": "preview", live: "custom"}
+        assert got == {p.name: "project", live: "custom"}  # no preview: the project has no version that isn't live
         assert inactive not in got
+        fake.add_version(p.name)
+        p.set_auto_promote(False)
+        fake.add_version(p.name)  # v2 waits as the preview
+        assert client.models.list().models[1].name == f"{p.name}:preview"
 
 
 class TestDatasets:

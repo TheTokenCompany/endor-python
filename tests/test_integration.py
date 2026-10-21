@@ -51,7 +51,7 @@ def test_decision(live: endor.EndorClient, base_model: str) -> None:
         assert res.model == f"{project.name}:{base_model}"
         assert abs(sum(res.choices["dept"].probabilities.values()) - 1) < 1e-3
         assert 0 <= res.nouls["urgent"].noul <= 1
-        assert {project.ref, project.preview_ref} <= {m.name for m in live.models.list().models}
+        assert project.ref in {m.name for m in live.models.list().models} and project.preview_ref is None
         assert project.versions() == []
     finally:
         project.delete()

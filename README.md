@@ -70,21 +70,22 @@ res.model, res.usage.input_tokens         # what answered, e.g. "tickets:v4"
 res.id                                    # the decision's id ("req_..."), to correct it later
 ```
 
-**Live and preview, like deployments.** A project has one **live** version and one **preview**, its newest version:
+**Live and preview, like deployments.** A project has one **live** version. With **auto-promote** on (the
+default), every new version goes live as soon as it is ready. With it off, a newer version than the live one waits as
+the **preview** until you promote it:
 
 | `model` | Answers with |
 |---|---|
 | `"tickets"` (`project.ref`) | the live version; the base model before the first version |
-| `"tickets:preview"` (`project.preview_ref`) | the newest version; the base model before the first version |
+| `"tickets:preview"` (`project.preview_ref`) | the preview, the newest version while it isn't live. Without one (always while auto-promote is on) it raises `NoPreviewError`, and `project.preview_ref` is None |
 | `"router-2"` | a live custom model (see "Advanced: custom models") |
 
-With **auto-promote** on (the default), every new version goes live as soon as it is ready. Promote any version
-yourself, for example to roll back:
+Promote any version yourself, for example to roll back:
 
 ```python
-project.versions()               # v1, v2, ... newest first: .live, .preview, .accuracy, .loss
-project.promote("v3")            # "tickets" answers with v3 now; an older version than the preview turns auto-promote off
-project.set_auto_promote(True)   # the preview goes live at once, and every new version after it
+project.versions()               # v1, v2, ... newest first: .live, .preview (never both), .accuracy, .loss
+project.promote("v3")            # "tickets" answers with v3 now; a version older than the newest turns auto-promote off
+project.set_auto_promote(True)   # the newest version goes live at once, and every new version after it
 project.info()                   # .live, .preview, .auto_promote, .promoted_at, .versions, .base_model
 project.download("v3", "./tickets-v3")   # a version's LoRA adapter (PEFT), to run it yourself
 ```
@@ -136,7 +137,7 @@ client.corrections.create(res, {
 
 ## Decisions
 
-`model` is `"<project>"`, `"<project>:preview"` or a live custom model's name. A bare base model id such as
+`model` is `"<project>"`, `"<project>:preview"` (while the project has a preview) or a live custom model's name. A bare base model id such as
 `"decider-2b"` raises `ModelRequiresProjectError` (422 `model_requires_project`): create a project on it. There is no
 default model: pass `model=` or set one with `EndorClient(model="tickets")` or `ENDOR_DEFAULT_MODEL`, else
 `system_one` raises `EndorError` before sending anything.
@@ -184,8 +185,8 @@ approved these calls raise `PermissionDeniedError` (403 `image_training_not_enab
 says), and the message says how to ask.
 
 **The catalog.** `client.models.list()` returns every name you can pass as `model` (`GET /v1/models`): for each
-project `"<project>"` and `"<project>:preview"`, then every live custom model (`.kind` is `project`, `preview` or
-`custom`). `client.base_models()` returns the base models (`GET /v1/base_models`) with their option limits,
+project `"<project>"` and, while it has a preview, `"<project>:preview"`, then every live custom model (`.kind` is
+`project`, `preview` or `custom`). `client.base_models()` returns the base models (`GET /v1/base_models`) with their option limits,
 `modalities`, `hf_repo`, `contract` and prices (`price_per_mtok_decide` for custom models,
 `price_per_mtok_decide_continuous_learning` for projects, `price_per_gpu_hour` for training).
 
@@ -441,8 +442,8 @@ Every API error is an `endor.APIError` subclass named after its status (`NotFoun
 `InsufficientBalanceError` (402, `insufficient_balance`) means your org's balance is used up: add credit in the
 dashboard. A few codes have their own subclass: `LimitReachedError` (409 `limit_reached`) and its
 `LiveModelsFullError` (409 `live_models_full`), `ModelNotLiveError` (409 `model_not_live`) and `ModelIsLiveError`
-(409 `model_is_live`), all `ConflictError`s; `VersionNotCallableError` (404 `version_not_callable`), a
-`NotFoundError`; and `ModelRequiresProjectError` (422 `model_requires_project`), an `UnprocessableEntityError`. A training operation that fails on the trainer raises `OperationFailedError` from `.result()`, with codes
+(409 `model_is_live`), all `ConflictError`s; `NoPreviewError` (404 `no_preview`) and `VersionNotCallableError`
+(404 `version_not_callable`), both `NotFoundError`s; and `ModelRequiresProjectError` (422 `model_requires_project`), an `UnprocessableEntityError`. A training operation that fails on the trainer raises `OperationFailedError` from `.result()`, with codes
 such as `oom`, `no_gradients` or `trainer_lost`. Connection problems raise `APIConnectionError` and
 `APITimeoutError`.
 
@@ -557,7 +558,7 @@ decisions; a custom model's decisions have no project.
 | `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `predict(model, rows, *, progress=True, timeout=None)` → one `{question: answer}` per row, `predict_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `custom_models`, `datasets`, `runs`, `evaluations`, `corrections`, `whoami()`, `balance()` → USD, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
 | `endor.user_report(message, *, kind="bug", request_id=None, context=None, api_key=None, base_url=None, timeout=None)` | `endor.user_report_async(...)`; returns `UserReportReceipt` (`id`, `message`) |
 | `client.projects` | `create(name, base_model, description=None)`, `get(name)`, `get_or_create(name, base_model, description=None)`, `list(limit=None, offset=0)` (all pages) |
-| `Project` | `.name`, `.info_`, `.ref` (`"<project>"`), `.preview_ref` (`"<project>:preview"`), `info()`, `learning()` → `Learning`, `versions()` → `list[VersionInfo]`, `promote(version)`, `set_auto_promote(on)`, `download(version, path, include_optimizer=False)`, `update(*, description)`, `delete()` |
+| `Project` | `.name`, `.info_`, `.ref` (`"<project>"`), `.preview_ref` (`"<project>:preview"`, or None without a preview), `info()`, `learning()` → `Learning`, `versions()` → `list[VersionInfo]`, `promote(version)`, `set_auto_promote(on)`, `download(version, path, include_optimizer=False)`, `update(*, description)`, `delete()` |
 | `client.corrections` | `create(request_id, questions, *, comment=None)` → `CorrectionInfo`, `batch(items)` → `list[CorrectionInfo]`, `get(request_id)`, `delete(request_id)`, each with an `_async` variant; `request_id` is a `SystemOneResponse` or its id |
 | `client.custom_models` | `list(live=None, limit=None, offset=0)` → `list[CustomModelInfo]` (live first), `get(name)`, `create(name, base_model=None, *, run_name=None, **run_options)` → `Run`, `promote(name, replace=None)`, `demote(name)`, `set_ttl(name, ttl_seconds)`, `download(name, path, include_optimizer=False)`, `delete(name)` |
 | `client.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
@@ -571,7 +572,7 @@ decisions; a custom model's decisions have no project.
 | `endor.recipes.supervised` | `SupervisedConfig`, `SupervisedResult`, `train(cfg, rows, eval_rows=None, client=None)`, `evaluate_run(run, datums)`, `evaluate_model(client, model, rows)`, `lr_at(cfg, step, total)` |
 | `endor.recipes.distill` | `Teacher` (protocol), `DistillConfig(supervised, teacher, budget, seed)`, `label_with_teacher(rows, cfg)`, `distill(cfg, unlabeled_rows, eval_rows, client=None)` |
 | Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `CorrectionInfo`, `QuestionCorrectionInfo`, `QuestionCorrection`, `CorrectionAnswer`; `ProjectInfo`, `VersionInfo`, `Learning`, `Training`, `Drift`, `CustomModelInfo`, `RunInfo`, `LoraInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `DownloadedFile`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
-| Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError` (`VersionNotCallableError`), `ConflictError` (`LimitReachedError` > `LiveModelsFullError`, `ModelNotLiveError`, `ModelIsLiveError`), `PayloadTooLargeError`, `UnprocessableEntityError` (`ModelRequiresProjectError`), `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
+| Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError` (`NoPreviewError`, `VersionNotCallableError`), `ConflictError` (`LimitReachedError` > `LiveModelsFullError`, `ModelNotLiveError`, `ModelIsLiveError`), `PayloadTooLargeError`, `UnprocessableEntityError` (`ModelRequiresProjectError`), `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
 
 Every public member has a docstring with the details.
 

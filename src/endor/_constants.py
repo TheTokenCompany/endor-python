@@ -51,7 +51,7 @@ RUN_HEARTBEAT_S = 60.0
 # Names of custom models and projects: the API's name pattern (one namespace per org; base model ids are taken, and
 # ``:`` separates a project from its preview).
 SDK_MODEL_NAME = r"^[a-z0-9][a-z0-9._-]{0,62}$"
-PREVIEW = "preview"  # "<project>:preview": a continuous learning project's newest version
+PREVIEW = "preview"  # "<project>:preview": a continuous learning project's newest version, while it isn't live
 
 # Error codes that are never retried, whatever their status: waiting a few seconds doesn't fix them.
 NON_RETRYABLE_CODES = frozenset({"limit_reached", "live_models_full", "insufficient_balance"})

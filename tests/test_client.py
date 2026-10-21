@@ -163,7 +163,11 @@ class TestDecisions:
     def test_a_projects_live_version_and_preview(self, client: EndorClient, fake: FakeEndor, decider: str) -> None:
         fake.add_version(decider)
         assert client.system_one("x", {"d": DEPT}, model=decider).model == f"{decider}:v1"
-        assert client.system_one("x", {"d": DEPT}, model=f"{decider}:preview").model == f"{decider}:v1"
+        with pytest.raises(endor.NoPreviewError):  # auto-promote is on: the newest is live, so there is no preview
+            client.system_one("x", {"d": DEPT}, model=f"{decider}:preview")
+        client.projects.get(decider).set_auto_promote(False)
+        fake.add_version(decider)
+        assert client.system_one("x", {"d": DEPT}, model=f"{decider}:preview").model == f"{decider}:v2"
         with pytest.raises(NotFoundError) as e:  # the release before's "<project>/<name>" is gone
             client.system_one("x", {"d": DEPT}, model=f"{decider}/v1")
         assert e.value.code == "unknown_model"
@@ -223,7 +227,7 @@ class TestCatalogAndAccount:
         by_name = {m.name: m for m in listed.models}
         assert "jev-9b" not in by_name  # a bare base model id is not a name a decision can send
         assert by_name[decider].kind == "project" and by_name[decider].endor["model"] == f"{decider}:jev-9b"
-        assert by_name[f"{decider}:preview"].kind == "preview"
+        assert f"{decider}:preview" not in by_name  # no version yet, so no preview
         saved = by_name["v1"]
         assert saved.kind == "custom" and saved.endor["base_model"] == "jev-9b" and saved.release_date
 
