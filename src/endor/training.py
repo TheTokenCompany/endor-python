@@ -14,7 +14,9 @@ it is promoted (``client.custom_models``).
 from __future__ import annotations
 
 import builtins
+import math
 import subprocess
+import sys
 import time
 from collections.abc import Iterable, Iterator
 from typing import Any
@@ -33,6 +35,9 @@ from .types import DatasetInfo, DecisionRow, Evaluation, LoraConfig
 __all__ = ["Datasets", "Runs", "Evaluations", "MAX_UPLOAD_ROWS", "git_identity"]
 
 MAX_UPLOAD_ROWS = C.MAX_UPLOAD_ROWS
+
+WAIT_NOTICE_S = 10.0
+"""``runs.create(wait=True, progress=True)`` prints its line to stderr once the wait for a GPU passes this long."""
 
 
 class Datasets:
@@ -116,6 +121,7 @@ class Runs:
         total_steps: int | None = None,
         wandb: bool | None = None,
         wait: bool = True,
+        progress: bool = True,
     ) -> Run:
         """Start a run: a fresh adapter on ``base_model`` (an id from ``client.base_models()``), or one warm-started
         from ``from_model`` (a custom model's name, which sets the base model: another ``base_model`` is a 422; with
@@ -128,16 +134,20 @@ class Runs:
         ``from_model`` they are inherited from the saved model, and only the ones you pass are sent (a value that
         conflicts with the model is a 422).
 
-        Provisioning a trainer usually takes under a minute. With ``wait=True`` this blocks until the run is ready and
-        logs progress on the ``endor`` logger; if the wait is interrupted (Ctrl-C, an error) the run is closed. With
-        ``wait=False`` it returns at once and ``run.ready`` is the future.
+        Provisioning a trainer takes under a minute on a warm GPU; starting a cold one can take a few minutes. With
+        ``wait=True`` this blocks until the run is ready and logs progress at INFO on the ``endor`` logger; with
+        ``progress=True`` (the default) it also prints one line to stderr once the wait passes 10 seconds
+        (``run run_...: waiting for a GPU (starting a cold one can take a few minutes)…``), and ``progress=False``
+        keeps stderr quiet. If the wait is interrupted (Ctrl-C, an error) the run is closed. With ``wait=False`` it
+        returns at once and ``run.ready`` is the future.
 
-        Close every run you create (``with client.runs.create(...) as run:``): an org can have at most 25 runs that
-        aren't closed, idle ones included (a 26th raises ``LimitReachedError``). A run without calls is parked
-        (``idle``) after 2 minutes. Until you close it, the run sends a heartbeat every minute from a background
-        thread, so it stays open however long you wait; if your process ends without closing it, Endor closes it a
-        few minutes later. ``config`` is free-form and shown on the dashboard; when the client was created with
-        ``capture=True`` the SDK adds the LoRA settings and the current git commit (never file contents).
+        Close every run you create (``with client.runs.create(...) as run:``): runs that aren't closed, idle ones
+        included, count toward the org's open-run limit (``max_active_runs`` in ``client.whoami().limits``, which
+        ``endor whoami`` shows), and one more raises ``LimitReachedError``. A run without calls is parked (``idle``)
+        after 2 minutes. Until you close it, the run sends a heartbeat every minute from a background thread, so it
+        stays open however long you wait; if your process ends without closing it, Endor closes it an hour later.
+        ``config`` is free-form and shown on the dashboard; when the client was created with ``capture=True`` the SDK
+        adds the LoRA settings and the current git commit (never file contents).
 
         ``total_steps``: the optimizer steps you plan, so the dashboard shows a progress bar and an ETA (change it
         later with ``run.set_total_steps``). ``wandb``: log this run to Weights & Biases (True or False); None logs
@@ -190,7 +200,7 @@ class Runs:
         run._start_heartbeat()
         if wait:
             try:
-                _wait_ready(run)
+                _wait_ready(run, progress=progress)
             except BaseException:
                 logger.warning("run %s: stopped waiting for provisioning; closing it so its GPU is released", run.id)
                 run._close_on_exit(failing=True)
@@ -198,12 +208,20 @@ class Runs:
         return run
 
     def get(self, run_id: str) -> Run:
-        """A handle on an existing run, continuing its sequence numbers from the server. ``run.info_`` is the run as
-        fetched, e.g. ``run.info_.step`` to resume from the right step; ``run.info()`` fetches it again."""
-        return Run(self._t, self._t.request("GET", f"/v1/runs/{run_id}", method_name="runs.get"), self._images)
+        """A handle on an existing run, to continue it: its sequence numbers continue from the server's. ``run.info_``
+        is the run as fetched, e.g. ``run.info_.step`` to resume from the right step; ``run.info()`` fetches it again.
+
+        Like a run from ``create``, the handle keeps an open run open: it sends a heartbeat every minute from a
+        background thread until the run is closed (``run.close()``, a ``with`` block, or elsewhere) or the handle is
+        garbage collected."""
+        run = Run(self._t, self._t.request("GET", f"/v1/runs/{run_id}", method_name="runs.get"), self._images)
+        run._start_heartbeat()
+        return run
 
     def list(self, tag: str | None = None, limit: int | None = None, offset: int = 0) -> builtins.list[Run]:
-        """Your runs, newest first, optionally those carrying ``tag``: all of them, or at most ``limit``."""
+        """Your runs, newest first, optionally those carrying ``tag``: all of them, or at most ``limit``. These handles
+        are for looking: they send no heartbeat unless used in a ``with`` block (``runs.get(id)`` re-attaches to one
+        to continue it)."""
         items = list_all(self._t, "/v1/runs", {"tag": tag}, "runs.list", limit, offset)
         return [Run(self._t, x, self._images) for x in items]
 
@@ -259,17 +277,31 @@ class Evaluations:
         return [Evaluation.model_validate(e) for e in items]
 
 
-def _wait_ready(run: Run, log_every: float = 30.0) -> None:
+def _wait_ready(run: Run, log_every: float = 30.0, progress: bool = True) -> None:
+    """Block until the run's trainer is ready, logging at INFO every ``log_every`` seconds; with ``progress``, also
+    print one line to stderr once the wait passes ``WAIT_NOTICE_S`` (a cold GPU takes minutes, and Python hides INFO
+    logs by default)."""
     started = time.monotonic()
     if run.info_.status in ("ready", "idle", "closed", "failed"):
         return
     logger.info("run %s: provisioning a trainer for %s ...", run.id, run.info_.base_model)
+    next_log, notice_at = log_every, WAIT_NOTICE_S if progress else math.inf
     while True:
         try:
-            run.ready.result(timeout=log_every)
+            run.ready.result(timeout=max(0.0, min(next_log, notice_at) - (time.monotonic() - started)))
             break
         except TimeoutError:
-            logger.info("run %s: still provisioning (%.0fs)", run.id, time.monotonic() - started)
+            waited = time.monotonic() - started
+            if waited >= notice_at:
+                notice_at = math.inf
+                print(
+                    f"run {run.id}: waiting for a GPU (starting a cold one can take a few minutes)…",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            if waited >= next_log:
+                next_log = waited + log_every
+                logger.info("run %s: still provisioning (%.0fs)", run.id, waited)
     logger.info("run %s: ready after %.0fs", run.id, time.monotonic() - started)
     run.info()
 

@@ -23,9 +23,13 @@ def run_json(capsys: pytest.CaptureFixture[str], client: EndorClient, *args: str
 
 def test_whoami_and_base_models(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
     out = run(capsys, client, "whoami")
-    assert "org_id=" in out and "balance_usd=" in out
+    assert "org_id=" in out and "balance_usd=" in out and "continuous_learning=" in out
     me = run_json(capsys, client, "whoami")
     assert isinstance(me, dict) and me["org_id"] and "limits" in me and "balance_usd" in me
+    assert isinstance(me["continuous_learning"], bool)
+    lines = out.splitlines()
+    assert lines[1] == "limits:" and f"  max_active_runs={me['limits']['max_active_runs']}" in lines[2:]
+    assert len(lines) == 2 + len(me["limits"])  # every limit, one per line
     bases = run_json(capsys, client, "base-models")
     assert isinstance(bases, list) and {b["id"] for b in bases} >= {"jev-9b"}
 
@@ -74,6 +78,38 @@ def test_custom_models_datasets_runs(capsys: pytest.CaptureFixture[str], client:
     run(capsys, client, "custom-models", "delete", "v1")
     assert run_json(capsys, client, "custom-models", "list") == []
     run(capsys, client, "datasets", "delete", "train")
+
+
+def test_tables_show_serving_and_accuracy(
+    capsys: pytest.CaptureFixture[str], client: EndorClient, fake: FakeEndor
+) -> None:
+    client.datasets.upload("heldout", rows(4))
+    with client.custom_models.create("v1", base_model="jev-9b") as r:
+        r.save_checkpoint().result()
+    assert "serving=None" in run(capsys, client, "custom-models", "info", "v1")
+    client.custom_models.promote("v1")
+    assert "  serving=live  serving_error=None  " in run(capsys, client, "custom-models", "list")
+    fake.models["v1"]["_serving"], fake.models["v1"]["_serving_error"] = "failed", "no GPU took it"
+    assert "serving=failed  serving_error=no GPU took it" in run(capsys, client, "custom-models", "info", "v1")
+    assert run_json(capsys, client, "custom-models", "info", "v1")["serving"] == "failed"  # type: ignore[index]
+    lines = run(capsys, client, "eval", "v1", "heldout").splitlines()
+    assert "status=completed" in lines[0]
+    assert [x.split() for x in lines[1:]] == [
+        ["n", "accuracy"],
+        ["overall", "8", "50.0%"],
+        ["dept", "4", "50.0%"],
+        ["urgent", "4", "50.0%"],
+    ]
+    client.custom_models.archive("v1")
+
+
+def test_empty_lists_say_so(capsys: pytest.CaptureFixture[str], client: EndorClient, fake: FakeEndor) -> None:
+    assert run(capsys, client, "custom-models", "list") == "No custom models\n"
+    assert run(capsys, client, "custom-models", "list", "--production") == "No custom models\n"
+    assert run(capsys, client, "datasets", "list") == "No datasets\n"
+    assert run(capsys, client, "runs", "list") == "No runs\n"
+    assert run(capsys, client, "projects", "list") == "No projects\n"
+    assert run_json(capsys, client, "custom-models", "list") == []  # JSON stays a list
 
 
 def test_usage(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:

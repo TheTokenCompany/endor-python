@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+import endor
 from endor import EndorClient, RunInfo
 from endor.recipes.supervised import SupervisedConfig, train
 
@@ -50,6 +51,17 @@ def test_recipe_sets_total_steps_and_prints_progress(client: EndorClient, fake: 
     err = capsys.readouterr().err
     assert f"run {result.run_id}: step {total}/{total} (100%) · loss" in err
     assert "left" in err  # the earlier lines carry an ETA
+
+
+def test_recipe_progress_covers_the_wait_for_a_gpu(
+    client: EndorClient, fake: FakeEndor, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(endor.training, "WAIT_NOTICE_S", 0.0)
+    for progress in (True, False):
+        fake.provisioning_polls = 2
+        cfg = SupervisedConfig(model_name=unique("sft"), base_model=BASE, epochs=1, eval_base=False, progress=progress)
+        train(cfg, rows(40), client=client)
+        assert ("waiting for a GPU" in capsys.readouterr().err) is progress
 
 
 def test_wandb_flags(client: EndorClient, fake: FakeEndor) -> None:

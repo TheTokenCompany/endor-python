@@ -371,10 +371,34 @@ class TestHeartbeat:
 
     def test_only_the_handles_that_hold_the_run_open(self, client: endor.EndorClient, fake: FakeEndor) -> None:
         with client.runs.create("jev-9b") as run:
-            assert client.runs.get(run.id)._heartbeat is None  # a handle to look at the run sends nothing
-            assert all(r._heartbeat is None for r in client.runs.list())
-            with client.runs.get(run.id) as again:  # one in a with block does
-                assert again._heartbeat is not None and again._heartbeat is not run._heartbeat
+            assert all(r._heartbeat is None for r in client.runs.list())  # handles to look at runs send nothing
+            (listed,) = client.runs.list()
+            with listed:  # one in a with block does
+                assert listed._heartbeat is not None and listed._heartbeat is not run._heartbeat
+        assert client.runs.get(run.id)._heartbeat is None  # nor does a handle on a closed run
+
+    def test_a_reattached_run_stays_open_while_its_handle_is_held(
+        self, client: endor.EndorClient, fake: FakeEndor
+    ) -> None:
+        """``runs.get`` continues a run (after a restart, or from another process) like ``runs.create``: the handle
+        keeps it open without a with block, until the run is closed or the handle is dropped."""
+        run_id = client.runs.create("jev-9b").id  # the creating handle is dropped at once
+        gc.collect()
+        again = client.runs.get(run_id)
+        thread = again._heartbeat
+        assert thread is not None and thread.is_alive()
+        sent = heartbeats(fake)
+        wait_for(lambda: heartbeats(fake) >= sent + 2)
+        del again
+        gc.collect()
+        thread.join(1)
+        assert not thread.is_alive()
+        last = client.runs.get(run_id)
+        thread = last._heartbeat
+        last.close()
+        assert thread is not None
+        thread.join(1)
+        assert not thread.is_alive()
 
     def test_errors_never_reach_user_code(
         self, client: endor.EndorClient, fake: FakeEndor, caplog: pytest.LogCaptureFixture

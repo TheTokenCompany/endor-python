@@ -726,6 +726,13 @@ class CustomModelInfo(_View):
     """``"production"`` or ``"archived"`` (every save starts archived). Treat unknown values as archived."""
     promoted_at: datetime | None = None
     """When it last went to production (None while archived)."""
+    serving: str | None = None
+    """In production, whether a decision server has it loaded: ``"deploying"`` right after a promotion (decisions are
+    accepted; the first ones may wait while it loads), then ``"live"``, or ``"failed"`` when it couldn't be loaded
+    (``serving_error`` says why; ``client.custom_models.promote(name)`` again retries). None while archived. Treat
+    unknown values as ``"deploying"``."""
+    serving_error: str | None = None
+    """Why it couldn't be loaded, while ``serving`` is ``"failed"``; None otherwise."""
     contract: str | None = None
     training_run_id: str | None = None
     parent_model: str | None = None
@@ -833,9 +840,14 @@ class WhoAmI(_View):
     key_id: str | None = None
     limits: dict[str, int | float] = Field(default_factory=dict)
     """The org's limits by name, for example ``max_projects_per_org``, ``max_production_models_per_org`` (custom
-    models in production), ``max_custom_models_per_org``, ``max_datasets_per_org`` or ``max_active_runs``. A count
-    limit raises ``LimitReachedError`` once reached (``ProductionFullError`` for the production slots); a rate raises
-    ``RateLimitError``: ``decisions_per_minute`` (60 by default, for the whole org) and the other ``..._per_minute``."""
+    models in production), ``max_custom_models_per_org``, ``max_datasets_per_org`` or ``max_active_runs`` (runs that
+    aren't closed, idle ones included). A count limit raises ``LimitReachedError`` once reached
+    (``ProductionFullError`` for the production slots); a rate raises ``RateLimitError``: ``decisions_per_minute``
+    (60 by default, for the whole org) and the other ``..._per_minute``. ``endor whoami`` lists them."""
+    continuous_learning: bool = False
+    """Whether the org has continuous learning projects (a per-organization switch, off until we turn it on). While
+    off, ``client.projects`` and decisions on a project raise ``PermissionDeniedError`` (403
+    ``continuous_learning_not_enabled``); custom models work for every organization."""
     image_training: bool = False
     """Whether the org may fine-tune with images (``endor.Image`` in rows and datums, ``client.images``). Limited
     access: without it those calls raise ``PermissionDeniedError`` (403 ``image_training_not_enabled``); ask us."""

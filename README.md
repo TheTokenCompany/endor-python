@@ -255,6 +255,9 @@ client.custom_models.archive("router-2")         # back to the archive: decision
 - `client.custom_models.list()` lists your custom models, the ones in production first (`production=True` or
   `production=False` keeps one of the two); `get(name)` has `state` (`"production"` or `"archived"`), `production`,
   `promoted_at`, `base_model`, `step`, `loss` and `accuracy` at save time.
+- A model in production has `serving`: `"deploying"` right after `promote` (decisions are accepted; the first ones
+  may wait while a decision server loads it), then `"live"`, or `"failed"` with `serving_error` saying why
+  (`promote(name)` again retries). It is None while archived. `endor custom-models list` and `info` show it.
 - An organization has a few models in production at once (`max_production_models_per_org` in
   `client.whoami().limits`). When every slot is taken, `promote` raises `ProductionFullError` naming the models in
   production; `promote(name, replace="router-1")` archives that one in the same step. `archive(name)` frees a slot.
@@ -320,9 +323,11 @@ Add rows for those options, or drop them from the question.
 - **Idle timeout.** After 2 minutes without calls, a run saves its state and frees its GPU (status `idle`). The next
   call resumes it in a few seconds. While a run is open, the SDK sends a heartbeat every minute from a background
   thread, so the run stays open however long you wait between calls. When the process ended without closing the run,
-  Endor closes it a little later; saved models are kept. To continue it, `client.runs.get(run_id)` gives the run again
-  (`run.info_.step` is its step).
-- **25 open runs per org.** Every run that isn't closed counts, idle ones included. A 26th `runs.create` raises
+  Endor closes it an hour later; saved models are kept. To continue it, `client.runs.get(run_id)` gives the run again
+  (`run.info_.step` is its step), and that handle sends the heartbeat too until the run is closed or the handle is
+  dropped. The handles `client.runs.list()` returns are for looking: they send none.
+- **Open runs per org.** Every run that isn't closed counts toward the org's open-run limit (`max_active_runs` in
+  `client.whoami().limits`; `endor whoami` shows it), idle ones included. One more `runs.create` raises
   `LimitReachedError` (409, code `limit_reached`), whose message lists the open runs; close one (`run.close()` or
   `endor runs close RUN_ID`). It is not retried.
 - **Other limits.** Projects, custom models (and those in production), datasets and API keys also have limits (`LimitReachedError` once reached).
@@ -392,8 +397,12 @@ model is a 422. A fresh run defaults to rank 16, alpha 32, attention and MLP lay
   dataset)` scores a saved model server-side (or on `rows=` sent with the call).
 - `run.close()` releases the trainer (a `with` block does it for you). Unsaved progress is lost; the SDK warns when
   you close with optimizer steps newer than your last save.
-- Creating a run provisions a trainer, usually in under a minute. `runs.create(wait=True)` (the default) blocks
-  and logs progress on the `endor` logger; with `wait=False` the run returns at once and `run.ready` is the future.
+- Creating a run provisions a trainer: under a minute on a warm GPU, a few minutes to start a cold one.
+  `runs.create(wait=True)` (the default) blocks and logs progress at INFO on the `endor` logger. Since Python hides
+  INFO logs unless you configure logging, it also prints one line to stderr once the wait passes 10 seconds (`run
+  run_...: waiting for a GPU (starting a cold one can take a few minutes)…`); `runs.create(progress=False)` (or
+  `custom_models.create(..., progress=False)`, `SupervisedConfig(progress=False)`) leaves it out. With `wait=False`
+  the run returns at once and `run.ready` is the future.
 - If the trainer's GPU dies, pending calls fail with `trainer_lost` and the run becomes `failed` (`run.info().failure`
   says why). Start a new run with `from_model=` your last saved model.
 - Progress: pass `runs.create(total_steps=N)` (or later `run.set_total_steps(N)`) and the dashboard shows a progress
@@ -551,7 +560,8 @@ endor user-report "what you did, what happened, what you expected" [--kind bug|c
 ```
 
 Projects are continuous learning projects; custom models are the ones you train with the SDK. `MODEL` in `eval` is a
-custom model's name or a base model id. `endor whoami` also shows the org's balance (`balance_usd`). Every command takes `-f json` and needs `ENDOR_API_KEY`, `endor user-report` too. Training itself happens in Python. `endor runs close`
+custom model's name or a base model id; `eval` prints the accuracy overall and per question. `endor whoami` also
+shows the org's balance (`balance_usd`), whether it has continuous learning (`continuous_learning`) and its limits. Every command takes `-f json` and needs `ENDOR_API_KEY`, `endor user-report` too. Training itself happens in Python. `endor runs close`
 frees a slot when a script left a run open. `usage --csv` columns are `hour, kind, project, base_model, model,
 training_run_id, input_tokens, gpu_seconds, continuous_learning, price_per_mtok, base_cost_usd,
 continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a continuous learning project's
@@ -568,7 +578,7 @@ decisions; a custom model's decisions have no project.
 | `client.corrections` | `create(request_id, questions, *, comment=None)` → `CorrectionInfo`, `batch(items)` → `list[CorrectionInfo]`, `get(request_id)`, `delete(request_id)`, each with an `_async` variant; `request_id` is a `SystemOneResponse` or its id |
 | `client.custom_models` | `list(production=None, limit=None, offset=0)` → `list[CustomModelInfo]` (production first), `get(name)`, `create(name, base_model=None, *, run_name=None, **run_options)` → `Run`, `promote(name, replace=None)`, `archive(name)`, `set_ttl(name, ttl_seconds)`, `download(name, path, include_optimizer=False)`, `delete(name)` |
 | `client.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |
-| `client.runs` | `create(base_model=None, *, model, rank, alpha, seed, train_attn, train_mlp, train_readout, from_model, include_optimizer, name, tags, config, user_metadata, total_steps, wandb, wait)` → `Run`, `get(run_id)`, `list(tag=None, limit=None, offset=0)` |
+| `client.runs` | `create(base_model=None, *, model, rank, alpha, seed, train_attn, train_mlp, train_readout, from_model, include_optimizer, name, tags, config, user_metadata, total_steps, wandb, wait, progress)` → `Run`, `get(run_id)`, `list(tag=None, limit=None, offset=0)` |
 | `client.evaluations` | `create(model, dataset=None, run_id=None, *, rows=None)` → `APIFuture[Evaluation]`, `get(evaluation_id)`, `list(run_id=None, model=None)` |
 | `Run` | `.id`, `.model`, `.info_`, `.ready`, `.next_seq_id`, `forward(data, loss_fn)`, `forward_backward(data, loss_fn)`, `optim_step(adam_params=None, *, learning_rate=None)`, `save_checkpoint(name=None, *, include_optimizer, ttl_seconds, user_metadata)` → `APIFuture[str]`, `predict(rows)` → `APIFuture[list[dict[str, Answer]]]`, the `_async` variants of those five, `close(*, wait=False, timeout=None)`, `close_async(...)`, `info()`, `set_total_steps(n)`, `log(metrics, step=None)`, `metrics(keys=None, since_step=None)`, `log_eval(model, results, *, step, name)`, sync and async context manager |
 | `APIFuture[T]` | `result(timeout=None)`, `await f`, `result_async(timeout)`, `done()`, `info`, `cancel()`, `cancel_async()`, `APIFuture.completed(value)`; `endor.gather(*futures)`, `endor.gather_async(*futures)` |

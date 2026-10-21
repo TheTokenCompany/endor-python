@@ -57,17 +57,19 @@ class CustomModels:
         """Start training a new custom model called ``name`` on ``base_model``: a run whose
         ``run.save_checkpoint()`` saves under ``name``. The name must be free (``ConflictError`` if a custom model or
         project has it). ``run_name`` labels the run itself. ``run_options`` are ``client.runs.create``'s (``rank``,
-        ``from_model``, ``total_steps``, ``wait``, ...). Close the run when you are done
+        ``from_model``, ``total_steps``, ``wait``, ``progress``, ...). Close the run when you are done
         (``with client.custom_models.create(...) as run:``)."""
         if "model" in run_options:
             raise TypeError("custom_models.create: the model's name is the first argument")
         return self._runs.create(base_model, model=name, name=run_name, **run_options)
 
     def promote(self, name: str, replace: str | None = None) -> CustomModelInfo:
-        """Promote the model to production: decisions may call it by name (``model=name``). A model in production
-        stays there (nothing changes). When every production slot is taken, ``ProductionFullError`` names the models
-        in production, unless ``replace`` names one: it moves to the archive in the same step. ``NotFoundError`` for an
-        unknown model, or a ``replace`` that isn't in production."""
+        """Promote the model to production: decisions may call it by name (``model=name``) at once. It is
+        ``serving="deploying"`` until a decision server has loaded it (the first decisions may wait for that), then
+        ``"live"``. A model in production stays there (nothing changes), except one whose loading failed
+        (``serving="failed"``): it is deployed again. When every production slot is taken, ``ProductionFullError``
+        names the models in production, unless ``replace`` names one: it moves to the archive in the same step.
+        ``NotFoundError`` for an unknown model, or a ``replace`` that isn't in production."""
         body = {"replace": replace} if replace is not None else {}
         return CustomModelInfo.model_validate(
             self._t.request("POST", f"{self._base}/{name}/promote", json=body, method_name="custom_models.promote")

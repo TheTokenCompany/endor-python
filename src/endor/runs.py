@@ -70,11 +70,13 @@ class Run:
     """A training run. Get one from ``client.custom_models.create(...)``, ``client.runs.create(...)``,
     ``client.runs.get(id)`` or ``client.runs.list()``.
 
-    Training is billed for the GPU time its calls use. A run without calls is parked (``idle``) after 2 minutes, and an
-    org can have at most 25 runs that aren't closed (idle ones included). While a run is open (from ``runs.create``, or
-    in a ``with`` block) a background thread sends a heartbeat every minute, so it stays open however long you wait
-    between calls; a run whose process ended without closing it is closed an hour later. Use it as a context manager
-    so it is closed even on errors::
+    Training is billed for the GPU time its calls use. A run without calls is parked (``idle``) after 2 minutes, and
+    runs that aren't closed (idle ones included) count toward the org's open-run limit (``max_active_runs`` in
+    ``client.whoami().limits``; ``endor whoami`` shows it). While a handle from ``runs.create``, ``runs.get`` or
+    ``custom_models.create``, or any handle in a ``with`` block, holds an open run, a background thread sends a
+    heartbeat every minute, so the run stays open however long you wait between calls; it stops when the run is
+    closed or the handle is garbage collected. A run whose process ended without closing it is closed an hour later.
+    Use it as a context manager so it is closed even on errors::
 
         with client.custom_models.create("router-2", base_model="jev-9b") as run:
             ...
