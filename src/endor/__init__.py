@@ -1,23 +1,26 @@
-"""Endor SDK: decisions with System One models, and fine-tuning on your own data.
+"""Endor SDK: decision models that learn from your decisions, and custom models you train yourself.
 
 import endor
 from endor import Choice, Noul
 
 client = endor.EndorClient()                                        # ENDOR_API_KEY
+project = client.projects.get_or_create("tickets", base_model="decider-2b")    # continuous learning
 res = client.system_one({"body": "charged twice"},
                         {"dept": Choice(criteria={"billing": None, "technical": None}),
                          "urgent": Noul(instructions="Does this need an answer today?")},
-                        model="tickets/v1")                         # a saved model, by its id
+                        model="tickets")                            # the project's live version
 res.choices["dept"].choice, res.nouls["urgent"].noul
+client.corrections.create(res, {"urgent": {"correct": False}})     # it was wrong: the project learns from it
 
-project = client.projects.get_or_create("tickets", base_models=["decider-2b"])  # "tickets/decider-2b" answers
-with project.runs.create(rank=16) as run:   # on the project's first base model; closed on exit, even on errors
+# Advanced: a custom model you train yourself, called by its name once promoted
+with client.custom_models.create("router-2", base_model="decider-2b", rank=16) as run:
     steps = endor.Steps()                                           # the next step is sent before the last is read
     for batch in endor.data.batches(endor.data.rows_to_datums(rows), 16):
         steps.add(run.forward_backward(batch), run.optim_step(learning_rate=1e-4))
     steps.wait()
-    model = run.save_checkpoint("v1").result()                      # "tickets/v1"
-client.system_one(state, questions, model=model)
+    run.save_checkpoint().result()                                  # "router-2", inactive
+client.custom_models.promote("router-2")
+client.system_one(state, questions, model="router-2")
 
 endor.user_report("what you did, what happened, what you expected", kind="bug")   # tell the Endor team
 """
@@ -27,6 +30,7 @@ from ._retry import RetryPolicy
 from ._user_report import user_report, user_report_async
 from ._version import __version__
 from .client import EndorClient
+from .custom_models import CustomModels
 from .errors import (
     APIConnectionError,
     APIError,
@@ -39,8 +43,10 @@ from .errors import (
     InsufficientBalanceError,
     InternalServerError,
     LimitReachedError,
+    LiveModelsFullError,
+    ModelIsLiveError,
+    ModelNotLiveError,
     ModelRequiresProjectError,
-    NoBaseModelError,
     NotFoundError,
     OperationFailedError,
     OverloadedError,
@@ -49,7 +55,7 @@ from .errors import (
     RateLimitError,
     ResponseValidationError,
     UnprocessableEntityError,
-    WrongProjectKindError,
+    VersionNotCallableError,
 )
 from .futures import APIFuture, Steps, gather, gather_async
 from .images import Image
@@ -62,6 +68,7 @@ from .types import (
     ChoiceAnswer,
     CorrectionAnswer,
     CorrectionInfo,
+    CustomModelInfo,
     DatasetInfo,
     Datum,
     DecisionRow,
@@ -74,7 +81,6 @@ from .types import (
     LoraConfig,
     LoraInfo,
     MetricPoint,
-    ModelInfo,
     ModelMetadata,
     Noul,
     NoulAnswer,
@@ -93,7 +99,7 @@ from .types import (
     UsageRow,
     UserReportKind,
     UserReportReceipt,
-    WandbSettings,
+    VersionInfo,
     WhoAmI,
     answer_probabilities,
     option_keys,
@@ -108,6 +114,7 @@ __all__ = [
     "types",
     "EndorClient",
     "Project",
+    "CustomModels",
     "Run",
     "APIFuture",
     "Steps",
@@ -146,13 +153,13 @@ __all__ = [
     "ForwardOutput",
     "OptimStepOutput",
     # resources
-    "Learning",
     "ProjectInfo",
+    "VersionInfo",
+    "Learning",
     "Training",
     "Drift",
+    "CustomModelInfo",
     "RunInfo",
-    "WandbSettings",
-    "ModelInfo",
     "DatasetInfo",
     "Evaluation",
     "MetricPoint",
@@ -172,8 +179,10 @@ __all__ = [
     "NotFoundError",
     "ConflictError",
     "LimitReachedError",
-    "NoBaseModelError",
-    "WrongProjectKindError",
+    "LiveModelsFullError",
+    "ModelNotLiveError",
+    "ModelIsLiveError",
+    "VersionNotCallableError",
     "DownloadError",
     "PayloadTooLargeError",
     "UnprocessableEntityError",

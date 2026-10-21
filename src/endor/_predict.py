@@ -1,7 +1,7 @@
 """Server-side evaluations on rows sent inline, and predictions (``client.predict``) built on them.
 
-An evaluation can take its rows in the create call instead of a dataset's name (``POST
-/v1/projects/{project}/evaluations`` with ``rows``). A row with labels is scored on its labeled questions; a row
+An evaluation can take its rows in the create call instead of a dataset's name (``POST /v1/evaluations`` with
+``rows``). A row with labels is scored on its labeled questions; a row
 without labels is answered on every question and not scored. A prediction is such an evaluation of rows sent without
 their labels: the SDK waits for its future (printing a progress line every PROGRESS_EVERY_S while it runs), fetches
 its results file (``results["rows_url"]``: one JSON line per question asked, with the row's ``index`` and the
@@ -60,12 +60,12 @@ def evaluation_body(model: str, dataset: str | None, rows: Iterable[Any] | None,
     return body
 
 
-def prediction(model: str, rows: Iterable[Any]) -> tuple[str, dict[str, Any], int]:
-    """(project, body, number of rows) of a prediction: its rows without labels, in the model's project."""
+def prediction(model: str, rows: Iterable[Any]) -> tuple[dict[str, Any], int]:
+    """(body, number of rows) of a prediction: its rows without labels, for a custom model or a base model."""
     if not model:
-        raise ValueError('model names a project: "<project>/<name>", "<project>/<base id>" or "<project>"')
+        raise ValueError("model is a custom model's name or a base model id")
     wire = wire_rows(rows, labels=False)
-    return model.partition("/")[0], {"model": model, "rows": wire}, len(wire)
+    return {"model": model, "rows": wire}, len(wire)
 
 
 def wait(t: Transport, created: dict[str, Any], progress: bool, timeout: float | None, method: str) -> Evaluation:

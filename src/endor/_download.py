@@ -1,5 +1,6 @@
 """Downloading files from the short-lived links the API hands out: a saved model's files
-(``project.models.download``) and an evaluation's results (``client.predict``, ``fetch_bytes``).
+(``client.custom_models.download``, ``project.download``) and an evaluation's results (``client.predict``,
+``fetch_bytes``).
 
 The links are presigned storage URLs: anyone holding one can read that file until it expires, so they never leave
 this module. They are not returned, not put in exceptions and not logged (``httpx`` logs every request URL at INFO,

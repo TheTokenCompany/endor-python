@@ -1,4 +1,5 @@
-"""Drive the training loop yourself: batches, losses, learning rate, evaluation and checkpoints are all in your hands.
+"""Train a custom model with your own loop: batches, losses, learning rate, evaluation and checkpoints are all in your
+hands. Then promote it, so decisions can call it by its name.
 
 ENDOR_API_KEY=edk_... python examples/manual_loop.py rows.jsonl
 """
@@ -17,11 +18,10 @@ train_rows, heldout_rows = endor.data.split(rows, holdout=0.1, seed=0)
 train = endor.data.rows_to_datums(train_rows)
 heldout = endor.data.rows_to_datums(heldout_rows)
 
-project = client.projects.get_or_create("tickets", base_models=["decider-2b"])
-if "heldout" not in {d.name for d in project.datasets.list()}:
-    project.datasets.upload("heldout", heldout_rows)
+if "heldout" not in {d.name for d in client.datasets.list()}:
+    client.datasets.upload("heldout", heldout_rows)
 
-with project.runs.create(rank=16, tags=["manual"]) as run:  # on the project's first base model
+with client.custom_models.create("router-2", base_model="decider-2b", rank=16, tags=["manual"]) as run:
     steps = endor.Steps()  # the next step is sent before the last one's results are read: 2 steps in flight
     sent = 0
     for epoch in range(2):
@@ -39,13 +39,15 @@ with project.runs.create(rank=16, tags=["manual"]) as run:  # on the project's f
     for out, step in steps.wait():  # the last step
         print(f"step {step.step}: loss {out.loss:.3f}")
 
-    model = run.save_checkpoint("v2", include_optimizer=True).result()  # "tickets/v2"
+    model = run.save_checkpoint(include_optimizer=True).result()  # "router-2", saved inactive
 
 print("saved", model)
-evaluation = project.evaluate(model, "heldout", run_id=run.id).result()  # server-side scoring
+evaluation = client.evaluations.create(model, "heldout", run_id=run.id).result()  # server-side scoring, not live yet
 print(evaluation.results)
-print(project.evaluate("decider-2b", "heldout").result().results)  # the untuned base, "tickets/decider-2b"
+print(client.evaluations.create("decider-2b", "heldout").result().results)  # the untuned base
 
-# Resume exactly where that run stopped (a new run, so a new GPU; close it when done):
-with project.runs.create(from_model="v2", include_optimizer=True) as resumed:
+client.custom_models.promote(model)  # live: client.system_one(..., model="router-2") answers now
+
+# Resume exactly where that run stopped (a new run, so a new GPU; it saves under a new name; close it when done):
+with client.custom_models.create("router-3", from_model=model, include_optimizer=True) as resumed:
     print("resumed as", resumed.id, "at step", resumed.info_.step)

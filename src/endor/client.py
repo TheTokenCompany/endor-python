@@ -1,17 +1,17 @@
-"""EndorClient: decisions, plus fine-tuning.
+"""EndorClient: decisions with continuous learning projects, plus custom models you train yourself.
 
     client = endor.EndorClient()                               # ENDOR_API_KEY from the environment
-    client.system_one(state, questions, model="tickets/v1")    # a decision with one saved model
-    client.predict("tickets/v1", rows)                         # the answers for many rows, in their order
+    project = client.projects.get_or_create("tickets", base_model="decider-2b")    # learns from its decisions
+    res = client.system_one(state, questions, model="tickets")  # the project's live version
+    client.corrections.create(res, {"urgent": {"correct": False}})   # a decision was wrong: the project learns
     client.models.list()                                       # every name you can pass as model
     client.base_models()                                       # the base models, with limits and prices
-    project = client.projects.get_or_create("tickets", base_models=["decider-2b"])   # datasets, runs, models
-    client.corrections.create(res, {"urgent": {"correct": False}})   # a decision was wrong: its project learns
+    client.custom_models.list()                                # advanced: models you train with the SDK
     client.user_report("what you did, what happened, what you expected", kind="bug")      # tell the Endor team
 
-``model`` always names a project: ``"<project>/<name>"`` (one saved model), ``"<project>/<base id>"`` (one of its base
-models) or ``"<project>"`` (a continuous learning project's newest version, else its first base model). A bare base
-model id is refused (``ModelRequiresProjectError``).
+``model`` is ``"<project>"`` (a continuous learning project's live version), ``"<project>:preview"`` (its newest
+version) or a live custom model's name (``"router-2"``). A bare base model id is refused
+(``ModelRequiresProjectError``).
 
 Environment: ``ENDOR_API_KEY``, ``ENDOR_BASE_URL``, ``ENDOR_DEFAULT_MODEL``, ``ENDOR_LOG_LEVEL``,
 ``ENDOR_REPORT_LATENCY``.
@@ -33,8 +33,10 @@ from ._corrections import Corrections
 from ._http import Transport
 from ._images import Images
 from ._retry import RetryPolicy
+from .custom_models import CustomModels
 from .errors import EndorError, NotFoundError, ResponseValidationError
 from .projects import Projects
+from .training import Datasets, Evaluations, Runs
 from .types import (
     Answer,
     BaseModelInfo,
@@ -147,8 +149,16 @@ class EndorClient:
         self.images = Images(self._t)
         """``client.images.upload(...)``: images for training data, uploaded once and referenced by hash (the
         datasets, runs and predictions below do it for the ``endor.Image`` objects in your rows and datums)."""
-        self.projects = Projects(self._t, capture, self.images)
-        """``client.projects``: create, fetch and list projects."""
+        self.projects = Projects(self._t)
+        """``client.projects``: continuous learning projects (create, fetch, list, promote versions)."""
+        self.datasets = Datasets(self._t, self.images)
+        """``client.datasets``: labeled decision rows for training and evaluating custom models."""
+        self.runs = Runs(self._t, capture, self.images)
+        """``client.runs``: training runs; a save makes a custom model."""
+        self.evaluations = Evaluations(self._t, self.images)
+        """``client.evaluations``: how good a custom model or a base model is on decision rows."""
+        self.custom_models = CustomModels(self._t, self.runs)
+        """``client.custom_models``: models you train yourself (list, create, promote, demote, download)."""
         self.corrections = Corrections(self._t)
         """``client.corrections``: whether past decisions were right and, if not, the right answers (``create``,
         ``batch``, ``get``, ``delete``). Continuous learning projects learn from them."""
@@ -206,9 +216,9 @@ class EndorClient:
             state: Text, a JSON object or an array: the data the decisions are about. On a base that reads images,
                 it may hold ``endor.Image`` objects (as the state, a list item or an object value).
             questions: 1 to 64 named questions (``Noul``, ``Choice``, ``Score`` or dicts in the same shape).
-            model: ``"<project>/<name>"`` (a saved model), ``"<project>/<base id>"`` (one of its base models) or
-                ``"<project>"`` (a continuous learning project's newest version, else its first base model).
-                Defaults to the client's model.
+            model: ``"<project>"`` (a continuous learning project's live version, its base model before the first),
+                ``"<project>:preview"`` (its newest version) or a live custom model's name. Defaults to the client's
+                model.
             retry, timeout: Overrides for this call.
             extra_headers: Extra request headers.
             extra_body: Extra top-level request fields, merged last.
@@ -222,9 +232,10 @@ class EndorClient:
 
         Raises:
             EndorError: No ``model`` was given and the client has no default model.
-            APIError: ``NotFoundError`` for an unknown model, ``ModelRequiresProjectError`` for a bare base model
-                id, ``NoBaseModelError`` for a project without a base model, ``UnprocessableEntityError`` naming a
-                bad question, ``RateLimitError`` and ``OverloadedError`` when told to wait.
+            APIError: ``NotFoundError`` for an unknown model (``VersionNotCallableError`` for an older version,
+                ``"<project>:v3"``), ``ModelNotLiveError`` for an inactive custom model, ``ModelRequiresProjectError``
+                for a bare base model id, ``UnprocessableEntityError`` naming a bad question, ``RateLimitError`` and
+                ``OverloadedError`` when told to wait.
         """
         body = self._decision_body(state, questions, model, extra_body, exclude_from_training)
         raw = self._t.request(
@@ -279,7 +290,7 @@ class EndorClient:
         model = model or self.default_model
         if not model and not (extra_body and extra_body.get("model")):
             raise EndorError(
-                'no model: pass model="<project>/<name>", "<project>/<base id>" or "<project>", '
+                'no model: pass model="<project>", "<project>:preview" or a live custom model\'s name, '
                 f"or set a default with EndorClient(model=...) or {C.DEFAULT_MODEL_ENV}"
             )
         body: dict[str, Any] = {
@@ -303,9 +314,8 @@ class EndorClient:
         a backfill) instead of a ``system_one`` call per row; billed as decisions, the same per row.
 
         Args:
-            model: ``"<project>/<name>"``, ``"<project>/<base id>"`` or ``"<project>"``, as for ``system_one``; the
-                evaluation is made in that project (a custom project).
-            rows: Decision rows in any shape ``project.datasets.upload`` takes (``{"state", "questions"}``; labels
+            model: A custom model's name (live or not) or a base model id.
+            rows: Decision rows in any shape ``client.datasets.upload`` takes (``{"state", "questions"}``; labels
                 are ignored), at most 50,000 and 32 MB per call.
             progress: Print a progress line to stderr every 10 s while the evaluation runs
                 (``evaluation evl_...: 1,200/10,000 rows (12%) · ~2 min left``).
@@ -318,21 +328,15 @@ class EndorClient:
 
         Raises:
             ValueError: No rows, or more than 50,000.
-            APIError: As for ``project.evaluate``: ``NotFoundError`` for an unknown project or model,
+            APIError: As for ``client.evaluations.create``: ``NotFoundError`` for an unknown model,
                 ``UnprocessableEntityError`` naming a bad row (``rows.<i>...``) or a question the model can't read,
-                ``WrongProjectKindError`` for a continuous learning project, ``RateLimitError``.
+                ``RateLimitError``.
             OperationFailedError: The evaluation failed (for example a row too long for the model,
                 ``context_too_long``).
         """
-        project, body, n = _predict.prediction(model, rows)
+        body, n = _predict.prediction(model, rows)
         self.images.prepare_states(body["rows"])  # images uploaded once, sent as references
-        r = self._t.request(
-            "POST",
-            f"/v1/projects/{project}/evaluations",
-            json=body,
-            method_name="client.predict",
-            idempotent=True,
-        )
+        r = self._t.request("POST", "/v1/evaluations", json=body, method_name="client.predict", idempotent=True)
         ev = _predict.wait(self._t, r, progress, timeout, "client.predict")
         return _predict.answers(self._t, ev, n)
 
@@ -340,21 +344,15 @@ class EndorClient:
         self, model: str, rows: Iterable[Any], *, progress: bool = True, timeout: float | None = None
     ) -> list[dict[str, Answer]]:
         """``predict`` for async code."""
-        project, body, n = _predict.prediction(model, rows)
+        body, n = _predict.prediction(model, rows)
         self.images.prepare_states(body["rows"])
-        r = await self._t.arequest(
-            "POST",
-            f"/v1/projects/{project}/evaluations",
-            json=body,
-            method_name="client.predict",
-            idempotent=True,
-        )
+        r = await self._t.arequest("POST", "/v1/evaluations", json=body, method_name="client.predict", idempotent=True)
         ev = await _predict.wait_async(self._t, r, progress, timeout, "client.predict")
         return await _predict.answers_async(self._t, ev, n)
 
     def base_models(self) -> list[BaseModelInfo]:
-        """The base models you can fine-tune and decide with (through a project that has it, as
-        ``"<project>/<id>"``): option limits, ``hf_repo``, ``contract`` and prices (``GET /v1/base_models``)."""
+        """The base models a continuous learning project learns on and custom models are trained on: option limits,
+        ``hf_repo``, ``contract`` and prices (``GET /v1/base_models``)."""
         try:
             r = self._t.request("GET", "/v1/base_models", method_name="client.base_models")
             return [_parse(BaseModelInfo, b, "GET /v1/base_models") for b in r.get("base_models", [])]
@@ -476,10 +474,9 @@ class Models:
         timeout: float | None = None,
         extra_headers: Mapping[str, str] | None = None,
     ) -> ListModelsResponse:
-        """Every name you can pass as ``model``: for each project with a base model, ``"<project>"`` (a continuous
-        learning project's newest version, else its first base model) and ``"<project>/<base id>"`` for each of its
-        base models; then ``"<project>/<name>"`` for each saved, unexpired model. ``.kind`` is ``project``, ``base`` or
-        ``model``. The base model catalog is ``client.base_models()``."""
+        """Every name you can pass as ``model``: for each continuous learning project ``"<project>"`` (its live
+        version) and ``"<project>:preview"`` (its newest), then every live custom model's name. ``.kind`` says which
+        (``project``, ``preview`` or ``custom``). The base model catalog is ``client.base_models()``."""
         raw = self._t.request(
             "GET",
             "/v1/models",

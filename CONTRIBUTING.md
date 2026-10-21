@@ -22,7 +22,7 @@ skipped):
 ENDOR_TEST_BASE_URL=http://localhost:8000 ENDOR_TEST_API_KEY=edk_... pytest
 ```
 
-Every test must close every run it opens (`with project.runs.create(...) as run:`): the API allows 4 open runs per
+Every test must close every run it opens (`with client.runs.create(...) as run:`): the API allows 4 open runs per
 org, and the suite fails a test that leaves one open.
 
 ## Releasing

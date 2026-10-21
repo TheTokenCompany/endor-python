@@ -46,7 +46,7 @@ class Images:
     def upload(self, images: Iterable[Image | dict[str, Any] | bytes | str | Path]) -> list[Image]:
         """Upload images for training data once and return their references, in order (``Image`` objects with
         ``sha256`` and no bytes). Each item is an ``Image``, a file's bytes, or a path to a PNG, JPEG or WebP file;
-        a reference passes through. You rarely need this: ``project.datasets.upload``, ``run.forward``,
+        a reference passes through. You rarely need this: ``client.datasets.upload``, ``run.forward``,
         ``run.forward_backward``, ``run.predict`` and ``client.predict`` upload the ``endor.Image`` objects in your
         rows and datums themselves.
 

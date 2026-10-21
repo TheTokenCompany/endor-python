@@ -49,7 +49,7 @@ def rows(n: int = 40) -> list[dict]:
 
 
 def unique(prefix: str = "p") -> str:
-    """A project name no other test or earlier run of the suite uses."""
+    """A project or custom model name no other test or earlier run of the suite uses."""
     return f"{prefix}-{uuid.uuid4().hex[:10]}"
 
 
@@ -101,30 +101,35 @@ def client(_fake: FakeEndor) -> Iterator[endor.EndorClient]:
 
 
 def _assert_no_open_runs(c: endor.EndorClient, since: datetime) -> None:
-    """Runs left open in the projects this test created (the projects list is newest first)."""
-    projects = [p for p in c.projects.list(limit=50) if p.info_.created_at >= since]
+    """Runs this test created and left open (the runs list is newest first)."""
     deadline = time.monotonic() + 10
     while True:
-        still_open = [r.id for p in projects for r in p.runs.list() if r.info_.status not in DONE]
+        mine = [r for r in c.runs.list(limit=50) if r.info_.created_at >= since]
+        still_open = [r.id for r in mine if r.info_.status not in DONE]
         if not still_open or time.monotonic() > deadline:
             break
         time.sleep(0.2)
     assert not still_open, f"the test left runs open: {still_open}"
 
 
+BASE = "jev-9b"
+"""The base model the tests train custom models on."""
+
+
 @pytest.fixture
 def project(client: endor.EndorClient) -> endor.Project:
-    """A new custom project on jev-9b."""
-    return client.projects.create(unique("tickets"), base_models=["jev-9b"])
+    """A new continuous learning project on jev-9b."""
+    return client.projects.create(unique("tickets"), base_model=BASE)
 
 
-DECIDE_BASE = "jev-9b"
+DECIDE_BASE = BASE
 
 
 @pytest.fixture
 def decider(client: endor.EndorClient) -> str:
-    """The name of a new project with a base model: ``model=decider`` answers with its base model."""
-    return client.projects.create(unique("decide"), base_models=[DECIDE_BASE]).name
+    """The name of a new continuous learning project: ``model=decider`` answers with its base model (no version
+    yet)."""
+    return client.projects.create(unique("decide"), base_model=DECIDE_BASE).name
 
 
 def requests_to(fake: FakeEndor, path_suffix: str, method: str | None = None) -> list:

@@ -3,8 +3,9 @@
     EndorError
       APIError (status, code, param, message, body, headers, endpoint, request_id)
         BadRequestError 400 · AuthenticationError 401 · InsufficientBalanceError 402 · PermissionDeniedError 403
-        NotFoundError 404
-        ConflictError 409 (LimitReachedError, NoBaseModelError, WrongProjectKindError) · PayloadTooLargeError 413
+        NotFoundError 404 (VersionNotCallableError)
+        ConflictError 409 (LimitReachedError > LiveModelsFullError, ModelNotLiveError, ModelIsLiveError)
+        PayloadTooLargeError 413
         UnprocessableEntityError 422 (ModelRequiresProjectError)
         RateLimitError 429 (retry_after) · OverloadedError 529 · InternalServerError 5xx
         ResponseValidationError: a 2xx whose body does not have the expected shape
@@ -38,8 +39,10 @@ __all__ = [
     "NotFoundError",
     "ConflictError",
     "LimitReachedError",
-    "NoBaseModelError",
-    "WrongProjectKindError",
+    "LiveModelsFullError",
+    "ModelNotLiveError",
+    "ModelIsLiveError",
+    "VersionNotCallableError",
     "PayloadTooLargeError",
     "UnprocessableEntityError",
     "ModelRequiresProjectError",
@@ -169,26 +172,37 @@ class NotFoundError(APIError):
     """404: the resource does not exist, or is not yours."""
 
 
+class VersionNotCallableError(NotFoundError):
+    """404 ``version_not_callable``: ``"<project>:v3"`` names an older version of a continuous learning project. Only
+    ``"<project>"`` (the live version) and ``"<project>:preview"`` (the newest) can be called; promote the version
+    (``project.promote("v3")``) to call it as ``"<project>"``."""
+
+
 class ConflictError(APIError):
     """409: a name is taken, a run is closed, a sequence number is out of order, or a limit is reached (see
     ``code``)."""
 
 
 class LimitReachedError(ConflictError):
-    """409 ``limit_reached``: a count limit of the org or project is reached, for example 7 projects, 25 open runs,
-    or 500 models in a project. The message names the limit and its value
-    (``client.whoami().limits`` has them all). Free one first: waiting doesn't help, so it is never retried."""
+    """409 ``limit_reached``: a count limit of the org is reached, for example 5 projects or 25 open runs. The
+    message names the limit and its value (``client.whoami().limits`` has them all). Free one first: waiting doesn't
+    help, so it is never retried."""
 
 
-class NoBaseModelError(ConflictError):
-    """409 ``no_base_model``: ``"<project>"`` was called, but the project has no base model to answer with. Add one
-    with ``project.add_base_model("decider-2b")``."""
+class LiveModelsFullError(LimitReachedError):
+    """409 ``live_models_full``: every live custom model slot is taken (``max_live_models_per_org`` in
+    ``client.whoami().limits``). Promote with ``replace=`` naming the live model to demote in the same step, or demote
+    one first. The message names the live models."""
 
 
-class WrongProjectKindError(ConflictError):
-    """409 ``wrong_project_kind``: the call doesn't apply to this kind of project. Continuous learning projects refuse
-    datasets, training runs, saved models and evaluations (Endor trains them); custom projects refuse ``paused``. The
-    message says what the project is."""
+class ModelNotLiveError(ConflictError):
+    """409 ``model_not_live``: a decision named a custom model that isn't live. Promote it first
+    (``client.custom_models.promote(name)``); inactive models can still be downloaded and evaluated."""
+
+
+class ModelIsLiveError(ConflictError):
+    """409 ``model_is_live``: the call doesn't apply to a live custom model (deleting it, or giving it a TTL: live
+    models never expire). Demote it first (``client.custom_models.demote(name)``)."""
 
 
 class PayloadTooLargeError(APIError):
@@ -200,10 +214,9 @@ class UnprocessableEntityError(APIError):
 
 
 class ModelRequiresProjectError(UnprocessableEntityError):
-    """422 ``model_requires_project``: ``model`` is a bare base model id. Every decision names a project:
-    ``"<project>/<name>"`` (a saved model), ``"<project>/<base id>"`` (one of its base models) or ``"<project>"`` (a
-    continuous learning project's newest version, else its first base model). Add a base to a project with
-    ``project.add_base_model``."""
+    """422 ``model_requires_project``: ``model`` is a bare base model id. Decisions name a continuous learning project
+    (``"<project>"``, ``"<project>:preview"``) or a live custom model by its name: create a project on the base
+    (``client.projects.create(name, base_model=...)``) to decide with it."""
 
 
 class RateLimitError(APIError):
@@ -251,7 +264,7 @@ class APITimeoutError(APIConnectionError, TimeoutError):
 
 _HINTS = {
     "trainer_lost": "The run's trainer is gone. Start a new run from your last saved model: "
-    "project.runs.create(from_model=...).",
+    "client.runs.create(from_model=...).",
     "oom": "The trainer ran out of memory. Retry with a smaller batch.",
     "no_gradients": "optim_step found no accumulated gradients. Call forward_backward first, with non-zero weights.",
 }
@@ -304,8 +317,10 @@ _STATUS_ERRORS: dict[int, type[APIError]] = {
 _CODE_ERRORS: dict[str, type[APIError]] = {
     "insufficient_balance": InsufficientBalanceError,
     "limit_reached": LimitReachedError,
-    "no_base_model": NoBaseModelError,
-    "wrong_project_kind": WrongProjectKindError,
+    "live_models_full": LiveModelsFullError,
+    "model_not_live": ModelNotLiveError,
+    "model_is_live": ModelIsLiveError,
+    "version_not_callable": VersionNotCallableError,
     "model_requires_project": ModelRequiresProjectError,
 }
 

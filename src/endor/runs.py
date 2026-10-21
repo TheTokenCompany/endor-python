@@ -1,10 +1,11 @@
-"""Run: one adapter on one base model inside a project, driven step by step.
+"""Run: one adapter on one base model, driven step by step; a save makes a custom model.
 
-    run = project.runs.create(rank=16)               # on the project's first base model
+    run = client.custom_models.create("router-2", base_model="decider-2b", rank=16)
     fb = run.forward_backward(datums)                 # gradients accumulate
     opt = run.optim_step(learning_rate=1e-4)          # AdamW step, then zero gradients
     fb.result(); opt.result()                         # submit both, then wait: no idle round trip
-    model = run.save_checkpoint("v1").result()        # "tickets/v1", usable with client.system_one at once
+    name = run.save_checkpoint().result()             # "router-2", saved inactive
+    client.custom_models.promote(name)                # now client.system_one(model="router-2") answers
 
 In a loop, ``endor.Steps`` sends each step before the last one's results are read (see its docstring).
 
@@ -66,8 +67,8 @@ come back merged in row order."""
 
 
 class Run:
-    """A training run. Get one from ``project.runs.create(...)``, ``project.runs.get(id)`` or
-    ``project.runs.list()``.
+    """A training run. Get one from ``client.custom_models.create(...)``, ``client.runs.create(...)``,
+    ``client.runs.get(id)`` or ``client.runs.list()``.
 
     Training is billed for the GPU time its calls use. A run without calls is parked (``idle``) after 2 minutes, and an
     org can have at most 25 runs that aren't closed (idle ones included). While a run is open (from ``runs.create``, or
@@ -75,7 +76,7 @@ class Run:
     between calls; a run whose process ended without closing it is closed an hour later. Use it as a context manager
     so it is closed even on errors::
 
-        with project.runs.create(base_model="jev-9b") as run:
+        with client.custom_models.create("router-2", base_model="jev-9b") as run:
             ...
     """
 
@@ -85,7 +86,8 @@ class Run:
         self.info_ = RunInfo.model_validate(info)
         """The run as last fetched from the server (``run.info()`` refreshes it)."""
         self.id: str = self.info_.id
-        self.project: str = self.info_.project
+        self.model: str | None = self.info_.model
+        """The custom model name ``save_checkpoint()`` saves under when it is given none."""
         self.ready: APIFuture[Any] = (
             APIFuture(transport, self.info_.ready_future_id, method="run.ready")
             if self.info_.ready_future_id
@@ -101,7 +103,7 @@ class Run:
         self._stop_heartbeat = threading.Event()
 
     def __repr__(self) -> str:
-        return f"Run(id={self.id!r}, project={self.project!r}, base_model={self.info_.base_model!r})"
+        return f"Run(id={self.id!r}, model={self.model!r}, base_model={self.info_.base_model!r})"
 
     def __enter__(self) -> Run:
         self._start_heartbeat()
@@ -217,25 +219,26 @@ class Run:
     # ------------------------------------------------------------------ models and lifecycle
     def save_checkpoint(
         self,
-        name: str,
+        name: str | None = None,
         *,
         include_optimizer: bool = False,
         ttl_seconds: int | None = None,
         user_metadata: dict[str, Any] | None = None,
     ) -> APIFuture[str]:
-        """Save the adapter as the project model ``"<project>/<name>"``. The future resolves to that id, which
-        ``client.system_one(model=...)`` accepts at once.
+        """Save the adapter as a new custom model, inactive until you promote it (``client.custom_models.promote``).
+        The future resolves to the model's name.
 
-        ``name``: lowercase letters, digits, ``.``, ``_`` and ``-``, up to 63 characters, starting with a letter or
-        digit, and not ``base`` (the project's base model).
-        Raises ``ValueError`` otherwise, before anything is sent. A model can't be changed, so each name is saved once:
-        a name the project already has raises ``ConflictError`` (409 ``conflict``) at once. The run itself is
-        unaffected, but an error you don't catch leaves the ``with`` block, which closes the run. For checkpoints
-        during a long run, give each its own name (``f"ckpt-{step}"``) with ``ttl_seconds``.
+        ``name``: the custom model's name; None saves under the run's ``model`` (``custom_models.create(name, ...)``
+        or ``runs.create(model=...)``; a 422 when the run has none). Lowercase letters, digits, ``.``, ``_`` and
+        ``-``, up to 63 characters, starting with a letter or digit; ``ValueError`` otherwise, before anything is
+        sent. Each save is a new model, so each name is saved once: a name a custom model or project already has
+        raises ``ConflictError`` (409 ``conflict``) at once. The run itself is unaffected, but an error you don't catch
+        leaves the ``with`` block, which closes the run. For checkpoints during a long run, give each its own name
+        (``f"router-ckpt-{step}"``) with ``ttl_seconds``.
 
         ``include_optimizer`` also stores the optimizer state, so
-        ``runs.create(from_model=..., include_optimizer=True)``
-        resumes exactly. ``ttl_seconds`` (1 hour to 10 years) deletes the model after that time; None keeps it.
+        ``runs.create(from_model=..., include_optimizer=True)`` resumes exactly. ``ttl_seconds`` (1 hour to 10 years)
+        deletes the inactive model after that time; None keeps it.
         """
         body = self._save_body(name, include_optimizer, ttl_seconds, user_metadata)
         r = self._submit("save_checkpoint", body, kind="save")
@@ -243,7 +246,7 @@ class Run:
 
     async def save_checkpoint_async(
         self,
-        name: str,
+        name: str | None = None,
         *,
         include_optimizer: bool = False,
         ttl_seconds: int | None = None,
@@ -492,9 +495,10 @@ class Run:
 
     @staticmethod
     def _save_body(
-        name: str, include_optimizer: bool, ttl_seconds: int | None, user_metadata: dict[str, Any] | None
+        name: str | None, include_optimizer: bool, ttl_seconds: int | None, user_metadata: dict[str, Any] | None
     ) -> dict[str, Any]:
-        check_model_name(name)
+        if name is not None:
+            check_model_name(name)
         return {
             "name": name,
             "include_optimizer": include_optimizer,
@@ -532,9 +536,7 @@ def _split(wire: list[dict[str, Any]], size: int, cost: Callable[[dict[str, Any]
 
 
 def check_model_name(name: str) -> None:
-    """The API's rule for model names saved from the SDK; raises ValueError naming the problem."""
-    if name == C.BASE_MODEL_NAME:
-        raise ValueError('"base" is reserved (base models are called "<project>/<base id>"); pick another model name')
+    """The API's rule for custom model names; raises ValueError naming the problem."""
     if not isinstance(name, str) or not _MODEL_NAME.fullmatch(name):
         raise ValueError(
             f"bad model name {name!r}: lowercase letters, digits, '.', '_' or '-', starting with a letter or digit, "

@@ -27,8 +27,8 @@ def seq_ids(fake: FakeEndor, op: str) -> list[int]:
 
 
 class TestSequencing:
-    def test_consecutive_sequence_numbers(self, project: endor.Project, fake: FakeEndor) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_consecutive_sequence_numbers(self, client: endor.EndorClient, fake: FakeEndor) -> None:
+        with client.runs.create("jev-9b") as run:
             assert run.next_seq_id == 0
             run.forward_backward(datums()).result()
             run.optim_step().result()
@@ -39,34 +39,34 @@ class TestSequencing:
         assert posts == [0, 1, 2, 3]
         assert run.info().next_seq_id == 4
 
-    def test_second_handle_continues_the_sequence(self, project: endor.Project) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_second_handle_continues_the_sequence(self, client: endor.EndorClient) -> None:
+        with client.runs.create("jev-9b") as run:
             run.forward_backward(datums()).result()
-            again = project.runs.get(run.id)
+            again = client.runs.get(run.id)
             assert again.next_seq_id == 1
             again.optim_step().result()
             assert again.next_seq_id == 2
 
-    def test_two_handles_conflict(self, project: endor.Project) -> None:
-        with project.runs.create("jev-9b") as a:
-            b = project.runs.get(a.id)
+    def test_two_handles_conflict(self, client: endor.EndorClient) -> None:
+        with client.runs.create("jev-9b") as a:
+            b = client.runs.get(a.id)
             a.forward(datums(1)).result()
             with pytest.raises(ConflictError) as e:
                 b.forward(datums(2))
             assert e.value.code == "seq_conflict" and e.value.param == "seq_id" and "expected" in str(e.value)
             assert b.next_seq_id == 0  # a rejected call does not advance the handle
 
-    def test_transport_retry_reuses_seq_id_and_body(self, project: endor.Project, fake: FakeEndor) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_transport_retry_reuses_seq_id_and_body(self, client: endor.EndorClient, fake: FakeEndor) -> None:
+        with client.runs.create("jev-9b") as run:
             fake.fail_next.append(httpx.ConnectError("reset"))
             out = run.forward_backward(datums(3)).result()
         posts = [r for r in fake.requests if r.path.endswith("/forward_backward")]
         assert len(posts) == 2 and posts[0].body == posts[1].body and posts[1].body["seq_id"] == 0
         assert out.metrics["n"] == 6 and run.next_seq_id == 1
 
-    def test_server_side_idempotent_retry(self, project: endor.Project) -> None:
+    def test_server_side_idempotent_retry(self, client: endor.EndorClient) -> None:
         """The first POST reached the server (accepted) but the response was lost: the retry gets the same future."""
-        with project.runs.create("jev-9b") as run:
+        with client.runs.create("jev-9b") as run:
             batch = datums(1)
             fut = run.forward(batch)
             fut.result()
@@ -76,8 +76,8 @@ class TestSequencing:
             ref = run._t.request("POST", f"/v1/runs/{run.id}/forward", json=body)
             assert ref["future_id"] == fut.id
 
-    def test_bad_datum_is_caught_before_sending(self, project: endor.Project, fake: FakeEndor) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_bad_datum_is_caught_before_sending(self, client: endor.EndorClient, fake: FakeEndor) -> None:
+        with client.runs.create("jev-9b") as run:
             bad = Datum(state="x", question=DEPT, target=Target(label="nope"))
             with pytest.raises(ValueError, match=r"data\[2\]: target.label 'nope'"):
                 run.forward_backward(datums(1) + [bad])
@@ -87,8 +87,8 @@ class TestSequencing:
             run.forward_backward(datums()).result()
             assert seq_ids(fake, "forward_backward") == [0]
 
-    def test_rejected_call_does_not_consume_a_number(self, project: endor.Project, fake: FakeEndor) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_rejected_call_does_not_consume_a_number(self, client: endor.EndorClient, fake: FakeEndor) -> None:
+        with client.runs.create("jev-9b") as run:
             fake.blocked = True
             with pytest.raises(endor.InsufficientBalanceError) as e:
                 run.forward_backward(datums())
@@ -99,11 +99,11 @@ class TestSequencing:
             assert seq_ids(fake, "forward_backward") == [0, 0]
 
     def test_refused_chunk_cancels_the_accepted_ones(
-        self, project: endor.Project, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch
+        self, client: endor.EndorClient, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(endor.runs, "MAX_DATUMS_PER_CALL", 2)
         fake.future_polls = 5  # accepted chunks stay pending, so they can be cancelled
-        with project.runs.create("jev-9b") as run:
+        with client.runs.create("jev-9b") as run:
             first = run.forward_backward  # chunk 1 is accepted, chunk 2 is refused
             fake.fail_next += [None, HTTPError(402, "insufficient_balance", "used up")]
             with pytest.raises(endor.InsufficientBalanceError):
@@ -112,15 +112,15 @@ class TestSequencing:
             assert cancels == ["/v1/futures/fut_0002/cancel"] and fake.futures["fut_0002"]["status"] == "cancelled"
             assert run.next_seq_id == 1
 
-    def test_closed_run_rejects_ops(self, project: endor.Project) -> None:
-        run = project.runs.create("jev-9b")
+    def test_closed_run_rejects_ops(self, client: endor.EndorClient) -> None:
+        run = client.runs.create("jev-9b")
         run.close()
         with pytest.raises(ConflictError) as e:
             run.forward(datums(1))
         assert e.value.code == "invalid_state"
 
-    async def test_async_calls_are_serialized(self, project: endor.Project, fake: FakeEndor) -> None:
-        run = project.runs.create("jev-9b")
+    async def test_async_calls_are_serialized(self, client: endor.EndorClient, fake: FakeEndor) -> None:
+        run = client.runs.create("jev-9b")
         f1, f2, f3 = await asyncio.gather(
             run.forward_backward_async(datums(2)),
             run.forward_backward_async(datums(3)),
@@ -130,17 +130,17 @@ class TestSequencing:
         assert outs[0].metrics["n"] == 4 and outs[1].metrics["n"] == 6 and outs[2].step == 1
         assert sorted(seq_ids(fake, "forward_backward") + seq_ids(fake, "optim_step")) == [0, 1, 2]
         model = await (await run.save_checkpoint_async("v1")).result_async()
-        assert model == f"{project.name}/v1"
+        assert model == "v1"
         assert (await run.close_async()).status in ("closing", "closed", "ready")
         assert wait_closed(run) == "closed"
 
 
 class TestChunking:
     def test_big_batches_are_split_and_merged(
-        self, project: endor.Project, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch
+        self, client: endor.EndorClient, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(endor.runs, "MAX_DATUMS_PER_CALL", 7)
-        with project.runs.create("jev-9b") as run:
+        with client.runs.create("jev-9b") as run:
             fut = run.forward_backward(datums(10))  # 20 datums -> 7 + 7 + 6
             assert fut.id is None and len(fut.leaves()) == 3
             out = fut.result()
@@ -165,34 +165,34 @@ class TestChunking:
         assert m.metrics == {"loss:sum": 8.0, "weight:sum": 3.0, "loss:mean": 8 / 3, "accuracy": 0.25, "n": 4}
         assert m.losses == [1.0, 4.0, 4.0, 4.0]
 
-    def test_empty_batch(self, project: endor.Project) -> None:
-        with project.runs.create("jev-9b") as run, pytest.raises(ValueError, match="no data"):
+    def test_empty_batch(self, client: endor.EndorClient) -> None:
+        with client.runs.create("jev-9b") as run, pytest.raises(ValueError, match="no data"):
             run.forward([])
 
 
 class TestLifecycle:
-    def test_with_block_closes(self, project: endor.Project) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_with_block_closes(self, client: endor.EndorClient) -> None:
+        with client.runs.create("jev-9b") as run:
             run.forward_backward(datums())
         assert wait_closed(run) == "closed"
 
-    def test_close_wait(self, project: endor.Project) -> None:
-        run = project.runs.create("jev-9b")
+    def test_close_wait(self, client: endor.EndorClient) -> None:
+        run = client.runs.create("jev-9b")
         run.forward(datums(1))
         assert run.close(wait=True, timeout=30).status == "closed"
 
-    def test_with_block_closes_on_error(self, project: endor.Project) -> None:
-        with pytest.raises(RuntimeError), project.runs.create("jev-9b") as run:
+    def test_with_block_closes_on_error(self, client: endor.EndorClient) -> None:
+        with pytest.raises(RuntimeError), client.runs.create("jev-9b") as run:
             raise RuntimeError("user code failed")
         assert wait_closed(run) == "closed"
 
-    async def test_async_with_block_closes(self, project: endor.Project) -> None:
-        async with project.runs.create("jev-9b") as run:
+    async def test_async_with_block_closes(self, client: endor.EndorClient) -> None:
+        async with client.runs.create("jev-9b") as run:
             await (await run.forward_async(datums(1))).result_async()
         assert wait_closed(run) == "closed"
 
-    def test_close_warns_about_unsaved_steps(self, project: endor.Project, caplog: pytest.LogCaptureFixture) -> None:
-        run = project.runs.create("jev-9b")
+    def test_close_warns_about_unsaved_steps(self, client: endor.EndorClient, caplog: pytest.LogCaptureFixture) -> None:
+        run = client.runs.create("jev-9b")
         run.forward_backward(datums()).result()
         run.optim_step().result()
         with caplog.at_level(logging.WARNING, logger="endor"):
@@ -200,21 +200,21 @@ class TestLifecycle:
         assert any("newer than the last save" in r.getMessage() for r in caplog.records)
         wait_closed(run)
 
-    def test_close_is_quiet_after_a_save(self, project: endor.Project, caplog: pytest.LogCaptureFixture) -> None:
-        run = project.runs.create("jev-9b")
+    def test_close_is_quiet_after_a_save(self, client: endor.EndorClient, caplog: pytest.LogCaptureFixture) -> None:
+        run = client.runs.create("jev-9b")
         run.forward_backward(datums()).result()
         run.optim_step().result()
         run.save_checkpoint("v1").result()
         with caplog.at_level(logging.WARNING, logger="endor"):
             run.close()
         assert not caplog.records
-        fresh = project.runs.create("jev-9b")
+        fresh = client.runs.create("jev-9b")
         with caplog.at_level(logging.WARNING, logger="endor"):
             fresh.close()
         assert not caplog.records
 
-    def test_failed_op(self, project: endor.Project, fake: FakeEndor) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_failed_op(self, client: endor.EndorClient, fake: FakeEndor) -> None:
+        with client.runs.create("jev-9b") as run:
             fake.future_polls = 1
             fut = run.forward_backward(datums())
             fake.fail_future(fut.id or "", "trainer_lost", "the trainer died")
@@ -235,10 +235,10 @@ class TestLifecycle:
         )
         assert str(e).lower().count("new run") == 1
 
-    def test_save_conflict_and_options(self, project: endor.Project) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_save_conflict_and_options(self, client: endor.EndorClient) -> None:
+        with client.runs.create("jev-9b") as run:
             run.save_checkpoint("v1", include_optimizer=True, ttl_seconds=7200, user_metadata={"note": "x"}).result()
-            m = project.models.get("v1")
+            m = client.custom_models.get("v1")
             assert m.has_optimizer and m.expires_at is not None and m.user_metadata == {"note": "x"}
             with pytest.raises(ConflictError) as e:
                 run.save_checkpoint("v1")
@@ -248,51 +248,46 @@ class TestLifecycle:
 
     @pytest.mark.parametrize(
         "name",
-        ["base", "-v", ".v", "_v", "V1", "v 1", "v/1", "", "a" * 64, "v\n", "\u00e9v"],
+        ["-v", ".v", "_v", "V1", "v 1", "v/1", "v:1", "", "a" * 64, "v\n", "\u00e9v"],
     )
-    def test_save_rejects_reserved_and_bad_names_locally(
-        self, project: endor.Project, fake: FakeEndor, name: str
-    ) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_save_rejects_bad_names_locally(self, client: endor.EndorClient, fake: FakeEndor, name: str) -> None:
+        with client.runs.create("jev-9b") as run:
             sent = len(fake.requests)
-            with pytest.raises(ValueError, match="base|starting with a letter or digit"):
+            with pytest.raises(ValueError, match="starting with a letter or digit"):
                 run.save_checkpoint(name)
             assert len(fake.requests) == sent and run.next_seq_id == 0  # nothing sent, no number used
 
-    async def test_save_rejects_bad_names_async(self, project: endor.Project) -> None:
-        with project.runs.create("jev-9b") as run, pytest.raises(ValueError, match="base"):
-            await run.save_checkpoint_async("base")
+    async def test_save_rejects_bad_names_async(self, client: endor.EndorClient) -> None:
+        with client.runs.create("jev-9b") as run, pytest.raises(ValueError, match="bad model name"):
+            await run.save_checkpoint_async("Bad")
 
-    @pytest.mark.parametrize(
-        "name", ["v", "v1", "a" * 63, "base2", "basel", "my-model_1.0", "z0", "1v", "2026-10-07-1"]
-    )
-    def test_save_accepts_names_the_api_accepts(self, project: endor.Project, name: str) -> None:
-        with project.runs.create("jev-9b") as run:
-            assert run.save_checkpoint(name).result() == f"{project.name}/{name}"
+    @pytest.mark.parametrize("name", ["v", "v1", "a" * 63, "base2", "my-model_1.0", "z0", "1v", "2026-10-07-1"])
+    def test_save_accepts_names_the_api_accepts(self, client: endor.EndorClient, name: str) -> None:
+        with client.runs.create("jev-9b") as run:
+            assert run.save_checkpoint(name).result() == name  # a custom model, called by its name
 
-    def test_api_refuses_reserved_names_too(self, project: endor.Project, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(endor.runs, "check_model_name", lambda name: None)  # the server's own check
-        with project.runs.create("jev-9b") as run:
+    def test_api_refuses_base_model_ids_as_names(self, client: endor.EndorClient) -> None:
+        with client.runs.create("jev-9b") as run:
             with pytest.raises(UnprocessableEntityError) as e:
-                run.save_checkpoint("base")
+                run.save_checkpoint("decider-2b")  # a base model id
             assert e.value.code == "invalid_input" and e.value.param == "name"
 
-    def test_optim_step_params(self, project: endor.Project, fake: FakeEndor) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_optim_step_params(self, client: endor.EndorClient, fake: FakeEndor) -> None:
+        with client.runs.create("jev-9b") as run:
             run.forward_backward(datums()).result()
             out = run.optim_step(AdamParams(weight_decay=0.1, grad_clip_norm=1.0), learning_rate=3e-5).result()
             sent = fake.requests[-2].body["adam_params"]
             assert sent["learning_rate"] == 3e-5 and sent["weight_decay"] == 0.1 and sent["grad_clip_norm"] == 1.0
             assert out.step == 1 and out.learning_rate == 3e-5
 
-    def test_optim_step_without_gradients_fails(self, project: endor.Project) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_optim_step_without_gradients_fails(self, client: endor.EndorClient) -> None:
+        with client.runs.create("jev-9b") as run:
             with pytest.raises(OperationFailedError) as e:
                 run.optim_step().result()
             assert e.value.code == "no_gradients" and not e.value.retryable
 
-    def test_repr_and_info(self, project: endor.Project) -> None:
-        with project.runs.create("jev-9b", name="r", tags=["a"], user_metadata={"k": 1}) as run:
+    def test_repr_and_info(self, client: endor.EndorClient) -> None:
+        with client.runs.create("jev-9b", name="r", tags=["a"], user_metadata={"k": 1}) as run:
             assert run.id in repr(run) and "jev-9b" in repr(run)
             info = run.info()
         assert info.name == "r" and info.tags == ["a"] and info.user_metadata == {"k": 1} and info.lora.rank == 16
@@ -300,8 +295,8 @@ class TestLifecycle:
 
 
 class TestDashboard:
-    def test_log_and_metrics(self, project: endor.Project) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_log_and_metrics(self, client: endor.EndorClient) -> None:
+        with client.runs.create("jev-9b") as run:
             run.forward_backward(datums()).result()
             run.optim_step().result()
             run.log({"heldout/accuracy": 0.9})  # no step: the run's current step on the server (1)
@@ -313,12 +308,12 @@ class TestDashboard:
             auto = [p for p in points if p.key == "train/loss"]
             assert auto and auto[0].source == "auto"
 
-    def test_log_eval(self, project: endor.Project) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_log_eval(self, client: endor.EndorClient) -> None:
+        with client.runs.create("jev-9b") as run:
             ev = run.log_eval("jev-9b", {"accuracy": 0.5}, step=3, name="heldout")
         assert ev.source == "client" and ev.training_run_id == run.id and ev.results
         assert ev.results["accuracy"] == 0.5 and ev.results["step"] == 3
-        assert [e.id for e in project.evaluations(run_id=run.id)] == [ev.id]
+        assert [e.id for e in client.evaluations.list(run_id=run.id)] == [ev.id]
 
 
 def heartbeats(fake: FakeEndor) -> int:
@@ -342,8 +337,8 @@ class TestHeartbeat:
     """While a run is open, a daemon thread tells the API every minute that its client is still there, so a parked
     run isn't closed while the client waits; it stops when the run closes and never raises into user code."""
 
-    def test_beats_while_open_and_stops_on_close(self, project: endor.Project, fake: FakeEndor) -> None:
-        with project.runs.create("jev-9b") as run:
+    def test_beats_while_open_and_stops_on_close(self, client: endor.EndorClient, fake: FakeEndor) -> None:
+        with client.runs.create("jev-9b") as run:
             thread = run._heartbeat
             assert thread is not None and thread.daemon and thread.is_alive()
             wait_for(lambda: heartbeats(fake) >= 3)
@@ -356,8 +351,8 @@ class TestHeartbeat:
         hb = [r for r in fake.requests if r.path.endswith("/heartbeat")][0]
         assert hb.path == f"/v1/runs/{run.id}/heartbeat" and hb.headers["x-endor-sdk-method"] == "run.heartbeat"
 
-    async def test_async_with_block(self, project: endor.Project, fake: FakeEndor) -> None:
-        async with project.runs.create("jev-9b") as run:
+    async def test_async_with_block(self, client: endor.EndorClient, fake: FakeEndor) -> None:
+        async with client.runs.create("jev-9b") as run:
             thread = run._heartbeat
             assert thread is not None
             while heartbeats(fake) < 2:
@@ -365,8 +360,8 @@ class TestHeartbeat:
         thread.join(1)
         assert not thread.is_alive()
 
-    def test_without_a_with_block_until_close(self, project: endor.Project, fake: FakeEndor) -> None:
-        run = project.runs.create("jev-9b")
+    def test_without_a_with_block_until_close(self, client: endor.EndorClient, fake: FakeEndor) -> None:
+        run = client.runs.create("jev-9b")
         wait_for(lambda: heartbeats(fake) >= 2)
         thread = run._heartbeat
         run.close()
@@ -374,17 +369,17 @@ class TestHeartbeat:
         thread.join(1)
         assert not thread.is_alive()
 
-    def test_only_the_handles_that_hold_the_run_open(self, project: endor.Project, fake: FakeEndor) -> None:
-        with project.runs.create("jev-9b") as run:
-            assert project.runs.get(run.id)._heartbeat is None  # a handle to look at the run sends nothing
-            assert all(r._heartbeat is None for r in project.runs.list())
-            with project.runs.get(run.id) as again:  # one in a with block does
+    def test_only_the_handles_that_hold_the_run_open(self, client: endor.EndorClient, fake: FakeEndor) -> None:
+        with client.runs.create("jev-9b") as run:
+            assert client.runs.get(run.id)._heartbeat is None  # a handle to look at the run sends nothing
+            assert all(r._heartbeat is None for r in client.runs.list())
+            with client.runs.get(run.id) as again:  # one in a with block does
                 assert again._heartbeat is not None and again._heartbeat is not run._heartbeat
 
     def test_errors_never_reach_user_code(
-        self, project: endor.Project, fake: FakeEndor, caplog: pytest.LogCaptureFixture
+        self, client: endor.EndorClient, fake: FakeEndor, caplog: pytest.LogCaptureFixture
     ) -> None:
-        with caplog.at_level(logging.DEBUG, logger="endor"), project.runs.create("jev-9b") as run:
+        with caplog.at_level(logging.DEBUG, logger="endor"), client.runs.create("jev-9b") as run:
             fake.heartbeat_fault = httpx.ConnectError("reset")
             wait_for(lambda: sum("heartbeat failed" in r.getMessage() for r in caplog.records) >= 2)
             fake.heartbeat_fault = HTTPError(500, "internal", "boom")
@@ -396,8 +391,8 @@ class TestHeartbeat:
         assert {r.levelno for r in failed} == {logging.DEBUG}
         assert run._t.last.error is None  # a report is never about a heartbeat
 
-    def test_stops_once_the_server_closed_the_run(self, project: endor.Project, fake: FakeEndor) -> None:
-        run = project.runs.create("jev-9b")
+    def test_stops_once_the_server_closed_the_run(self, client: endor.EndorClient, fake: FakeEndor) -> None:
+        run = client.runs.create("jev-9b")
         fake.runs[run.id]["status"] = "closed"  # closed elsewhere: `endor runs close`, the dashboard
         thread = run._heartbeat
         assert thread is not None
@@ -405,13 +400,13 @@ class TestHeartbeat:
         assert not thread.is_alive()
         run.close()
 
-    def test_a_dropped_handle_stops_beating(self, project: endor.Project, fake: FakeEndor) -> None:
+    def test_a_dropped_handle_stops_beating(self, client: endor.EndorClient, fake: FakeEndor) -> None:
         """A handle nobody holds any more (a notebook cell run again) stops, so the server closes its run."""
-        run = project.runs.create("jev-9b")
+        run = client.runs.create("jev-9b")
         run_id, thread = run.id, run._heartbeat
         assert thread is not None
         del run
         gc.collect()
         thread.join(1)
         assert not thread.is_alive()
-        project.runs.get(run_id).close()
+        client.runs.get(run_id).close()

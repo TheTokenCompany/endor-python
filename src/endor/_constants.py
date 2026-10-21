@@ -48,12 +48,12 @@ LIST_PAGE_SIZE = 100  # page size when a list call pages through every item
 # without a call or a heartbeat.
 RUN_HEARTBEAT_S = 60.0
 
-# Model names saved from the SDK: the API's name pattern, and never "base" (reserved by the API, as are the base model
-# ids: ``<project>/<base id>`` calls a base model).
+# Names of custom models and projects: the API's name pattern (one namespace per org; base model ids are taken, and
+# ``:`` separates a project from its preview).
 SDK_MODEL_NAME = r"^[a-z0-9][a-z0-9._-]{0,62}$"
-BASE_MODEL_NAME = "base"
+PREVIEW = "preview"  # "<project>:preview": a continuous learning project's newest version
 
 # Error codes that are never retried, whatever their status: waiting a few seconds doesn't fix them.
-NON_RETRYABLE_CODES = frozenset({"limit_reached", "insufficient_balance"})
+NON_RETRYABLE_CODES = frozenset({"limit_reached", "live_models_full", "insufficient_balance"})
 
 SECRET_HEADERS = frozenset({"authorization", "proxy-authorization", "x-api-key", "api-key", "cookie", "set-cookie"})
