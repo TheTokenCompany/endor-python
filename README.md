@@ -60,34 +60,34 @@ res = client.system_one(
         "urgent": Noul(instructions="Does the customer need an answer today?"),
         "frustration": Score(instructions="How frustrated is the customer?", criteria=["Calm", "Annoyed", "Angry"]),
     },
-    model="tickets",             # the project's live version
+    model="tickets",             # the project's production version
 )
 
 res.choices["department"].choice          # "billing"
 res.choices["department"].probabilities   # {"billing": 0.91, "technical": 0.07, "sales": 0.02}
 res.nouls["urgent"].noul                  # 0.83
 res.scores["frustration"].score           # 1.4 (expected level), plus .probabilities and .legend
-res.model, res.usage.input_tokens         # what answered, e.g. "tickets:v4"
+res.model, res.usage.input_tokens         # what answered: "tickets:v4", or "tickets" while its base model answers
 res.id                                    # the decision's id ("req_..."), to correct it later
 ```
 
-**Live and preview, like deployments.** A project has one **live** version. A new version lands in the **preview**
-and waits there until you promote it. Turn **auto-promote** on (it is off by default) and every new version goes live
-as soon as it is ready instead:
+**Production and preview, like deployments.** A project has one **production** version. A new version lands in the
+**preview** and waits there until you promote it to production. Turn **auto-promote** on (it is off by default) and
+every new version goes to production as soon as it is ready instead:
 
 | `model` | Answers with |
 |---|---|
-| `"tickets"` (`project.ref`) | the live version; the base model before the first version |
-| `"tickets:preview"` (`project.preview_ref`) | the preview, the newest version while it isn't live. Without one (always while auto-promote is on) it raises `NoPreviewError`, and `project.preview_ref` is None |
+| `"tickets"` (`project.ref`) | the production version (`project.production`); the base model until you promote one |
+| `"tickets:preview"` (`project.preview_ref`) | the preview (`project.preview`), the newest version while it isn't in production. Without one (always while auto-promote is on) it raises `NoPreviewError`, and `project.preview_ref` is None |
 | `"router-2"` | a live custom model (see "Advanced: custom models") |
 
 Promote any version yourself, for example to roll back:
 
 ```python
-project.versions()               # v1, v2, ... newest first: .live, .preview (never both), .accuracy, .loss
-project.promote("v3")            # "tickets" answers with v3 now; a version older than the newest turns auto-promote off
-project.set_auto_promote(True)   # the newest version goes live at once, and every new version after it (off by default)
-project.info()                   # .live, .preview, .auto_promote, .promoted_at, .versions, .base_model
+project.versions()               # v1, v2, ... newest first: .production, .preview (never both), .accuracy, .loss
+project.promote("v3")            # v3 to production; a version older than the newest turns auto-promote off
+project.set_auto_promote(True)   # the newest goes to production at once, and every new version after it (off by default)
+project.info()                   # .production, .preview, .auto_promote, .promoted_at, .versions, .base_model
 project.download("v3", "./tickets-v3")   # a version's LoRA adapter (PEFT), to run it yourself
 ```
 
@@ -98,7 +98,7 @@ Older versions can't be called directly (`"tickets:v3"` raises `VersionNotCallab
 ```python
 learning = project.learning()
 learning.status, learning.progress    # "learning", 0.4 of the way to the next version
-learning.serving                      # "tickets:v2", or "tickets:decider-2b" before the first version
+learning.serving                      # "tickets:v2", or "tickets" while its base model answers
 for t in learning.trainings:          # newest first: kept or not, with its accuracy and loss
     print(t.version, t.kept, t.decisions, t.accuracy, t.against_accuracy)
 learning.drift                        # per question, whether recent traffic changed
@@ -187,7 +187,7 @@ says), and the message says how to ask.
 
 **The catalog.** `client.models.list()` returns every name you can pass as `model` (`GET /v1/models`): for each
 project `"<project>"` and, while it has a preview, `"<project>:preview"`, then every live custom model (`.kind` is
-`project`, `preview` or `custom`). `client.base_models()` returns the base models (`GET /v1/base_models`) with their option limits,
+`project` or `custom`; `.environment` is `production` or `preview` for a project's names). `client.base_models()` returns the base models (`GET /v1/base_models`) with their option limits,
 `modalities`, `hf_repo`, `contract` and prices (`price_per_mtok_decide` for custom models,
 `price_per_mtok_decide_continuous_learning` for projects, `price_per_gpu_hour` for training).
 
@@ -559,7 +559,7 @@ decisions; a custom model's decisions have no project.
 | `EndorClient(*, api_key, model, retry, timeout, headers, base_url, capture, gzip, http_client, async_http_client, transport, async_transport)` | `system_one(state, questions, *, model, retry, timeout, extra_headers, extra_body, response_model)`, `system_one_async`, `predict(model, rows, *, progress=True, timeout=None)` → one `{question: answer}` per row, `predict_async`, `models.list()`, `models.list_async()`, `base_models()`, `projects`, `custom_models`, `datasets`, `runs`, `evaluations`, `corrections`, `whoami()`, `balance()` → USD, `usage(starting_on, ending_before, project=None)`, `user_report(message, *, kind="bug", request_id=None, context=None)`, `user_report_async`, `close()`, `aclose()`, context managers |
 | `endor.user_report(message, *, kind="bug", request_id=None, context=None, api_key=None, base_url=None, timeout=None)` | `endor.user_report_async(...)`; returns `UserReportReceipt` (`id`, `message`) |
 | `client.projects` | `create(name, base_model, description=None)`, `get(name)`, `get_or_create(name, base_model, description=None)`, `list(limit=None, offset=0)` (all pages) |
-| `Project` | `.name`, `.info_`, `.ref` (`"<project>"`), `.preview_ref` (`"<project>:preview"`, or None without a preview), `info()`, `learning()` → `Learning`, `versions()` → `list[VersionInfo]`, `promote(version)`, `set_auto_promote(on)`, `download(version, path, include_optimizer=False)`, `update(*, description)`, `delete()` |
+| `Project` | `.name`, `.info_`, `.ref` (`"<project>"`), `.preview_ref` (`"<project>:preview"`, or None without a preview), `.production`, `.preview`, `info()`, `learning()` → `Learning`, `versions()` → `list[VersionInfo]`, `promote(version)`, `set_auto_promote(on)`, `download(version, path, include_optimizer=False)`, `update(*, description)`, `delete()` |
 | `client.corrections` | `create(request_id, questions, *, comment=None)` → `CorrectionInfo`, `batch(items)` → `list[CorrectionInfo]`, `get(request_id)`, `delete(request_id)`, each with an `_async` variant; `request_id` is a `SystemOneResponse` or its id |
 | `client.custom_models` | `list(live=None, limit=None, offset=0)` → `list[CustomModelInfo]` (live first), `get(name)`, `create(name, base_model=None, *, run_name=None, **run_options)` → `Run`, `promote(name, replace=None)`, `demote(name)`, `set_ttl(name, ttl_seconds)`, `download(name, path, include_optimizer=False)`, `delete(name)` |
 | `client.datasets` | `upload(name, rows)`, `list()`, `get(name)`, `rows(name, page=500)`, `delete(name)` |

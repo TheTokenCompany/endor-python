@@ -96,7 +96,9 @@ class TestDecisions:
             {"body": "charged twice"}, {"dept": DEPT, "urgent": URGENT, "anger": ANGER}, model=decider
         )
         assert isinstance(res, SystemOneResponse)
-        assert res.model == f"{decider}:{DECIDE_BASE}"  # what answered: the project's base, before a version
+        assert (
+            res.model == decider
+        )  # what answered: the project's base, before a version is promoted (plain "<project>")
         assert isinstance(res.choices["dept"], ChoiceAnswer) and res.choices["dept"].choice in ("billing", "tech")
         assert isinstance(res.nouls["urgent"], NoulAnswer) and res.nouls["urgent"].noul == 0.5
         s = res.scores["anger"]
@@ -162,7 +164,7 @@ class TestDecisions:
 
     def test_a_projects_live_version_and_preview(self, client: EndorClient, fake: FakeEndor, decider: str) -> None:
         fake.add_version(decider)  # auto-promote is off by default: v1 waits in the preview
-        assert client.system_one("x", {"d": DEPT}, model=decider).model == f"{decider}:jev-9b"
+        assert client.system_one("x", {"d": DEPT}, model=decider).model == decider
         assert client.system_one("x", {"d": DEPT}, model=f"{decider}:preview").model == f"{decider}:v1"
         client.projects.get(decider).promote("v1")
         assert client.system_one("x", {"d": DEPT}, model=decider).model == f"{decider}:v1"
@@ -226,7 +228,8 @@ class TestCatalogAndAccount:
         listed = client.models.list()
         by_name = {m.name: m for m in listed.models}
         assert "jev-9b" not in by_name  # a bare base model id is not a name a decision can send
-        assert by_name[decider].kind == "project" and by_name[decider].endor["model"] == f"{decider}:jev-9b"
+        assert by_name[decider].kind == "project" and by_name[decider].endor["model"] == decider
+        assert by_name[decider].environment == "production" and by_name["v1"].environment is None
         assert f"{decider}:preview" not in by_name  # no version yet, so no preview
         saved = by_name["v1"]
         assert saved.kind == "custom" and saved.endor["base_model"] == "jev-9b" and saved.release_date

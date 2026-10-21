@@ -43,7 +43,7 @@ class TestProjects:
         assert p.name == name and repr(p) == f"Project({name!r})"
         info = p.info_
         assert info.base_model == BASE and info.description == "tickets" and not info.auto_promote  # off by default
-        assert info.live is None and info.preview is None and info.versions == 0
+        assert info.production is None and info.preview is None and info.versions == 0
         assert client.projects.get(name).info_.base_model == BASE
         assert name in [x.name for x in client.projects.list()]
         with pytest.raises(ConflictError) as e:
@@ -93,7 +93,7 @@ class TestProjects:
     def test_ref_answers_with_the_base_until_the_first_version(self, client: EndorClient) -> None:
         p = client.projects.create(unique("ref"), base_model=BASE)
         assert p.ref == p.name and p.preview_ref is None  # no version yet, so no preview
-        assert client.system_one("x", Q, model=p.ref).model == f"{p.name}:{BASE}"
+        assert client.system_one("x", Q, model=p.ref).model == p.name
         with pytest.raises(NoPreviewError) as e:
             client.system_one("x", Q, model=f"{p.name}:preview")
         assert isinstance(e.value, NotFoundError) and e.value.code == "no_preview"
@@ -102,40 +102,41 @@ class TestProjects:
         p = client.projects.create(unique("ver"), base_model=BASE)
         fake.add_version(p.name, accuracy=81.0, loss=0.5)  # auto-promote is off by default: v1 is the preview
         info = p.info()
-        assert (info.live, info.preview, info.versions, info.auto_promote) == (None, "v1", 1, False)
+        assert (info.production, info.preview, info.versions, info.auto_promote) == (None, "v1", 1, False)
         assert p.preview_ref == f"{p.name}:preview"
-        assert client.system_one("x", Q, model=p.ref).model == f"{p.name}:{BASE}"  # the base until a promote
+        assert client.system_one("x", Q, model=p.ref).model == p.name  # the base until a promote
         assert client.system_one("x", Q, model=p.preview_ref).model == f"{p.name}:v1"
 
         info = p.promote("v1")
         req = fake.requests[-1]
         assert (req.method, req.path) == ("POST", f"/v1/projects/{p.name}/versions/v1/promote")
-        assert (info.live, info.preview, info.auto_promote) == ("v1", None, False) and p.info_ is info
+        assert (info.production, info.preview, info.auto_promote) == ("v1", None, False) and p.info_ is info
         assert info.promoted_at is not None and p.preview_ref is None
+        assert (p.production, p.preview) == ("v1", None)  # the Project's shortcuts to info_
         with pytest.raises(NoPreviewError):
             client.system_one("x", Q, model=f"{p.name}:preview")
         fake.add_version(p.name, accuracy=84.5, loss=0.4)  # v2 waits in the preview
         assert client.system_one("x", Q, model=p.ref).model == f"{p.name}:v1"
         assert client.system_one("x", Q, model=f"{p.name}:preview").model == f"{p.name}:v2"
         vs = p.versions()
-        assert [(v.name, v.live, v.preview) for v in vs] == [("v2", False, True), ("v1", True, False)]
+        assert [(v.name, v.production, v.preview) for v in vs] == [("v2", False, True), ("v1", True, False)]
         assert vs[0].accuracy == 84.5 and vs[1].loss == 0.5 and vs[0].base_model == BASE
 
         info = p.set_auto_promote(True)  # the newest goes live at once: no preview any more
         assert fake.requests[-1].body == {"auto_promote": True}
-        assert (info.live, info.preview, info.auto_promote) == ("v2", None, True)
+        assert (info.production, info.preview, info.auto_promote) == ("v2", None, True)
         fake.add_version(p.name)  # with auto-promote on, v3 goes live by itself
-        assert (p.info().live, p.info_.preview) == ("v3", None)
+        assert (p.info().production, p.info_.preview) == ("v3", None)
         vs = p.versions()
-        assert [(v.name, v.live, v.preview) for v in vs] == [
+        assert [(v.name, v.production, v.preview) for v in vs] == [
             ("v3", True, False),
             ("v2", False, False),
             ("v1", False, False),
         ]
 
         info = p.promote("v1")  # a rollback: auto-promote turns off, and the newest is the preview again
-        assert (info.live, info.preview, info.auto_promote) == ("v1", "v3", False)
-        assert not any(v.live and v.preview for v in p.versions())
+        assert (info.production, info.preview, info.auto_promote) == ("v1", "v3", False)
+        assert not any(v.production and v.preview for v in p.versions())
         with pytest.raises(NotFoundError):
             p.promote("v9")
 
@@ -165,7 +166,7 @@ class TestProjects:
     def test_learning_status(self, client: EndorClient, fake: FakeEndor) -> None:
         p = client.projects.create(unique("learn"), base_model=BASE)
         got = p.learning()
-        assert got.status == "waiting" and got.serving == f"{p.name}:{BASE}" and got.trainings == []
+        assert got.status == "waiting" and got.serving == p.name and got.trainings == []
         fake.learning[p.name] = {
             "status": "learning",
             "trainings": [

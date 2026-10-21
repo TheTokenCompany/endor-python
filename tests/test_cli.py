@@ -38,13 +38,13 @@ def test_projects(capsys: pytest.CaptureFixture[str], client: EndorClient, fake:
     fake.add_version(name)
     fake.add_version(name)  # auto-promote is off by default: v2 is the preview, nothing live yet
     versions = run_json(capsys, client, "projects", "versions", name)
-    assert [(v["name"], v["live"], v["preview"]) for v in versions] == [  # type: ignore[index,union-attr]
+    assert [(v["name"], v["production"], v["preview"]) for v in versions] == [  # type: ignore[index,union-attr]
         ("v2", False, True),
         ("v1", False, False),
     ]
     promoted = run_json(capsys, client, "projects", "promote", name, "v1")
-    assert promoted["live"] == "v1" and promoted["preview"] == "v2"  # type: ignore[index]
-    assert run_json(capsys, client, "projects", "auto-promote", name, "on")["live"] == "v2"  # type: ignore[index]
+    assert promoted["production"] == "v1" and promoted["preview"] == "v2"  # type: ignore[index]
+    assert run_json(capsys, client, "projects", "auto-promote", name, "on")["production"] == "v2"  # type: ignore[index]
     run(capsys, client, "projects", "delete", name)
     assert name not in [p["name"] for p in run_json(capsys, client, "projects", "list")]  # type: ignore[union-attr]
 

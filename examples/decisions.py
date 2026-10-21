@@ -1,6 +1,6 @@
-"""Ask a continuous learning project named questions about a state. "tickets" answers with the project's live version
-(its base model until you promote a version). The project learns from its decisions and from your corrections: new
-versions wait in "tickets:preview" until you promote one, or every new version goes live with auto-promote on.
+"""Ask a continuous learning project named questions about a state. "tickets" answers with the project's production
+version (its base model until you promote one). The project learns from its decisions and from your corrections: new
+versions wait in "tickets:preview" until you promote one, or go to production by themselves with auto-promote on.
 
 ENDOR_API_KEY=edk_... python examples/decisions.py
 """
@@ -21,7 +21,7 @@ questions = {
 }
 
 res = client.system_one(state, questions)  # the client's default model, "tickets"
-print(res.model)  # what answered: "tickets:v4", or "tickets:decider-2b" before the first version
+print(res.model)  # what answered: "tickets:v4", or "tickets" while its base model answers
 print(res.choices["department"].choice, res.choices["department"].probabilities)
 print(res.nouls["urgent"].noul)
 print(res.scores["frustration"].score, res.scores["frustration"].probabilities)
@@ -43,7 +43,7 @@ print(triage.department.choice, triage.urgent.noul)
 info = project.info()
 if info.preview:
     print(client.system_one(state, questions, model=project.preview_ref).model)  # "tickets:preview" answers
-    project.promote(info.preview)  # "tickets" answers with it now
+    project.promote(info.preview)  # in production: "tickets" answers with it now
 
 # Every name a decision can send: your projects, their previews (when they have one) and your live custom models.
 for m in client.models.list().models:

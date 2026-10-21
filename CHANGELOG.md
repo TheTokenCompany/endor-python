@@ -5,12 +5,12 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-0.9.0: projects are continuous learning projects, with a live version and a preview like deployments, and custom
+0.9.0: projects are continuous learning projects, with a production version and a preview like deployments, and custom
 models live outside projects. This release breaks code written for 0.8.0; the table says what to change.
 
-A project's preview is its newest version while that isn't live. Auto-promote is off by default, so new versions
-land in the preview until you promote one; with auto-promote on, every new version goes live at once and there is no
-preview. `"<project>:preview"` without a preview raises `NoPreviewError`.
+A project's preview is its newest version while that isn't in production. Auto-promote is off by default, so new
+versions land in the preview until you promote one; with auto-promote on, every new version goes to production at once
+and there is no preview. While its base model answers, a project's decisions report `model` as plain `"tickets"`. `"<project>:preview"` without a preview raises `NoPreviewError`.
 
 ### Breaking changes and how to migrate
 
@@ -18,13 +18,14 @@ preview. `"<project>:preview"` without a preview raises `NoPreviewError`.
 |---|---|
 | `client.projects.create(name, kind="managed", base_models=["decider-2b"])` | `client.projects.create(name, base_model="decider-2b")`: every project is a continuous learning project, on one base model chosen once. `kind=` and `base_models=` raise a `TypeError` that says this. |
 | `kind="custom"` projects, `project.datasets`, `project.runs`, `project.models`, `project.evaluate`, `project.evaluations` | `client.datasets`, `client.runs`, `client.custom_models`, `client.evaluations.create` and `client.evaluations.list`, at the organization's level |
-| `model="tickets/v1"` (a saved model), `"tickets/decider-2b"` (a project's base model) | a custom model is called by its name, `model="router-2"`, once promoted (`client.custom_models.promote("router-2")`); a project is `model="tickets"` (its live version) or `"tickets:preview"` (a newer version that isn't live yet, while there is one). The `<project>/<name>` form no longer resolves. |
+| `model="tickets/v1"` (a saved model), `"tickets/decider-2b"` (a project's base model) | a custom model is called by its name, `model="router-2"`, once promoted (`client.custom_models.promote("router-2")`); a project is `model="tickets"` (its production version) or `"tickets:preview"` (a newer version not in production yet, while there is one). The `<project>/<name>` form no longer resolves. |
 | `run.save_checkpoint("v1")` → `"tickets/v1"`, callable at once | `run.save_checkpoint("router-2")` → `"router-2"`, saved inactive: promote it to call it. `client.custom_models.create("router-2", base_model=...)` opens a run whose `save_checkpoint()` (no name) saves under that name. Each save is a new model; names are unique in the organization with the projects. |
 | `project.runs.create()` on the project's first base model | `client.runs.create("decider-2b")` (or `from_model=`): a base model is required |
-| `project.add_base_model`, `project.remove_base_model`, `ProjectInfo.kind`, `.base_models`, `.n_datasets`, `.n_runs`, `.n_models`, `.wandb`, `project.update(wandb=...)`, `WandbSettings` | gone. `ProjectInfo` has `base_model`, `live`, `preview`, `auto_promote`, `promoted_at`, `versions`. Runs log to Weights & Biases when the organization has connected it (`runs.create(wandb=False)` turns it off per run). |
+| `project.add_base_model`, `project.remove_base_model`, `ProjectInfo.kind`, `.base_models`, `.n_datasets`, `.n_runs`, `.n_models`, `.wandb`, `project.update(wandb=...)`, `WandbSettings` | gone. `ProjectInfo` has `base_model`, `production`, `preview`, `auto_promote`, `promoted_at`, `versions` (and `Project` has `.production` and `.preview`). Runs log to Weights & Biases when the organization has connected it (`runs.create(wandb=False)` turns it off per run). |
 | `ModelInfo` (`id`, `kind`, `project`) | `CustomModelInfo` (`name`, `live`, `live_at`, ...) and, for a project's versions, `VersionInfo` |
 | `RunInfo.project`, `Run.project`, `DatasetInfo.project`, `Evaluation.project` | gone; `RunInfo.model` / `Run.model` is the custom model name a save uses |
-| `WhoAmI.managed_projects` | gone; `limits` has `max_projects_per_org` and `max_live_models_per_org` |
+| `WhoAmI.managed_projects` | gone; `limits` has `max_projects_per_org`, `max_live_models_per_org`, `max_custom_models_per_org` and `max_datasets_per_org` |
+| `ModelMetadata.kind` `project`, `base` or `model` | `project` or `custom`; `ModelMetadata.environment` is `production` or `preview` for a project's names |
 | `NoBaseModelError`, `WrongProjectKindError` | gone (they can't happen any more) |
 | `client.predict("tickets/v1", rows)` | `client.predict("router-2", rows)`: a custom model (live or not) or a base model id |
 | `SupervisedConfig(project="tickets", model_name="v1")` | `SupervisedConfig(model_name="router-2")`: the recipe saves a custom model, inactive; it scores the untuned base with one server-side prediction |
@@ -34,9 +35,10 @@ preview. `"<project>:preview"` without a preview raises `NoPreviewError`.
 
 - Continuous learning projects like deployments: `project.ref` (`"tickets"`) and `project.preview_ref`
   (`"tickets:preview"`, None while the project has no preview); `project.versions() -> list[VersionInfo]` (newest
-  first, `live`, `preview`, never both, `accuracy`, `loss`); `project.promote(version)` (promoting a version older
-  than the newest turns auto-promote off, like a rollback); `project.set_auto_promote(on)` (on: the newest version goes
-  live at once, and every new version after it; off by default); `project.download(version, path)`.
+  first, `production`, `preview`, never both, `accuracy`, `loss`); `project.promote(version)` (to production;
+  promoting a version older than the newest turns auto-promote off, like a rollback); `project.set_auto_promote(on)`
+  (on: the newest version goes to production at once, and every new version after it; off by default);
+  `project.download(version, path)` (`NotFoundError` for a version without stored weights).
 - `client.custom_models`: `list(live=None)` (live ones first), `get(name)`, `create(name, base_model, *, run_name=None,
   **run_options) -> Run`, `promote(name, replace=None)` (`replace` swaps out a live model when every slot is taken),
   `demote(name)`, `set_ttl(name, ttl_seconds)`, `download(name, path)`, `delete(name)`. New type `CustomModelInfo`.

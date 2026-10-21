@@ -62,7 +62,7 @@ async def test_async_and_text_only_bases(client: EndorClient, decider: str) -> N
     assert e.value.code == "unsupported_modality" and e.value.param == "state.photo"
     photos = client.projects.create(unique("photos"), base_model="gev-26b").name
     res = await client.system_one_async([Image.from_bytes(PNG)], {"u": URGENT}, model=photos)
-    assert res.model == f"{photos}:gev-26b"
+    assert res.model == photos
 
 
 def test_base_models_say_which_read_images(client: EndorClient) -> None:

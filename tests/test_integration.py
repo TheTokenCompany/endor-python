@@ -45,10 +45,10 @@ def test_whoami_and_catalog(live: endor.EndorClient, base_model: str) -> None:
 def test_decision(live: endor.EndorClient, base_model: str) -> None:
     project = live.projects.get_or_create(f"sdk-it-{uuid.uuid4().hex[:8]}", base_model=base_model)
     try:
-        assert project.info_.base_model == base_model and project.info_.live is None
+        assert project.info_.base_model == base_model and project.info_.production is None
         assert project.name in {p.name for p in live.projects.list()}
         res = live.system_one({"body": "I was charged twice"}, {"dept": DEPT, "urgent": URGENT}, model=project.ref)
-        assert res.model == f"{project.name}:{base_model}"
+        assert res.model == project.name
         assert abs(sum(res.choices["dept"].probabilities.values()) - 1) < 1e-3
         assert 0 <= res.nouls["urgent"].noul <= 1
         assert project.ref in {m.name for m in live.models.list().models} and project.preview_ref is None

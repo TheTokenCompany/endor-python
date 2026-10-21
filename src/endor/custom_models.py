@@ -90,7 +90,8 @@ class CustomModels:
     def download(
         self, name: str, path: str | os.PathLike[str], include_optimizer: bool = False
     ) -> builtins.list[DownloadedFile]:
-        """Write the model's files into the folder ``path`` (created if needed), live or not, to run the LoRA adapter
+        """Write the model's files into the folder ``path`` (created if needed; ``NotFoundError`` for a model without
+        stored weights), live or not, to run the LoRA adapter
         (PEFT) yourself on the same base model: ``adapter_model.safetensors``, ``adapter_config.json``,
         ``endor_manifest.json``, ``readout.safetensors`` if the model has one, and ``optimizer.pt`` (Adam state, only
         to resume training) with ``include_optimizer=True``. Each file is fetched straight from storage over a

@@ -39,6 +39,8 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 LIMITS: dict[str, float] = {
     "max_projects_per_org": 5,
     "max_live_models_per_org": 3,
+    "max_custom_models_per_org": 500,
+    "max_datasets_per_org": 100,
     "max_api_keys_per_org": 20,
     "max_active_runs": 4,
     "max_dataset_rows": 50_000,
@@ -306,7 +308,7 @@ class FakeEndor:
             "name": p["name"],
             "description": p["description"],
             "base_model": p["base_model"],
-            "live": p["live"],
+            "production": p["live"],
             "preview": self.preview(p),
             "auto_promote": p["auto_promote"],
             "promoted_at": p["promoted_at"],
@@ -318,7 +320,7 @@ class FakeEndor:
         return {
             **v,
             "base_model": p["base_model"],
-            "live": v["name"] == p["live"],
+            "production": v["name"] == p["live"],
             "preview": v["name"] == self.preview(p),
         }
 
@@ -587,12 +589,47 @@ class FakeEndor:
         return {"id": rep["id"], "message": "Thanks: the Endor team reads every report."}
 
     # ------------------------------------------------------------------ routing
+    BODY_FIELDS: dict[tuple[str, str], set[str]] = field(
+        default_factory=lambda: {
+            ("POST", "projects"): {"name", "description", "base_model"},
+            ("PATCH", "projects/*"): {"description", "auto_promote", "base_model"},
+            ("POST", "runs"): {
+                "base_model",
+                "from_model",
+                "model",
+                "include_optimizer",
+                "lora",
+                "name",
+                "tags",
+                "config",
+                "code_hash",
+                "user_metadata",
+                "total_steps",
+                "wandb",
+            },
+            ("POST", "evaluations"): {"model", "dataset", "rows", "training_run_id", "metrics"},
+            ("POST", "datasets"): {"name", "rows"},
+            ("POST", "custom_models/*/promote"): {"replace"},
+            ("PATCH", "custom_models/*"): {"ttl_seconds"},
+            ("POST", "runs/*/save_checkpoint"): {"name", "include_optimizer", "ttl_seconds", "user_metadata", "seq_id"},
+        }
+    )
+    """Request bodies the API checks strictly (an unknown field is 422 invalid_input naming it)."""
+
+    def check_body(self, method: str, p: list[str], body: Any) -> None:
+        shape = "/".join(x if i % 2 == 0 else "*" for i, x in enumerate(p))
+        allowed = self.BODY_FIELDS.get((method, shape))
+        if allowed is not None and isinstance(body, dict) and set(body) - allowed:
+            extra = sorted(set(body) - allowed)[0]
+            raise HTTPError(422, "invalid_input", f"{extra}: unknown field", extra)
+
     def route(self, method: str, path: str, body: Any, params: dict[str, str]) -> tuple[int, Any]:
         parts = [p for p in path.split("/") if p]
         if parts[:1] != ["v1"]:
             raise HTTPError(404, "not_found", "no such route")
         p = parts[1:]
         m = method
+        self.check_body(m, p, body)
         if p == ["systemone"] and m == "POST":
             return 200, self.systemone(body)
         if p == ["corrections"] and m == "POST":
@@ -705,7 +742,7 @@ class FakeEndor:
             proj = self.project(project)
             vs = self.versions.get(project, [])
             if sub == "learning" and len(p) == 3 and m == "GET":
-                serving = f"{project}:{proj['live'] or proj['base_model']}"
+                serving = f"{project}:{proj['live']}" if proj["live"] else project  # the base: plain "<project>"
                 return 200, {
                     "status": "waiting",
                     "progress": 0.0,
@@ -890,7 +927,7 @@ class FakeEndor:
             raise HTTPError(404, "unknown_model", f"{name} has no environment {env!r}.", "model")
         if model in self.projects:
             p = self.projects[model]
-            return p["base_model"], f"{model}:{p['live'] or p['base_model']}", model
+            return p["base_model"], f"{model}:{p['live']}" if p["live"] else model, model  # the base: "<project>"
         if model in BASE_MODELS:
             raise HTTPError(
                 422,
@@ -997,15 +1034,21 @@ class FakeEndor:
         """GET /v1/models: the names a decision can send (`<project>`, `<project>:preview`, live custom models)."""
         items: list[dict] = []
         for name, p in sorted(self.projects.items()):
-            refs = [(name, "project")] + ([(f"{name}:preview", "preview")] if self.preview(p) else [])
-            for ref, kind in refs:
+            refs = [(name, "production")] + ([(f"{name}:preview", "preview")] if self.preview(p) else [])
+            for ref, env in refs:
                 _, serves, _ = self.resolve_model(ref)
                 items.append(
                     {
                         "name": ref,
                         "description": f"{ref}: now {serves}.",
                         "release_date": "2026-10-01",
-                        "endor": {"kind": kind, "project": name, "base_model": p["base_model"], "model": serves},
+                        "endor": {
+                            "kind": "project",
+                            "project": name,
+                            "environment": env,
+                            "base_model": p["base_model"],
+                            "model": serves,
+                        },
                     }
                 )
         items += [

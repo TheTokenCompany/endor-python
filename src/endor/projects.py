@@ -2,16 +2,17 @@
 corrections, starting from the base model you choose when you create it.
 
     project = client.projects.get_or_create("tickets", base_model="decider-2b")
-    client.system_one(state, questions, model=project.ref)            # "tickets": the live version
-    client.system_one(state, questions, model=project.preview_ref)    # "tickets:preview": a new version, not live yet
-    project.versions()               # v1, v2, ... newest first, with which one is live and which is the preview
-    project.promote("v3")            # make v3 live (an older one: a rollback)
-    project.set_auto_promote(True)   # every new version goes live as soon as it is ready (off by default)
+    client.system_one(state, questions, model=project.ref)            # "tickets": the production version
+    client.system_one(state, questions, model=project.preview_ref)    # "tickets:preview": a new version
+    project.versions()               # v1, v2, ... newest first: which one is in production, which is the preview
+    project.promote("v3")            # put v3 in production (an older one: a rollback)
+    project.set_auto_promote(True)   # every new version goes to production as soon as it is ready (off by default)
 
-A project has one live version, which ``"<project>"`` answers with (its base model before the first version). New
-versions land in the preview, the newest version while it isn't live, which ``"<project>:preview"`` answers with,
-until you promote one; without a preview, that name raises ``NoPreviewError``. With auto-promote on, each new version
-goes live at once, so there is no preview. Custom models you train yourself are ``client.custom_models``.
+A project has one production version, which ``"<project>"`` answers with (its base model until you promote one). New
+versions land in the preview, the newest version while it isn't in production, which ``"<project>:preview"`` answers
+with, until you promote one; without a preview, that name raises ``NoPreviewError``. With auto-promote on, each new
+version goes to production at once, so there is no preview. Custom models you train yourself are
+``client.custom_models``.
 """
 
 from __future__ import annotations
@@ -92,18 +93,30 @@ class Project:
 
     @property
     def ref(self) -> str:
-        """``"<project>"``: the ``model`` that answers with the live version (the base model before the first)."""
+        """``"<project>"``: the ``model`` that answers with the production version (the base model until you promote
+        one)."""
         return self.name
 
     @property
     def preview_ref(self) -> str | None:
-        """``"<project>:preview"``: the ``model`` that answers with the preview, the newest version while it isn't
-        live. None while the project has no preview (as last fetched: ``info()`` refreshes it), when that name raises
-        ``NoPreviewError``."""
+        """``"<project>:preview"``: the ``model`` that answers with the preview, the newest version while it isn't in
+        production. None while the project has no preview (as last fetched: ``info()`` refreshes it), when that name
+        raises ``NoPreviewError``."""
         return f"{self.name}:{C.PREVIEW}" if self.info_.preview else None
 
+    @property
+    def production(self) -> str | None:
+        """The version in production (``"v4"``), which ``"<project>"`` answers with; None while its base model
+        answers. As last fetched (``info()`` refreshes it)."""
+        return self.info_.production
+
+    @property
+    def preview(self) -> str | None:
+        """The preview version, the newest while it isn't in production; None without one. As last fetched."""
+        return self.info_.preview
+
     def info(self) -> ProjectInfo:
-        """Fetch the project again: its live and preview versions, auto-promote and description."""
+        """Fetch the project again: its production and preview versions, auto-promote and description."""
         self.info_ = ProjectInfo.model_validate(
             self._t.request("GET", f"/v1/projects/{self.name}", method_name="project.info")
         )
@@ -118,16 +131,16 @@ class Project:
         )
 
     def versions(self) -> builtins.list[VersionInfo]:
-        """Every version, newest first, with which one is live, which one is the preview (the newest, while it isn't
-        live) and how each did when it was trained."""
+        """Every version, newest first, with which one is in production, which one is the preview (the newest, while
+        it isn't in production) and how each did when it was trained."""
         items = list_all(self._t, f"/v1/projects/{self.name}/versions", {}, "project.versions")
         return [VersionInfo.model_validate(v) for v in items]
 
     def promote(self, version: str) -> ProjectInfo:
-        """Make ``version`` (``"v3"``) live: ``"<project>"`` answers with it from now on. Promoting a version older
-        than the newest is a rollback: it turns auto-promote off, so the newest becomes the preview and new versions
-        only reach ``"<project>:preview"`` until you promote again or call ``set_auto_promote(True)``. Promoting the
-        live version changes nothing. ``NotFoundError`` for a version the project doesn't have."""
+        """Put ``version`` (``"v3"``) in production: ``"<project>"`` answers with it from now on. Promoting a version
+        older than the newest is a rollback: it turns auto-promote off, so the newest becomes the preview and new
+        versions only reach ``"<project>:preview"`` until you promote again or call ``set_auto_promote(True)``.
+        Promoting the production version changes nothing. ``NotFoundError`` for a version the project doesn't have."""
         self.info_ = ProjectInfo.model_validate(
             self._t.request(
                 "POST", f"/v1/projects/{self.name}/versions/{version}/promote", method_name="project.promote"
@@ -136,8 +149,9 @@ class Project:
         return self.info_
 
     def set_auto_promote(self, on: bool) -> ProjectInfo:
-        """Turn auto-promote on (the newest version goes live at once, and every new version after it, so there is no
-        preview) or off (the live version stays until you promote one; newer versions are the preview)."""
+        """Turn auto-promote on (the newest version goes to production at once, and every new version after it, so
+        there is no preview) or off, the default (the production version stays until you promote one; newer versions
+        are the preview)."""
         self.info_ = ProjectInfo.model_validate(
             self._t.request(
                 "PATCH",
@@ -163,7 +177,8 @@ class Project:
     def download(
         self, version: str, path: str | os.PathLike[str], include_optimizer: bool = False
     ) -> builtins.list[DownloadedFile]:
-        """Write a version's files into the folder ``path`` (created if needed), to run the LoRA adapter (PEFT)
+        """Write a version's files into the folder ``path`` (created if needed; ``NotFoundError`` for a version without
+        stored weights), to run the LoRA adapter (PEFT)
         yourself on the project's base model: ``adapter_model.safetensors``, ``adapter_config.json``,
         ``endor_manifest.json``, ``readout.safetensors`` if it has one, and ``optimizer.pt`` with
         ``include_optimizer=True``. Each file is fetched straight from storage over a short-lived link and checked

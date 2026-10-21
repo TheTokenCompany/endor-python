@@ -2,16 +2,16 @@
 
     client = endor.EndorClient()                               # ENDOR_API_KEY from the environment
     project = client.projects.get_or_create("tickets", base_model="decider-2b")    # learns from its decisions
-    res = client.system_one(state, questions, model="tickets")  # the project's live version
+    res = client.system_one(state, questions, model="tickets")  # the project's production version
     client.corrections.create(res, {"urgent": {"correct": False}})   # a decision was wrong: the project learns
     client.models.list()                                       # every name you can pass as model
     client.base_models()                                       # the base models, with limits and prices
     client.custom_models.list()                                # advanced: models you train with the SDK
     client.user_report("what you did, what happened, what you expected", kind="bug")      # tell the Endor team
 
-``model`` is ``"<project>"`` (a continuous learning project's live version), ``"<project>:preview"`` (its newest
-version, while that isn't live) or a live custom model's name (``"router-2"``). A bare base model id is refused
-(``ModelRequiresProjectError``).
+``model`` is ``"<project>"`` (a continuous learning project's production version), ``"<project>:preview"`` (its
+newest version, while that isn't in production) or a live custom model's name (``"router-2"``). A bare base model id
+is refused (``ModelRequiresProjectError``).
 
 Environment: ``ENDOR_API_KEY``, ``ENDOR_BASE_URL``, ``ENDOR_DEFAULT_MODEL``, ``ENDOR_LOG_LEVEL``,
 ``ENDOR_REPORT_LATENCY``.
@@ -216,8 +216,9 @@ class EndorClient:
             state: Text, a JSON object or an array: the data the decisions are about. On a base that reads images,
                 it may hold ``endor.Image`` objects (as the state, a list item or an object value).
             questions: 1 to 64 named questions (``Noul``, ``Choice``, ``Score`` or dicts in the same shape).
-            model: ``"<project>"`` (a continuous learning project's live version, its base model before the first),
-                ``"<project>:preview"`` (its newest version, while that isn't live) or a live custom model's name.
+            model: ``"<project>"`` (a continuous learning project's production version, its base model until one is
+                promoted), ``"<project>:preview"`` (its newest version, while that isn't in production) or a live
+                custom model's name.
                 Defaults to the client's model.
             retry, timeout: Overrides for this call.
             extra_headers: Extra request headers.
@@ -475,9 +476,10 @@ class Models:
         timeout: float | None = None,
         extra_headers: Mapping[str, str] | None = None,
     ) -> ListModelsResponse:
-        """Every name you can pass as ``model``: for each continuous learning project ``"<project>"`` (its live
-        version) and, while it has one, ``"<project>:preview"``, then every live custom model's name. ``.kind`` says
-        which (``project``, ``preview`` or ``custom``). The base model catalog is ``client.base_models()``."""
+        """Every name you can pass as ``model``: for each continuous learning project ``"<project>"`` (its production
+        version) and, while it has one, ``"<project>:preview"``, then every live custom model's name. ``.kind`` is
+        ``project`` or ``custom``, and ``.environment`` ``production`` or ``preview`` for a project's names. The base
+        model catalog is ``client.base_models()``."""
         raw = self._t.request(
             "GET",
             "/v1/models",

@@ -297,8 +297,8 @@ class SystemOneResponse(BaseModel):
     """The decision's id (``req_...``, the same as its ``X-Request-Id``): correct the decision with
     ``client.corrections.create(res, ...)``. None from a server that doesn't send one."""
     model: str
-    """What answered: a project's version (``"tickets:v4"``, or ``"tickets:<base model>"`` before its first version)
-    or a custom model (``"router-2"``)."""
+    """What answered: a project's version (``"tickets:v4"``, or ``"tickets"`` while its base model answers) or a
+    custom model (``"router-2"``)."""
     answers: dict[str, Answer] = Field(default_factory=dict)
     """Every answer, by question name."""
     usage: Usage = Field(default_factory=Usage)
@@ -374,17 +374,23 @@ class ModelMetadata(BaseModel):
     description: str = ""
     release_date: str | None = None
     endor: dict[str, Any] = Field(default_factory=dict)
-    """Endor's metadata: ``kind`` and ``base_model``, and for a project's names the ``project`` and the ``model`` the
-    name answers with now (``"tickets:v4"``)."""
+    """Endor's metadata: ``kind`` and ``base_model``, and for a project's names the ``project``, the ``environment``
+    and the ``model`` the name answers with now (``"tickets:v4"``, or ``"tickets"`` while its base model answers)."""
 
     @property
     def kind(self) -> str:
-        """What the name calls, as Endor reports it: a continuous learning project's live version (``"project"``,
-        ``"tickets"``), its preview (``"preview"``, ``"tickets:preview"``, listed only while it has one) or a live
-        custom model (``"custom"``)."""
+        """What the name calls, as Endor reports it: a continuous learning project (``"project"``) or a live custom
+        model (``"custom"``)."""
         if self.endor.get("kind"):
             return str(self.endor["kind"])
-        return "preview" if ":" in self.name else "project"
+        return "project"
+
+    @property
+    def environment(self) -> str | None:
+        """For a project's names: ``"production"`` (``"tickets"``, its production version) or ``"preview"``
+        (``"tickets:preview"``, listed only while it has one). None for a custom model."""
+        env = self.endor.get("environment")
+        return str(env) if env else None
 
 
 class ListModelsResponse(BaseModel):
@@ -561,17 +567,17 @@ class ProjectInfo(_View):
     description: str | None = None
     base_model: str
     """The base model the project learns on, chosen when it was created. It never changes."""
-    live: str | None = None
-    """The version ``"<project>"`` answers with (``"v4"``); None before the first version, when it answers with the
-    base model."""
+    production: str | None = None
+    """The version in production, which ``"<project>"`` answers with (``"v4"``); None until you promote one, while the
+    base model answers."""
     preview: str | None = None
-    """The newest version while it isn't live, which ``"<project>:preview"`` answers with. None when the newest version
-    is live (always, while auto-promote is on) and before the first version."""
+    """The newest version while it isn't in production, which ``"<project>:preview"`` answers with. None when the
+    newest version is in production (always, while auto-promote is on) and before the first version."""
     auto_promote: bool = False
     """Off by default: new versions land in the preview until you promote one. On (``project.set_auto_promote(True)``):
-    each new version goes live as soon as it is ready. Promoting an older version turns it off (a rollback)."""
+    each new version goes to production as soon as it is ready. Promoting an older version turns it off (a rollback)."""
     promoted_at: datetime | None = None
-    """When the live version last changed."""
+    """When the production version last changed."""
     versions: int = 0
     """How many versions the project has."""
     created_at: datetime
@@ -583,11 +589,10 @@ class VersionInfo(_View):
     name: str
     """``"v1"``, ``"v2"``, ..."""
     base_model: str
-    live: bool = False
-    """``"<project>"`` answers with it."""
+    production: bool = False
+    """It is in production: ``"<project>"`` answers with it."""
     preview: bool = False
-    """It is the newest version and isn't live, so ``"<project>:preview"`` answers with it. Never both live and
-    preview."""
+    """It is the newest version and isn't in production, so ``"<project>:preview"`` answers with it. Never both."""
     accuracy: float | None = None
     """Its accuracy in percent when it was trained (None: nothing to check on)."""
     loss: float | None = None
@@ -601,8 +606,8 @@ class Training(_View):
 
     at: datetime
     kept: bool
-    """Saved as ``version`` (live at once while auto-promote is on, else the project's preview), or discarded (not
-    better than the version it was compared with)."""
+    """Saved as ``version`` (in production at once while auto-promote is on, else the project's preview), or discarded
+    (not better than the version it was compared with)."""
     version: str | None = None
     decisions: int | None = None
     """The project's decision count when the run started (None from a server that doesn't send it)."""
@@ -643,8 +648,8 @@ class Learning(_View):
     progress: float = 0.0
     """The way to the next training run, 0 to 1."""
     serving: str
-    """What ``"<project>"`` answers with now: ``"<project>:<version>"``, or ``"<project>:<base model>"`` before the
-    first version."""
+    """What ``"<project>"`` answers with now: ``"<project>:<version>"``, or ``"<project>"`` while its base model
+    answers."""
     trained_at: datetime | None = None
     trainings: list[Training] = Field(default_factory=list)
     """The latest 50 training runs, newest first."""
@@ -825,9 +830,9 @@ class WhoAmI(_View):
     key_id: str | None = None
     limits: dict[str, int | float] = Field(default_factory=dict)
     """The org's limits by name, for example ``max_projects_per_org``, ``max_live_models_per_org`` (live custom
-    models) or ``max_active_runs``. A count limit raises ``LimitReachedError`` once reached (``LiveModelsFullError``
-    for the live custom models); a rate raises ``RateLimitError``: ``decisions_per_minute`` (60 by default, for the
-    whole org) and the other ``..._per_minute``."""
+    models), ``max_custom_models_per_org``, ``max_datasets_per_org`` or ``max_active_runs``. A count limit raises
+    ``LimitReachedError`` once reached (``LiveModelsFullError`` for the live custom models); a rate raises
+    ``RateLimitError``: ``decisions_per_minute`` (60 by default, for the whole org) and the other ``..._per_minute``."""
     image_training: bool = False
     """Whether the org may fine-tune with images (``endor.Image`` in rows and datums, ``client.images``). Limited
     access: without it those calls raise ``PermissionDeniedError`` (403 ``image_training_not_enabled``); ask us."""

@@ -175,13 +175,15 @@ class NotFoundError(APIError):
 
 class NoPreviewError(NotFoundError):
     """404 ``no_preview``: ``"<project>:preview"`` was called, but the project has no preview. A project has one only
-    while its newest version isn't live, so never while auto-promote is on (each new version goes live): call
+    while its newest version isn't in production, so never while auto-promote is on (each new version goes to
+    production at once): call
     ``"<project>"``."""
 
 
 class VersionNotCallableError(NotFoundError):
     """404 ``version_not_callable``: ``"<project>:v3"`` names an older version of a continuous learning project. Only
-    ``"<project>"`` (the live version) and ``"<project>:preview"`` (a newer one) can be called; promote the version
+    ``"<project>"`` (the production version) and ``"<project>:preview"`` (a newer one) can be called; promote the
+    version
     (``project.promote("v3")``) to call it as ``"<project>"``."""
 
 
@@ -191,7 +193,8 @@ class ConflictError(APIError):
 
 
 class LimitReachedError(ConflictError):
-    """409 ``limit_reached``: a count limit of the org is reached, for example 5 projects or 25 open runs. The
+    """409 ``limit_reached``: a count limit of the org is reached, for example its projects, custom models, datasets or
+    open runs. The
     message names the limit and its value (``client.whoami().limits`` has them all). Free one first: waiting doesn't
     help, so it is never retried."""
 
