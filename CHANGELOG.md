@@ -5,9 +5,7 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- A response with a `Deprecation` header (RFC 9745) raises a `DeprecationWarning` with the API's `Endor-Warning`
-  text, for example `model "tickets/v2" is now "tickets-v2"; the old name stops working on 2026-11-30`, once per
-  message per process, pointing at your line.
+## [0.9.0] - 2026-10-22
 
 0.9.0: projects are continuous learning projects, with a production version and a preview like deployments, and custom
 models live outside projects. This release breaks code written for 0.8.0; the table says what to change.
@@ -40,6 +38,9 @@ and there is no preview. While its base model answers, a project's decisions rep
 
 ### Added
 
+- A response with a `Deprecation` header (RFC 9745) raises a `DeprecationWarning` with the API's `Endor-Warning`
+  text, for example `model "tickets/v2" is now "tickets-v2"; the old name stops working on 2026-11-30`, once per
+  message per process, pointing at your line.
 - Base models are called directly by their `owner/model` id, by any organization, at their listed price
   (`price_per_mtok_decide`): `client.system_one(state, questions, model="mapika/decider-2b")`.
   `SupervisedConfig.base_model` defaults to `"mapika/decider-2b"`, and `projects.get_or_create` takes an existing
