@@ -7,6 +7,9 @@ POSTs, an ``Idempotency-Key`` so a retried create never makes a duplicate.
 The transport remembers its latest request id and its latest failure (``LastCall``: ids, status, code and endpoint,
 never a body or a key), and so does the process (``LAST``), so a report (``_user_report.py``) can say what it is about.
 
+A response with a ``Deprecation`` header (RFC 9745) raises a ``DeprecationWarning`` with the API's
+``Endor-Warning`` text, once per distinct message per process (``_warn_if_deprecated``).
+
 It also times each request end to end, from sending it to reading the response, and sends that time with its next
 request, once: ``X-Endor-Client-Latency: <request id>=<ms>``, so the dashboard can show the latency the caller sees
 next to the API's own. Only the latest is kept; nothing waits for it. ``report_latency=False`` (or
@@ -20,9 +23,12 @@ import gzip
 import logging
 import os
 import re
+import sys
 import threading
 import time
+import types
 import uuid
+import warnings
 import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -35,9 +41,12 @@ from . import errors as E
 from ._constants import (
     HEADER_CLIENT_LATENCY,
     HEADER_CLIENT_REQUEST_ID,
+    HEADER_DEPRECATION,
+    HEADER_ENDOR_WARNING,
     HEADER_IDEMPOTENCY_KEY,
     HEADER_REQUEST_ID,
     HEADER_RETRY_COUNT,
+    HEADER_SUNSET,
     NON_RETRYABLE_CODES,
     REPORT_LATENCY_ENV,
 )
@@ -47,6 +56,9 @@ from ._retry import RetryPolicy
 
 GZIP_THRESHOLD = 32 * 1024  # bytes; smaller bodies are not worth compressing
 _REQUEST_ID = re.compile(r"req_[0-9A-Za-z]{1,36}")  # the API's request ids; anything else is never echoed back
+_PACKAGE = os.path.dirname(os.path.abspath(__file__)) + os.sep  # frames in here are the SDK's own
+_warned: set[str] = set()  # deprecation messages already warned about in this process
+_warned_lock = threading.Lock()
 
 
 @dataclass
@@ -314,6 +326,7 @@ class Transport:
             else:
                 self._time(r, t0)
                 self._log(method, path, r, t0, None)
+                _warn_if_deprecated(r, endpoint)
                 if remember:
                     self._remember(r, None, endpoint, method_name)
                 if r.is_success:
@@ -383,6 +396,7 @@ class Transport:
             else:
                 self._time(r, t0)
                 self._log(method, path, r, t0, None)
+                _warn_if_deprecated(r, endpoint)
                 if remember:
                     self._remember(r, None, endpoint, method_name)
                 if r.is_success:
@@ -397,6 +411,28 @@ class Transport:
                 await asyncio.sleep(delay)
             attempt += 1
             logger.info("%s %s retry %d", method, path, attempt)
+
+
+def _warn_if_deprecated(r: httpx.Response, endpoint: str) -> None:
+    """A response with a ``Deprecation`` header: a ``DeprecationWarning`` saying what the API says in ``Endor-Warning``
+    (without one, that the endpoint is deprecated, with its ``Sunset``), once per distinct message per process. It is
+    attributed to the first caller outside the SDK, so it names your line, and Python's default filters show it when
+    that is a script (``__main__``)."""
+    if HEADER_DEPRECATION not in r.headers:
+        return
+    sunset = r.headers.get(HEADER_SUNSET)
+    msg = r.headers.get(HEADER_ENDOR_WARNING) or f"{endpoint} is deprecated" + (
+        f" (sunset: {sunset})" if sunset else ""
+    )
+    with _warned_lock:
+        if msg in _warned:
+            return
+        _warned.add(msg)
+    frame: types.FrameType | None = sys._getframe()  # this function's frame, stacklevel 1
+    level = 1
+    while frame is not None and frame.f_code.co_filename.startswith(_PACKAGE):
+        frame, level = frame.f_back, level + 1
+    warnings.warn(msg, DeprecationWarning, stacklevel=level)
 
 
 def _error_code(r: httpx.Response) -> str | None:

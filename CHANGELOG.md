@@ -5,6 +5,10 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- A response with a `Deprecation` header (RFC 9745) raises a `DeprecationWarning` with the API's `Endor-Warning`
+  text, for example `model "tickets/v2" is now "tickets-v2"; the old name stops working on 2026-11-30`, once per
+  message per process, pointing at your line.
+
 0.9.0: projects are continuous learning projects, with a production version and a preview like deployments, and custom
 models live outside projects. This release breaks code written for 0.8.0; the table says what to change.
 

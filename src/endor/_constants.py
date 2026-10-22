@@ -33,6 +33,9 @@ HEADER_IDEMPOTENCY_KEY = "Idempotency-Key"
 HEADER_REQUEST_ID = "x-request-id"
 HEADER_RETRY_AFTER = "retry-after"
 HEADER_RETRY_AFTER_MS = "retry-after-ms"
+HEADER_DEPRECATION = "deprecation"  # RFC 9745: what answered is deprecated (a DeprecationWarning, _http.py)
+HEADER_SUNSET = "sunset"  # RFC 8594: when it stops working
+HEADER_ENDOR_WARNING = "endor-warning"  # what to do instead, in words
 
 # Server limits the SDK enforces or works around.
 MAX_DATUMS_PER_CALL = 1024
