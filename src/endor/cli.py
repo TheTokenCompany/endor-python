@@ -34,6 +34,7 @@ from .errors import APIError, EndorError, report_hint
 
 if TYPE_CHECKING:
     from .client import EndorClient
+    from .types import BaseModelInfo
 
 __all__ = ["main", "build_parser"]
 
@@ -83,6 +84,35 @@ def _accuracy(results: dict[str, Any] | None) -> None:
     for name, m in rows:
         acc = m.get("accuracy")
         print(f"{name:<{width}}  {m.get('n', 0):>6}  {'-' if acc is None else f'{acc:.1%}':>8}")
+
+
+def _base_models(bases: list[BaseModelInfo]) -> None:
+    """Table mode: one line per base model with its Decision Index rank (``=`` marks a tie), measured speed, context,
+    price per 1M input tokens and what it is meant for. ``-f json`` has every field."""
+    if not bases:
+        print("No base models")
+        return
+    rows = [("id", "index rank", "tokens/s", "context", "$/1M tokens", "meant for"), *map(_base_model_row, bases)]
+    widths = [max(len(r[i]) for r in rows) for i in range(5)]
+    for r in rows:
+        cells = [r[0].ljust(widths[0]), *(r[i].rjust(widths[i]) for i in range(1, 5)), r[5]]
+        print("  ".join(cells).rstrip())
+
+
+def _base_model_row(b: BaseModelInfo) -> tuple[str, str, str, str, str, str]:
+    i = b.decision_index
+    if i is not None and i.rank is not None:
+        rank = ("=" if i.tied else "") + str(i.rank) + (f"/{i.entrants}" if i.entrants else "")
+    else:
+        rank = "-" if b.leaderboard_rank is None else str(b.leaderboard_rank)
+    return (
+        b.id,
+        rank,
+        "-" if b.tokens_per_s is None else f"{b.tokens_per_s:,}",
+        "-" if b.max_question_tokens is None else f"{b.max_question_tokens:,}",
+        "-" if b.price_per_mtok_decide is None else f"${b.price_per_mtok_decide:g}",
+        ", ".join(i.meant_for) if i is not None and i.meant_for else "-",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -178,7 +208,11 @@ def _run(a: argparse.Namespace, client: EndorClient) -> None:
         if f == "table":
             _block("limits", me["limits"])
     elif a.cmd == "base-models":
-        _out(client.base_models(), f)
+        bases = client.base_models()
+        if f == "json":
+            _out(bases, f)
+        else:
+            _base_models(bases)
     elif a.cmd == "projects":
         if a.action == "list":
             _out(client.projects.list(), f, "No projects")

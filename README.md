@@ -192,6 +192,24 @@ project `"<project>"` and, while it has a preview, `"<project>:preview"`, then e
 `modalities`, `hf_repo`, `contract` and prices (`price_per_mtok_decide` for custom models,
 `price_per_mtok_decide_continuous_learning` for projects, `price_per_gpu_hour` for training).
 
+To choose a base model, compare what each is meant for, its ranks, speed, context and price:
+
+```python
+for b in client.base_models():
+    i = b.decision_index                  # its entry on the Jev Decision Index, None if it isn't there
+    print(b.id, i and i.meant_for,        # ["Code", "Agents", ...], best first; empty when none
+          i and f"{i.rank}/{i.entrants}", # its rank on the board
+          b.tokens_per_s,                 # decision input tokens per second Endor measured, None if not measured
+          b.max_question_tokens, b.price_per_mtok_decide)
+```
+
+`decision_index` also has `tied` (within the board's tie band of another entry), `use_case_ranks` (its mean rank on
+each use case's benchmarks), `task_ranks` (its rank on each public benchmark, by what it tests, for example
+`"phishing detection"`), `note` (where the index ran another form of the weights than Endor serves) and `url` (its
+scores on the index). `meant_for` holds `"Code"`, `"Agents"`, `"Documents and email"` and `"Finance"` where its mean
+rank on that use case is in the board's top quarter, and `"Real-time"` where Endor serves it fast and it still ranks
+well. `endor base-models` prints the same as a table.
+
 **Many rows at once.** `client.predict(model, rows)` returns the answers to every question of every row, in the rows'
 order, from one server-side evaluation of them: nothing to upload, nothing scored, billed as the same decisions.
 `model` is a custom model's name (in production or archived) or a base model id. Rows are `{"state", "questions"}` (any shape
@@ -560,7 +578,9 @@ endor user-report "what you did, what happened, what you expected" [--kind bug|c
 ```
 
 Projects are continuous learning projects; custom models are the ones you train with the SDK. `MODEL` in `eval` is a
-custom model's name or a base model id; `eval` prints the accuracy overall and per question. `endor whoami` also
+custom model's name or a base model id; `eval` prints the accuracy overall and per question. `endor base-models` prints
+one line per base model: its Decision Index rank (`=` marks a tie), `tokens/s`, context (`max_question_tokens`), price
+per 1M input tokens of a custom model on it, and what it is meant for. `endor whoami` also
 shows the org's balance (`balance_usd`), whether it has continuous learning (`continuous_learning`) and its limits. Every command takes `-f json` and needs `ENDOR_API_KEY`, `endor user-report` too. Training itself happens in Python. `endor runs close`
 frees a slot when a script left a run open. `usage --csv` columns are `hour, kind, project, base_model, model,
 training_run_id, input_tokens, gpu_seconds, continuous_learning, price_per_mtok, base_cost_usd,
@@ -587,7 +607,7 @@ decisions; a custom model's decisions have no project.
 | `endor.metrics` | `decision_metrics(probs, targets, bins=10)` → `{n, accuracy, nll, brier, ece, mean_confidence, selective}` |
 | `endor.recipes.supervised` | `SupervisedConfig`, `SupervisedResult`, `train(cfg, rows, eval_rows=None, client=None)`, `evaluate_run(run, datums)`, `evaluate_model(client, model, rows)`, `lr_at(cfg, step, total)` |
 | `endor.recipes.distill` | `Teacher` (protocol), `DistillConfig(supervised, teacher, budget, seed)`, `label_with_teacher(rows, cfg)`, `distill(cfg, unlabeled_rows, eval_rows, client=None)` |
-| Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `CorrectionInfo`, `QuestionCorrectionInfo`, `QuestionCorrection`, `CorrectionAnswer`; `ProjectInfo`, `VersionInfo`, `Learning`, `Training`, `Drift`, `CustomModelInfo`, `RunInfo`, `LoraInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `DownloadedFile`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
+| Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`, `DecisionIndexInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `CorrectionInfo`, `QuestionCorrectionInfo`, `QuestionCorrection`, `CorrectionAnswer`; `ProjectInfo`, `VersionInfo`, `Learning`, `Training`, `Drift`, `CustomModelInfo`, `RunInfo`, `LoraInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `DownloadedFile`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
 | Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError` (`NoPreviewError`, `VersionNotCallableError`), `ConflictError` (`LimitReachedError` > `ProductionFullError`, `ModelNotInProductionError`, `ModelInProductionError`), `PayloadTooLargeError`, `UnprocessableEntityError` (`ModelRequiresProjectError`), `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
 
 Every public member has a docstring with the details.

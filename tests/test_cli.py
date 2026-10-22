@@ -32,6 +32,10 @@ def test_whoami_and_base_models(capsys: pytest.CaptureFixture[str], client: Endo
     assert len(lines) == 2 + len(me["limits"])  # every limit, one per line
     bases = run_json(capsys, client, "base-models")
     assert isinstance(bases, list) and {b["id"] for b in bases} >= {"jev-9b"}
+    assert all("decision_index" in b and "tokens_per_s" in b and "trainer_gpu" not in b for b in bases)
+    table = run(capsys, client, "base-models").splitlines()
+    assert table[0].split() == ["id", "index", "rank", "tokens/s", "context", "$/1M", "tokens", "meant", "for"]
+    assert [line.split()[0] for line in table[1:]] == [b["id"] for b in bases]  # one line per base, in order
 
 
 def test_projects(capsys: pytest.CaptureFixture[str], client: EndorClient, fake: FakeEndor) -> None:
