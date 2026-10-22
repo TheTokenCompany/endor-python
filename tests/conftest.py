@@ -83,13 +83,13 @@ def client(fake: FakeEndor) -> Iterator[endor.EndorClient]:
         yield c
 
 
-BASE = "jev-9b"
+BASE = "autotrust/jev-9b"
 """The base model the tests train custom models on."""
 
 
 @pytest.fixture
 def project(client: endor.EndorClient) -> endor.Project:
-    """A new continuous learning project on jev-9b."""
+    """A new continuous learning project on autotrust/jev-9b."""
     return client.projects.create(unique("tickets"), base_model=BASE)
 
 

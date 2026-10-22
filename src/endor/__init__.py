@@ -4,16 +4,17 @@ import endor
 from endor import Choice, Noul
 
 client = endor.EndorClient()                                        # ENDOR_API_KEY
-project = client.projects.get_or_create("tickets", base_model="decider-2b")    # continuous learning
+project = client.projects.get_or_create("tickets", base_model="mapika/decider-2b")   # continuous learning
 res = client.system_one({"body": "charged twice"},
                         {"dept": Choice(criteria={"billing": None, "technical": None}),
                          "urgent": Noul(instructions="Does this need an answer today?")},
                         model="tickets")                            # the project's production version
 res.choices["dept"].choice, res.nouls["urgent"].noul
 client.corrections.create(res, {"urgent": {"correct": False}})     # it was wrong: the project learns from it
+client.system_one(state, questions, model="mapika/decider-2b")      # a base model, called directly by owner/model
 
 # Advanced: a custom model you train yourself, called by its name once promoted
-with client.custom_models.create("router-2", base_model="decider-2b", rank=16) as run:
+with client.custom_models.create("router-2", base_model="mapika/decider-2b", rank=16) as run:
     steps = endor.Steps()                                           # the next step is sent before the last is read
     for batch in endor.data.batches(endor.data.rows_to_datums(rows), 16):
         steps.add(run.forward_backward(batch), run.optim_step(learning_rate=1e-4))
@@ -45,7 +46,6 @@ from .errors import (
     LimitReachedError,
     ModelInProductionError,
     ModelNotInProductionError,
-    ModelRequiresProjectError,
     NoPreviewError,
     NotFoundError,
     OperationFailedError,
@@ -190,7 +190,6 @@ __all__ = [
     "DownloadError",
     "PayloadTooLargeError",
     "UnprocessableEntityError",
-    "ModelRequiresProjectError",
     "RateLimitError",
     "OverloadedError",
     "InternalServerError",

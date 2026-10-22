@@ -11,7 +11,6 @@ from endor import (
     ChoiceAnswer,
     EndorClient,
     EndorError,
-    ModelRequiresProjectError,
     NotFoundError,
     NoulAnswer,
     ScoreAnswer,
@@ -186,11 +185,15 @@ class TestDecisions:
             await client.system_one_async("x", {"d": DEPT})
         assert not fake.requests
 
-    def test_bare_base_model_id_needs_a_project(self, client: EndorClient) -> None:
-        with pytest.raises(ModelRequiresProjectError) as e:
+    def test_a_base_model_is_called_directly(self, client: EndorClient, fake: FakeEndor) -> None:
+        res = client.system_one("x", {"d": DEPT}, model="mapika/decider-2b")  # no project needed
+        assert res.model == "mapika/decider-2b" and fake.requests[-1].body["model"] == "mapika/decider-2b"
+
+    def test_a_bare_base_model_id_is_404_naming_its_id(self, client: EndorClient) -> None:
+        with pytest.raises(NotFoundError) as e:
             client.system_one("x", {"d": DEPT}, model="decider-2b")
-        assert isinstance(e.value, UnprocessableEntityError)
-        assert e.value.status == 422 and e.value.code == "model_requires_project" and e.value.param == "model"
+        assert e.value.status == 404 and e.value.code == "unknown_model" and e.value.param == "model"
+        assert "mapika/decider-2b" in e.value.message
 
     def test_unknown_model_is_404(self, client: EndorClient) -> None:
         with pytest.raises(NotFoundError) as e:
@@ -198,7 +201,7 @@ class TestDecisions:
         assert e.value.code == "unknown_model"
 
     def test_too_many_options_names_the_question(self, client: EndorClient, decider: str) -> None:
-        wide = endor.Choice(criteria={f"o{i}": None for i in range(20)})  # the base, jev-9b, reads 16
+        wide = endor.Choice(criteria={f"o{i}": None for i in range(20)})  # the base, autotrust/jev-9b, reads 16
         with pytest.raises(UnprocessableEntityError) as e:
             client.system_one("x", {"wide": wide}, model=decider)
         assert e.value.code == "invalid_options" and "questions.wide" in str(e.value)
@@ -222,36 +225,42 @@ class TestDecisions:
 
 class TestCatalogAndAccount:
     def test_models_list_keeps_endor_metadata(self, client: EndorClient, decider: str) -> None:
-        with client.custom_models.create("v1", base_model="jev-9b") as run:
+        with client.custom_models.create("v1", base_model="autotrust/jev-9b") as run:
             run.save_checkpoint().result()
         client.custom_models.promote("v1")
         listed = client.models.list()
         by_name = {m.name: m for m in listed.models}
-        assert "jev-9b" not in by_name  # a bare base model id is not a name a decision can send
+        assert "autotrust/jev-9b" not in by_name  # base models are client.base_models(), not listed here
         assert by_name[decider].kind == "project" and by_name[decider].endor["model"] == decider
         assert by_name[decider].environment == "production" and by_name["v1"].environment is None
         assert f"{decider}:preview" not in by_name  # no version yet, so no preview
         saved = by_name["v1"]
-        assert saved.kind == "custom" and saved.endor["base_model"] == "jev-9b" and saved.release_date
+        assert saved.kind == "custom" and saved.endor["base_model"] == "autotrust/jev-9b" and saved.release_date
 
     def test_base_models(self, client: EndorClient) -> None:
-        with client.runs.create("jev-9b") as run:
+        with client.runs.create("autotrust/jev-9b") as run:
             run.save_checkpoint("v1").result()
         bases = client.base_models()
-        assert {b.id for b in bases} == {"pplx-decider-v1.1-27b", "gev-26b", "jev-9b", "decider-2b", "gliner2.5-decide"}
-        assert next(b for b in bases if b.id == "jev-9b").max_options == 16
+        assert {b.id for b in bases} == {
+            "perplexity-ai/pplx-decider-v1.1-27b",
+            "autotrust/gev-26b",
+            "autotrust/jev-9b",
+            "mapika/decider-2b",
+            "fastino/gliner2.5-decide",
+        }
+        assert next(b for b in bases if b.id == "autotrust/jev-9b").max_options == 16
         assert all(hasattr(b, "price_per_gpu_hour") and hasattr(b, "price_per_mtok_decide") for b in bases)
 
     def test_base_model_prices(self, client: EndorClient, fake: FakeEndor) -> None:
-        jevk = next(b for b in client.base_models() if b.id == "jev-9b")
+        jevk = next(b for b in client.base_models() if b.id == "autotrust/jev-9b")
         assert jevk.price_per_gpu_hour == 3.0 and jevk.price_per_mtok_decide == 0.5
         assert jevk.price_per_mtok_decide_continuous_learning == 0.75
-        assert jevk.hf_repo == "org/jev-9b" and jevk.hf_revision and jevk.contract and jevk.params
+        assert jevk.hf_repo == "autotrust/jev-9b" and jevk.hf_revision and jevk.contract and jevk.params
 
     def test_base_models_from_an_older_api(self, client: EndorClient, fake: FakeEndor) -> None:
         """An API without /v1/base_models listed the catalog in /v1/models."""
         old = {
-            "name": "jev-9b",
+            "name": "jev-9b",  # bare: such an API is older than owner/model ids
             "description": "",
             "release_date": "2026-10-01",
             "endor": {"kind": "base", "id": "jev-9b", "max_options": 16, "price_per_mtok_decide": 0.1},

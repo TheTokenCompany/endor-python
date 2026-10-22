@@ -64,7 +64,7 @@ def evaluation_body(model: str, dataset: str | None, rows: Iterable[Any] | None,
 def prediction(model: str, rows: Iterable[Any]) -> tuple[dict[str, Any], int]:
     """(body, number of rows) of a prediction: its rows without labels, for a custom model or a base model."""
     if not model:
-        raise ValueError("model is a custom model's name or a base model id")
+        raise ValueError("model is a custom model's name or a base model's id (owner/model)")
     wire = wire_rows(rows, labels=False)
     return {"model": model, "rows": wire}, len(wire)
 

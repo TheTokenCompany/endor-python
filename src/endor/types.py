@@ -298,8 +298,8 @@ class SystemOneResponse(BaseModel):
     """The decision's id (``req_...``, the same as its ``X-Request-Id``): correct the decision with
     ``client.corrections.create(res, ...)``. None from a server that doesn't send one."""
     model: str
-    """What answered: a project's version (``"tickets:v4"``, or ``"tickets"`` while its base model answers) or a
-    custom model (``"router-2"``)."""
+    """What answered: a project's version (``"tickets:v4"``, or ``"tickets"`` while its base model answers), a custom
+    model (``"router-2"``) or a base model called directly (``"mapika/decider-2b"``)."""
     answers: dict[str, Answer] = Field(default_factory=dict)
     """Every answer, by question name."""
     usage: Usage = Field(default_factory=Usage)
@@ -365,8 +365,9 @@ class DecisionIndexInfo(BaseModel):
 
 
 class BaseModelInfo(BaseModel):
-    """A base decision model: a continuous learning project learns on one (``client.projects.create(name,
-    base_model=id)``), and custom models are trained on one (``client.custom_models.create(name, base_model=id)``).
+    """A base decision model, called directly by its ``id`` (``client.system_one(..., model="mapika/decider-2b")``): a
+    continuous learning project learns on one (``client.projects.create(name, base_model=id)``), and custom models are
+    trained on one (``client.custom_models.create(name, base_model=id)``).
 
     To choose one, compare what it is meant for and its ranks (``decision_index``), its speed (``tokens_per_s``), its
     context (``max_question_tokens``), its options (``max_options``) and its price."""
@@ -374,6 +375,7 @@ class BaseModelInfo(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     id: str
+    """``owner/model``, as on Hugging Face: ``"mapika/decider-2b"``."""
     description: str | None = None
     release_date: str | None = None
     params: str | None = None
@@ -617,7 +619,7 @@ class ProjectInfo(_View):
     name: str
     description: str | None = None
     base_model: str
-    """The base model the project learns on, chosen when it was created. It never changes."""
+    """The base model the project learns on (``"mapika/decider-2b"``), chosen when it was created. It never changes."""
     production: str | None = None
     """The version in production, which ``"<project>"`` answers with (``"v4"``); None until you promote one, while the
     base model answers."""
@@ -860,7 +862,8 @@ class UsageRow(_View):
     kind: str
     """``decide`` (billed per 1M input tokens per base model) or ``train`` (billed per GPU-hour)."""
     project: str | None = None
-    """The continuous learning project; None for a custom model's decisions and for training."""
+    """The continuous learning project; None for a custom model's decisions, a base model called directly and
+    training."""
     project_deleted: bool = False
     """The project was deleted (``project`` is None when its record is gone)."""
     base_model: str | None = None

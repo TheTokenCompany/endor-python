@@ -12,7 +12,7 @@ from endor import Noul
 async def main() -> None:
     async with endor.EndorClient(model="tickets") as client:
         # Projects are synchronous; this one answers with its base model at once.
-        client.projects.get_or_create("tickets", base_model="decider-2b")
+        client.projects.get_or_create("tickets", base_model="mapika/decider-2b")
 
         # Many decisions at once, through the project's production version.
         states = [f"ticket {i}: my invoice is wrong" for i in range(5)]
@@ -27,7 +27,8 @@ async def main() -> None:
         datums = endor.data.rows_to_datums(
             [{"state": s, "questions": {"b": Noul(instructions="Billing?")}, "labels": {"b": True}} for s in states]
         )
-        async with client.custom_models.create("billing-check", base_model="decider-2b") as run:  # closed on errors
+        # the run is closed on errors too
+        async with client.custom_models.create("billing-check", base_model="mapika/decider-2b") as run:
             fb = await run.forward_backward_async(datums)
             opt = await run.optim_step_async(learning_rate=1e-4)
             out, step = await endor.gather_async(fb, opt)

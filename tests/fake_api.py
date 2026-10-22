@@ -46,38 +46,46 @@ LIMITS: dict[str, float] = {
 }
 MAX_ACTIVE_RUNS = int(LIMITS["max_active_runs"])
 BASE_MODELS: dict[str, dict[str, Any]] = {
-    "pplx-decider-v1.1-27b": {
+    "perplexity-ai/pplx-decider-v1.1-27b": {
         "max_options": 255,
         "trainable": True,
         "default_rank": 16,
         "lora_targets": ["attn", "mlp"],
     },
-    "jev-9b": {
+    "autotrust/jev-9b": {
         "max_options": 16,
         "trainable": True,
         "default_rank": 16,
         "lora_targets": ["attn", "mlp"],
     },
-    "decider-2b": {
+    "mapika/decider-2b": {
         "max_options": 255,
         "trainable": True,
         "default_rank": 16,
         "lora_targets": ["attn", "mlp"],
     },
-    "gev-26b": {
+    "autotrust/gev-26b": {
         "max_options": 16,
         "trainable": True,
         "default_rank": 16,
         "lora_targets": ["attn", "mlp"],
         "modalities": ["text", "image"],
     },
-    "gliner2.5-decide": {
+    "fastino/gliner2.5-decide": {
         "max_options": 64,
         "trainable": True,
         "default_rank": 16,
         "lora_targets": ["attn", "mlp"],
     },
 }
+# Each base's catalog id ("decider-2b"): never a name an org may take, and still read as base_model until 2026-11-30
+BARE_IDS = {k.partition("/")[2]: k for k in BASE_MODELS}
+
+
+def base_param(value: Any) -> Any:
+    """A request's base model as the API reads it: a public id (``owner/model``), or a bare catalog id as its public
+    id (deprecated)."""
+    return BARE_IDS.get(value, value) if isinstance(value, str) else value
 
 
 class HTTPError(Exception):
@@ -356,8 +364,8 @@ class FakeEndor:
         return m
 
     def name_taken(self, name: str) -> bool:
-        """One namespace per org: projects and custom models, and the base model ids."""
-        return name in self.projects or name in self.models or name in BASE_MODELS
+        """One namespace per org: projects and custom models, and the base models' catalog ids."""
+        return name in self.projects or name in self.models or name in BARE_IDS
 
     def run(self, run_id: str) -> dict:
         if run_id not in self.runs:
@@ -575,7 +583,7 @@ class FakeEndor:
             if end - start > timedelta(days=14):
                 raise HTTPError(422, "invalid_input", "at most 14 days per call", "ending_before")
             hour = start.replace(minute=0, second=0, microsecond=0).isoformat()
-            common = {"hour": hour, "project_deleted": False, "base_model": "jev-9b"}
+            common = {"hour": hour, "project_deleted": False, "base_model": "autotrust/jev-9b"}
             return 200, [
                 {
                     **common,
@@ -791,9 +799,11 @@ class FakeEndor:
     # ------------------------------------------------------------------ decisions
     def resolve_model(self, model: str) -> tuple[str, str, str | None]:
         """(base model id, what answered, project) for a decision's ``model``, as the API's services/references.py:
-        ``<project>`` (its live version, else its base), ``<project>:preview`` (its newest version while that isn't
-        live; else 404 no_preview) or
-        a live custom model's name."""
+        a base model's id (``owner/model``, that base, called directly), ``<project>`` (its live version, else its
+        base), ``<project>:preview`` (its newest version while that isn't live; else 404 no_preview) or a live custom
+        model's name."""
+        if model in BASE_MODELS:
+            return model, model, None
         if "/" in model:
             raise HTTPError(
                 404,
@@ -824,11 +834,11 @@ class FakeEndor:
         if model in self.projects:
             p = self.projects[model]
             return p["base_model"], f"{model}:{p['live']}" if p["live"] else model, model  # the base: "<project>"
-        if model in BASE_MODELS:
+        if model in BARE_IDS:
             raise HTTPError(
-                422,
-                "model_requires_project",
-                f"Create a continuous learning project on {model} to decide with it.",
+                404,
+                "unknown_model",
+                f"No model {model!r}: a base model is called by its public id, {BARE_IDS[model]}.",
                 "model",
             )
         cm = self.models.get(model)
@@ -969,7 +979,7 @@ class FakeEndor:
                 {
                     "id": k,
                     "params": "1B",
-                    "hf_repo": f"org/{k}",
+                    "hf_repo": k,
                     "hf_revision": "abc123",
                     "contract": "c",
                     "contract_version": 1,
@@ -1000,7 +1010,7 @@ class FakeEndor:
                 "limit_reached",
                 f"This organization has {len(self.projects)} projects, the maximum of {cap}. Delete one first.",
             )
-        base = body.get("base_model")
+        base = base_param(body.get("base_model"))
         if base not in BASE_MODELS:
             raise HTTPError(422, "invalid_input", f"Not a base model: {base!r}.", "base_model")
         p = {
@@ -1097,7 +1107,7 @@ class FakeEndor:
                 raise HTTPError(422, "invalid_input", "bad model name", "model")
             if self.name_taken(model):
                 raise HTTPError(409, "conflict", f"{model} is taken by a project, custom model or base model", "model")
-        base_model, parent = body.get("base_model"), None
+        base_model, parent = base_param(body.get("base_model")), None
         if body.get("from_model"):
             pm = self.models.get(body["from_model"])
             if pm is None or not pm["_ready"]:
@@ -1286,7 +1296,7 @@ class FakeEndor:
         if ttl is not None and not 3600 <= ttl <= 10 * 365 * 86400:
             raise HTTPError(422, "invalid_input", "ttl 1h..10y", "ttl_seconds")
         new = "seq_id" in body and body["seq_id"] >= run["next_seq_id"]
-        if new and name in BASE_MODELS:  # as the API's models.check_name
+        if new and name in BARE_IDS:  # as the API's models.check_name
             raise HTTPError(422, "invalid_input", f"{name!r} is a base model id.", "name")
         if new and (name in self.projects or name in self.models):
             raise HTTPError(409, "conflict", f"{name} is taken by a project or custom model", "name")
@@ -1385,7 +1395,7 @@ class FakeEndor:
             rows = self.datasets[dataset]["_rows"]
         else:
             self.check_rows(rows)
-        model = body.get("model")
+        model = base_param(body.get("model"))
         if model in BASE_MODELS:
             base = model
         elif model in self.models and self.models[model]["_ready"]:

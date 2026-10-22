@@ -7,7 +7,7 @@
         ConflictError 409 (LimitReachedError > ProductionFullError, ModelNotInProductionError,
             ModelInProductionError)
         PayloadTooLargeError 413
-        UnprocessableEntityError 422 (ModelRequiresProjectError)
+        UnprocessableEntityError 422
         RateLimitError 429 (retry_after) · OverloadedError 529 · InternalServerError 5xx
         ResponseValidationError: a 2xx whose body does not have the expected shape
       APIConnectionError: no HTTP response
@@ -47,7 +47,6 @@ __all__ = [
     "NoPreviewError",
     "PayloadTooLargeError",
     "UnprocessableEntityError",
-    "ModelRequiresProjectError",
     "RateLimitError",
     "OverloadedError",
     "InternalServerError",
@@ -224,12 +223,6 @@ class UnprocessableEntityError(APIError):
     """422: validation failed; ``param`` or the message names the field or item."""
 
 
-class ModelRequiresProjectError(UnprocessableEntityError):
-    """422 ``model_requires_project``: ``model`` is a bare base model id. Decisions name a continuous learning project
-    (``"<project>"``, ``"<project>:preview"``) or a custom model in production by its name: create a project on the base
-    (``client.projects.create(name, base_model=...)``) to decide with it."""
-
-
 class RateLimitError(APIError):
     """429: rate limited or queue full (see ``code``). Honors ``Retry-After``."""
 
@@ -333,7 +326,6 @@ _CODE_ERRORS: dict[str, type[APIError]] = {
     "model_in_production": ModelInProductionError,
     "version_not_callable": VersionNotCallableError,
     "no_preview": NoPreviewError,
-    "model_requires_project": ModelRequiresProjectError,
 }
 
 

@@ -12,7 +12,6 @@ from endor import (
     LimitReachedError,
     ModelInProductionError,
     ModelNotInProductionError,
-    ModelRequiresProjectError,
     NoPreviewError,
     NotFoundError,
     ProductionFullError,
@@ -55,8 +54,8 @@ class TestProjects:
 
     def test_get_or_create_keeps_its_one_base(self, client: EndorClient, fake: FakeEndor) -> None:
         name = unique("goc")
-        a = client.projects.get_or_create(name, base_model="decider-2b")
-        b = client.projects.get_or_create(name, base_model="decider-2b", description="ignored")
+        a = client.projects.get_or_create(name, base_model="mapika/decider-2b")
+        b = client.projects.get_or_create(name, base_model="mapika/decider-2b", description="ignored")
         assert a.name == b.name and len(fake.projects) == 1 and b.info_.description is None
         assert fake.requests[-1].method == "GET"
         n = len(fake.requests)
@@ -64,9 +63,17 @@ class TestProjects:
             client.projects.get_or_create(name, base_model=BASE)
         assert [r.method for r in fake.requests[n:]] == ["GET"]
 
+    def test_get_or_create_takes_a_bare_base_id(self, client: EndorClient, fake: FakeEndor) -> None:
+        name = unique("bare")  # the API reads "decider-2b" as "mapika/decider-2b" until 2026-11-30
+        a = client.projects.get_or_create(name, base_model="decider-2b")
+        b = client.projects.get_or_create(name, base_model="decider-2b")
+        assert a.info_.base_model == b.info_.base_model == "mapika/decider-2b" and len(fake.projects) == 1
+        with pytest.raises(ValueError, match="chosen once"):
+            client.projects.get_or_create(name, base_model="jev-9b")
+
     def test_the_release_befores_arguments_say_what_to_do(self, client: EndorClient, fake: FakeEndor) -> None:
-        with pytest.raises(TypeError, match=r"one base model now: pass base_model='decider-2b'"):
-            client.projects.create(unique("old"), base_models=["decider-2b"])  # type: ignore[call-arg]
+        with pytest.raises(TypeError, match=r"one base model now: pass base_model='mapika/decider-2b'"):
+            client.projects.create(unique("old"), base_models=["mapika/decider-2b"])  # type: ignore[call-arg]
         with pytest.raises(TypeError, match="kind was removed.*custom_models.create"):
             client.projects.create(unique("old"), base_model=BASE, kind="custom")  # type: ignore[call-arg]
         with pytest.raises(TypeError, match="kind was removed"):
@@ -152,8 +159,9 @@ class TestProjects:
         assert e2.value.code == "unknown_model"
         with pytest.raises(NotFoundError):
             client.system_one("x", Q, model=f"{p.name}:staging")
-        with pytest.raises(ModelRequiresProjectError):
-            client.system_one("x", Q, model=BASE)
+        with pytest.raises(NotFoundError) as e3:
+            client.system_one("x", Q, model=BASE.partition("/")[2])  # a base model's bare id
+        assert e3.value.code == "unknown_model" and BASE in e3.value.message
 
     def test_download_a_version(self, client: EndorClient, fake: FakeEndor, tmp_path: Path) -> None:
         p = client.projects.create(unique("dl"), base_model=BASE)

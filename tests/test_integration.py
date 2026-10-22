@@ -69,7 +69,7 @@ def test_tiny_training_loop(live: endor.EndorClient) -> None:
     ]
     live.datasets.upload(name, rows)
     try:
-        with live.custom_models.create(name, base_model="jev-9b", rank=4) as run:
+        with live.custom_models.create(name, base_model="autotrust/jev-9b", rank=4) as run:
             datums = endor.data.rows_to_datums(rows)
             before = run.forward(datums).result()
             fb = run.forward_backward(datums)

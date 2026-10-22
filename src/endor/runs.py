@@ -1,6 +1,6 @@
 """Run: one adapter on one base model, driven step by step; a save makes a custom model.
 
-    run = client.custom_models.create("router-2", base_model="decider-2b", rank=16)
+    run = client.custom_models.create("router-2", base_model="mapika/decider-2b", rank=16)
     fb = run.forward_backward(datums)                 # gradients accumulate
     opt = run.optim_step(learning_rate=1e-4)          # AdamW step, then zero gradients
     fb.result(); opt.result()                         # submit both, then wait: no idle round trip
@@ -76,7 +76,7 @@ class Run:
     calls; it stops when the run is closed or the handle is garbage collected. A run whose process ended without
     closing it is closed an hour later. Use it as a context manager so it is closed even on errors::
 
-        with client.custom_models.create("router-2", base_model="jev-9b") as run:
+        with client.custom_models.create("router-2", base_model="autotrust/jev-9b") as run:
             ...
     """
 

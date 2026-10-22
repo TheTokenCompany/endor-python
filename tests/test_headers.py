@@ -32,9 +32,9 @@ IDENTITY = {
 
 def test_every_request_carries_identity(client: EndorClient, fake: FakeEndor) -> None:
     client.whoami()
-    project = client.projects.create(unique("hdr"), base_model="jev-9b")
+    project = client.projects.create(unique("hdr"), base_model="autotrust/jev-9b")
     client.system_one("x", {"d": DEPT}, model=project.ref)
-    with client.runs.create("jev-9b") as run:
+    with client.runs.create("autotrust/jev-9b") as run:
         run.forward(endor.data.rows_to_datums(rows(2))).result()
     assert len(fake.requests) >= 6
     for req in fake.requests:
@@ -49,18 +49,18 @@ def test_every_request_carries_identity(client: EndorClient, fake: FakeEndor) ->
 def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor, tmp_path: Path) -> None:
     client.whoami()
     name = unique("m")
-    fake.create_project({"name": name, "base_model": "jev-9b"})  # in the fake directly: no request
+    fake.create_project({"name": name, "base_model": "autotrust/jev-9b"})  # in the fake directly: no request
     fake.add_version(name)
     client.system_one("x", {"d": DEPT}, model=name)
     client.models.list()
     client.base_models()
-    project = client.projects.get_or_create(name, base_model="jev-9b")
+    project = client.projects.get_or_create(name, base_model="autotrust/jev-9b")
     project.versions()
     project.promote("v1")
     project.set_auto_promote(True)
     client.datasets.upload("d", rows(2))
     list(client.datasets.rows("d"))
-    run = client.custom_models.create("cm", base_model="jev-9b")
+    run = client.custom_models.create("cm", base_model="autotrust/jev-9b")
     run.forward_backward(endor.data.rows_to_datums(rows(1))).result()
     run.optim_step().result()
     run.save_checkpoint().result()
@@ -119,12 +119,12 @@ def test_method_header_names_the_sdk_call(client: EndorClient, fake: FakeEndor, 
 
 def test_idempotency_key_on_creates_only(client: EndorClient, fake: FakeEndor) -> None:
     name = unique("idem")
-    project = client.projects.create(name, base_model="jev-9b")
+    project = client.projects.create(name, base_model="autotrust/jev-9b")
     client.datasets.upload("d", rows(1))
-    with client.runs.create("jev-9b") as run:
+    with client.runs.create("autotrust/jev-9b") as run:
         run.forward(endor.data.rows_to_datums(rows(1)))
         run.log_eval("x", {})
-    client.evaluations.create("jev-9b", "d")
+    client.evaluations.create("autotrust/jev-9b", "d")
     project.set_auto_promote(False)
     client.whoami()
     with_key = {(r.method, r.path) for r in fake.requests if "idempotency-key" in r.headers}
@@ -144,7 +144,7 @@ def test_idempotency_key_on_creates_only(client: EndorClient, fake: FakeEndor) -
 def test_idempotency_key_and_request_id_survive_retries(client: EndorClient, fake: FakeEndor) -> None:
     fake.fail_next.append(httpx.ConnectError("reset"))
     fake.fail_next.append(HTTPError(503, "unavailable", "try again"))
-    client.projects.create(unique("retried"), base_model="jev-9b")
+    client.projects.create(unique("retried"), base_model="autotrust/jev-9b")
     reqs = [r for r in fake.requests if r.path == "/v1/projects"]
     assert len(reqs) == 3
     assert len({r.headers["idempotency-key"] for r in reqs}) == 1
@@ -155,7 +155,7 @@ def test_idempotency_key_and_request_id_survive_retries(client: EndorClient, fak
 def test_idempotent_replay_returns_the_same_resource(client: EndorClient, fake: FakeEndor) -> None:
     fake.fail_next.append(httpx.ReadTimeout("slow"))  # the server may have created it before we timed out
     name = unique("once")
-    project = client.projects.create(name, base_model="jev-9b")
+    project = client.projects.create(name, base_model="autotrust/jev-9b")
     assert project.name == name and len(fake.projects) == 1
 
 

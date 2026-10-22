@@ -1,6 +1,6 @@
 """Custom models: models you train yourself with the SDK, called by their name while in production.
 
-    run = client.custom_models.create("router-2", base_model="decider-2b")   # a run that saves as "router-2"
+    run = client.custom_models.create("router-2", base_model="mapika/decider-2b")   # a run that saves as "router-2"
     with run:
         ...                                          # forward_backward, optim_step (see ``endor.Run``)
         run.save_checkpoint().result()               # "router-2" is saved, in the archive

@@ -1,11 +1,11 @@
 """Training custom models: datasets, runs and evaluations, all at the organization's level.
 
     client.datasets.upload("train", rows)
-    with client.runs.create("decider-2b", model="router-2") as run:    # or client.custom_models.create("router-2", ...)
-        ...                                                             # forward_backward, optim_step
-        run.save_checkpoint().result()                                  # saved as the custom model "router-2"
-    client.evaluations.create("router-2", "heldout").result()          # in production or archived
-    client.custom_models.promote("router-2")                            # now model="router-2" answers
+    with client.runs.create("mapika/decider-2b", model="router-2") as run:    # or client.custom_models.create(...)
+        ...                                                                    # forward_backward, optim_step
+        run.save_checkpoint().result()                                         # saved as the custom model "router-2"
+    client.evaluations.create("router-2", "heldout").result()                 # in production or archived
+    client.custom_models.promote("router-2")                                   # now model="router-2" answers
 
 A save makes a custom model, which starts archived: it can be downloaded and evaluated, and decisions can call it once
 it is promoted (``client.custom_models``).
@@ -115,10 +115,10 @@ class Runs:
         wait: bool = True,
         progress: bool = True,
     ) -> Run:
-        """Start a run: a fresh adapter on ``base_model`` (an id from ``client.base_models()``), or one warm-started
-        from ``from_model`` (a custom model's name, which sets the base model: another ``base_model`` is a 422, an
-        unknown name ``NotFoundError``, 404 ``unknown_model``; with ``include_optimizer=True`` training resumes
-        exactly).
+        """Start a run: a fresh adapter on ``base_model`` (an id from ``client.base_models()``, such as
+        ``"mapika/decider-2b"``), or one warm-started from ``from_model`` (a custom model's name, which sets the base
+        model: another ``base_model`` is a 422, an unknown name ``NotFoundError``, 404 ``unknown_model``; with
+        ``include_optimizer=True`` training resumes exactly).
 
         ``model``: the custom model name ``run.save_checkpoint()`` saves under when it is given none. It must be free
         (``ConflictError`` here if a custom model or project has it). ``name`` is the run's own label.
@@ -149,7 +149,9 @@ class Runs:
         links to the W&B run.
         """
         if base_model is None and from_model is None:
-            raise ValueError('pass the base model to train on, e.g. client.runs.create("decider-2b"), or from_model=')
+            raise ValueError(
+                'pass the base model to train on, e.g. client.runs.create("mapika/decider-2b"), or from_model='
+            )
         given = {
             "rank": rank,
             "alpha": alpha,
@@ -238,8 +240,8 @@ class Evaluations:
     ) -> APIFuture[Evaluation]:
         """Score a model server-side on a dataset, or on ``rows`` sent with the call (decision rows in any shape
         ``client.datasets.upload`` takes, at most 50,000 and 32 MB; nothing is stored as a dataset). One of the two.
-        ``model`` is a custom model's name (in production or archived) or a base model id (the untuned base, as a
-        baseline).
+        ``model`` is a custom model's name (in production or archived) or a base model's id (``"mapika/decider-2b"``:
+        the untuned base, as a baseline).
 
         A row with labels is scored on its labeled questions; a row without labels is answered on every question and
         not scored (``client.predict`` returns those answers). The result's ``results`` has ``n`` (the questions

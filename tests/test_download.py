@@ -20,7 +20,7 @@ BASE = ["adapter_model.safetensors", "adapter_config.json", "endor_manifest.json
 
 @pytest.fixture
 def saved(client: endor.EndorClient) -> endor.CustomModels:
-    with client.custom_models.create("v1", base_model="jev-9b") as run:
+    with client.custom_models.create("v1", base_model="autotrust/jev-9b") as run:
         run.save_checkpoint(include_optimizer=True).result()
     return client.custom_models
 
@@ -121,14 +121,14 @@ def test_include_optimizer_without_optimizer_state_says_so(
 ) -> None:
     """The API lists no optimizer.pt for a model saved without optimizer state: asked for, that is an error before
     anything is written, not a download without it."""
-    with client.custom_models.create("v2", base_model="jev-9b") as run:
+    with client.custom_models.create("v2", base_model="autotrust/jev-9b") as run:
         run.save_checkpoint().result()  # no optimizer state
     assert client.custom_models.get("v2").has_optimizer is False
     with pytest.raises(DownloadError, match=r"v2 was saved without optimizer state, so it has no optimizer\.pt"):
         client.custom_models.download("v2", tmp_path / "v2", include_optimizer=True)
     assert not (tmp_path / "v2").exists() and not fake.file_requests
     assert [f.name for f in client.custom_models.download("v2", tmp_path / "v2")] == BASE  # without it: fine
-    p = client.projects.create("tickets", base_model="jev-9b")
+    p = client.projects.create("tickets", base_model="autotrust/jev-9b")
     fake.add_version(p.name)
     with pytest.raises(DownloadError, match="tickets v1 was saved without optimizer state"):
         p.download("v1", tmp_path / "t", include_optimizer=True)
