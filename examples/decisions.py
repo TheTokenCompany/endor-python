@@ -8,7 +8,7 @@ ENDOR_API_KEY=edk_... python examples/decisions.py
 from endor import Choice, ChoiceAnswer, EndorClient, Noul, NoulAnswer, Score, SystemOneResponse
 
 client = EndorClient(model="tickets")  # the default model for every call below
-project = client.projects.get_or_create("tickets", base_model="decider-2b")
+project = client.projects.get_or_create("tickets", base_model="mapika/decider-2b")
 
 state = {"subject": "Charged twice", "body": "I was billed two times for my March invoice. Please fix this today."}
 questions = {
@@ -46,7 +46,10 @@ if info.preview:
     print(client.system_one(state, questions, model=project.preview_ref).model)  # "tickets:preview" answers
     project.promote(info.preview)  # in production: "tickets" answers with it now
 
-# Every name a decision can send: your projects, their previews (when they have one) and your custom models in
+# A base model, called directly by its id, owner/model (client.base_models() lists them).
+print(client.system_one(state, questions, model="mapika/decider-2b").model)  # "mapika/decider-2b"
+
+# Your own names a decision can send: your projects, their previews (when they have one) and your custom models in
 # production.
 for m in client.models.list().models:
     print(m.name, m.kind)

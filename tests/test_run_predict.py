@@ -23,13 +23,13 @@ def test_predict_answers_each_row_in_order_as_a_decision_does(
         {"state": "where is my parcel?", "questions": {"anger": ANGER}},
         DecisionRow(state={"body": "refund"}, questions={"urgent": URGENT, "dept": DEPT}),
     ]
-    with client.runs.create("jev-9b") as run:
+    with client.runs.create("autotrust/jev-9b") as run:
         answers = run.predict(mixed).result()
         assert [list(a) for a in answers] == [["dept", "urgent"], ["dept", "urgent"], ["anger"], ["urgent", "dept"]]
         assert isinstance(answers[0]["dept"], ChoiceAnswer) and isinstance(answers[0]["urgent"], NoulAnswer)
         assert isinstance(answers[2]["anger"], ScoreAnswer)
         for row, got in zip(map(endor.data.to_row, mixed), answers, strict=True):
-            decided = client.system_one(row.state, row.questions, model=decider)  # its base, jev-9b
+            decided = client.system_one(row.state, row.questions, model=decider)  # its base, autotrust/jev-9b
             assert got == decided.answers
         (body,) = posts(fake, "predict")
         assert body["seq_id"] == 0 and set(body) == {"rows", "seq_id"}
@@ -41,7 +41,7 @@ def test_predict_answers_each_row_in_order_as_a_decision_does(
 
 
 def test_predict_runs_in_order_with_the_training_steps(client: endor.EndorClient, fake: FakeEndor) -> None:
-    with client.runs.create("jev-9b") as run:
+    with client.runs.create("autotrust/jev-9b") as run:
         fb = run.forward_backward(endor.data.rows_to_datums(rows(2)))
         scored = run.predict(rows(3))
         opt = run.optim_step(learning_rate=1e-4)
@@ -57,7 +57,7 @@ def test_long_lists_are_split_by_questions_and_merged_in_order(
 ) -> None:
     monkeypatch.setattr(endor.runs, "MAX_PREDICT_QUESTIONS", 5)
     many = [{"state": f"s{i}", "questions": {f"q{i}": URGENT, "dept": DEPT}} for i in range(6)]  # 12 questions
-    with client.runs.create("jev-9b") as run:
+    with client.runs.create("autotrust/jev-9b") as run:
         fut = run.predict(many)
         assert fut.id is None and len(fut.leaves()) == 3
         answers = fut.result()
@@ -67,7 +67,7 @@ def test_long_lists_are_split_by_questions_and_merged_in_order(
 
 
 def test_rows_are_checked_before_anything_is_sent(client: endor.EndorClient, fake: FakeEndor) -> None:
-    with client.runs.create("jev-9b") as run:
+    with client.runs.create("autotrust/jev-9b") as run:
         too_many = {"state": "x", "questions": {f"q{i}": URGENT for i in range(65)}}
         with pytest.raises(ValueError, match=r"rows\[1\]: at most 64 questions"):
             run.predict([rows(1)[0], too_many])
@@ -79,7 +79,7 @@ def test_rows_are_checked_before_anything_is_sent(client: endor.EndorClient, fak
 
 
 async def test_predict_async(client: endor.EndorClient, fake: FakeEndor) -> None:
-    async with client.runs.create("jev-9b") as run:
+    async with client.runs.create("autotrust/jev-9b") as run:
         fut = await run.predict_async(rows(2))
         answers = await fut
         assert len(answers) == 2 and isinstance(answers[1]["urgent"], NoulAnswer)

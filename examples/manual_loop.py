@@ -21,7 +21,7 @@ heldout = endor.data.rows_to_datums(heldout_rows)
 if "heldout" not in {d.name for d in client.datasets.list()}:
     client.datasets.upload("heldout", heldout_rows)
 
-with client.custom_models.create("router-2", base_model="decider-2b", rank=16, tags=["manual"]) as run:
+with client.custom_models.create("router-2", base_model="mapika/decider-2b", rank=16, tags=["manual"]) as run:
     steps = endor.Steps()  # the next step is sent before the last one's results are read: 2 steps in flight
     sent = 0
     for epoch in range(2):
@@ -44,7 +44,7 @@ with client.custom_models.create("router-2", base_model="decider-2b", rank=16, t
 print("saved", model)
 evaluation = client.evaluations.create(model, "heldout", run_id=run.id).result()  # server-side scoring, still archived
 print(evaluation.results)
-print(client.evaluations.create("decider-2b", "heldout").result().results)  # the untuned base
+print(client.evaluations.create("mapika/decider-2b", "heldout").result().results)  # the untuned base
 
 client.custom_models.promote(model)  # production: client.system_one(..., model="router-2") answers now
 

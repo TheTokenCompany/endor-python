@@ -1,7 +1,7 @@
 """Continuous learning projects: Endor trains new versions of a project's model from its decisions and your
 corrections, starting from the base model you choose when you create it.
 
-    project = client.projects.get_or_create("tickets", base_model="decider-2b")
+    project = client.projects.get_or_create("tickets", base_model="mapika/decider-2b")
     client.system_one(state, questions, model=project.ref)            # "tickets": the production version
     client.system_one(state, questions, model=project.preview_ref)    # "tickets:preview": a new version
     project.versions()               # v1, v2, ... newest first: which one is in production, which is the preview
@@ -41,7 +41,7 @@ class Projects:
         self, name: str, base_model: str | None = None, description: str | None = None, **removed: Any
     ) -> Project:
         """A new continuous learning project on ``base_model`` (an id from ``client.base_models()``, for example
-        ``"decider-2b"``), chosen here for good. ``"<project>"`` answers with the base model until you promote a
+        ``"mapika/decider-2b"``), chosen here for good. ``"<project>"`` answers with the base model until you promote a
         version. Auto-promote starts off: new versions wait in the preview (``set_auto_promote(True)`` changes that).
 
         Names are lowercase, ``[a-z0-9._-]``, up to 63 characters, and unique in the organization together with your
@@ -68,7 +68,8 @@ class Projects:
             p = self.get(name)
         except NotFoundError:
             return self.create(name, base_model, description)
-        if p.info_.base_model != base_model:
+        # A bare id ("decider-2b", which the API takes until 2026-11-30) names the same base as "mapika/decider-2b"
+        if base_model not in (p.info_.base_model, p.info_.base_model.rpartition("/")[2]):
             raise ValueError(
                 f"project {name!r} learns on {p.info_.base_model}, not {base_model}; a project's base model is chosen "
                 "once, so pick another name"
@@ -219,5 +220,5 @@ def _base(base_model: str | None, removed: dict[str, Any], method: str) -> str:
     if removed:
         raise TypeError(f"{method}() got an unexpected keyword argument {next(iter(removed))!r}")
     if not isinstance(base_model, str) or not base_model:
-        raise TypeError(f'{method}: pass the project\'s base model, e.g. base_model="decider-2b"')
+        raise TypeError(f'{method}: pass the project\'s base model, e.g. base_model="mapika/decider-2b"')
     return base_model

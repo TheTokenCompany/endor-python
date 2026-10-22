@@ -16,7 +16,7 @@ INDEX_URL = "https://huggingface.co/spaces/multimodalart/jev-decision-index"
 
 # Entries of GET /v1/base_models as the API sends them (October 2026), task_ranks cut to three benchmarks.
 PPLX: dict[str, Any] = {
-    "id": "pplx-decider-v1.1-27b",
+    "id": "perplexity-ai/pplx-decider-v1.1-27b",
     "params": "27B",
     "provider": "Perplexity",
     "leaderboard_rank": 1,
@@ -53,7 +53,7 @@ PPLX: dict[str, Any] = {
     "price_per_gpu_hour": 7.0,
 }
 GEV: dict[str, Any] = {
-    "id": "gev-26b",
+    "id": "autotrust/gev-26b",
     "params": "26B (4B active)",
     "provider": "AutoTrust",
     "leaderboard_rank": 14,
@@ -90,7 +90,7 @@ GEV: dict[str, Any] = {
     "price_per_gpu_hour": 7.0,
 }
 DECIDER_2B: dict[str, Any] = {
-    "id": "decider-2b",
+    "id": "mapika/decider-2b",
     "params": "1.9B",
     "provider": "Mapika",
     "leaderboard_rank": 81,
@@ -128,7 +128,7 @@ DECIDER_2B: dict[str, Any] = {
 }
 # A base that isn't on the index and wasn't measured: the API sends null.
 OFF_INDEX: dict[str, Any] = {
-    "id": "jev-9b",
+    "id": "autotrust/jev-9b",
     "params": "9B",
     "provider": "AutoTrust",
     "leaderboard_rank": None,
@@ -154,16 +154,16 @@ OFF_INDEX: dict[str, Any] = {
 NEW_FIELDS = ("leaderboard_rank", "decision_index", "tokens_per_s", "tokens_per_s_source")
 OLDER: dict[str, Any] = {
     **{k: v for k, v in OFF_INDEX.items() if k not in NEW_FIELDS},
-    "id": "jevk5-9b",
+    "id": "alibiserikbay/jevk5-9b",
     "trainer_gpu": "H100",
 }
 
 TABLE = """\
-id                     index rank  tokens/s  context  $/1M tokens  meant for
-pplx-decider-v1.1-27b       1/117     5,921   16,384        $0.02  Code, Agents, Documents and email, Finance
-gev-26b                   =14/117    13,791   16,384       $0.042  Code, Documents and email, Finance, Agents
-decider-2b                =81/117    45,417   16,384       $0.007  -
-jev-9b                          -         -   16,384        $0.02  -
+id                                      rank  tokens/s  context  $/1M tokens  meant for
+perplexity-ai/pplx-decider-v1.1-27b    1/117     5,921   16,384        $0.02  Code, Agents, Documents and email, Finance
+autotrust/gev-26b                    =14/117    13,791   16,384       $0.042  Code, Documents and email, Finance, Agents
+mapika/decider-2b                    =81/117    45,417   16,384       $0.007  -
+autotrust/jev-9b                           -         -   16,384        $0.02  -
 """
 
 
@@ -205,7 +205,7 @@ def test_decision_index_and_speed() -> None:
 def test_without_decision_index() -> None:
     with client_for(OFF_INDEX, OLDER) as client:
         bases = client.base_models()
-    assert [b.id for b in bases] == ["jev-9b", "jevk5-9b"]
+    assert [b.id for b in bases] == ["autotrust/jev-9b", "alibiserikbay/jevk5-9b"]
     for b in bases:
         assert b.decision_index is None and b.leaderboard_rank is None
         assert b.tokens_per_s is None and b.tokens_per_s_source is None

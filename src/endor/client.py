@@ -1,17 +1,18 @@
 """EndorClient: decisions with continuous learning projects, plus custom models you train yourself.
 
     client = endor.EndorClient()                               # ENDOR_API_KEY from the environment
-    project = client.projects.get_or_create("tickets", base_model="decider-2b")    # learns from its decisions
+    project = client.projects.get_or_create("tickets", base_model="mapika/decider-2b")   # learns from its decisions
     res = client.system_one(state, questions, model="tickets")  # the project's production version
+    client.system_one(state, questions, model="mapika/decider-2b")   # a base model, called directly
     client.corrections.create(res, {"urgent": {"correct": False}})   # a decision was wrong: the project learns
-    client.models.list()                                       # every name you can pass as model
+    client.models.list()                                       # your projects and custom models in production
     client.base_models()                                       # the base models: what each is meant for, speed, price
     client.custom_models.list()                                # advanced: models you train with the SDK
     client.user_report("what you did, what happened, what you expected", kind="bug")      # tell the Endor team
 
 ``model`` is ``"<project>"`` (a continuous learning project's production version), ``"<project>:preview"`` (its
-newest version, while that isn't in production) or the name of a custom model in production (``"router-2"``). A bare
-base model id is refused (``ModelRequiresProjectError``).
+newest version, while that isn't in production), the name of a custom model in production (``"router-2"``) or a base
+model's id, ``owner/model`` (``"mapika/decider-2b"``, from ``client.base_models()``).
 
 Environment: ``ENDOR_API_KEY``, ``ENDOR_BASE_URL``, ``ENDOR_DEFAULT_MODEL``, ``ENDOR_LOG_LEVEL``,
 ``ENDOR_REPORT_LATENCY``.
@@ -145,7 +146,7 @@ class EndorClient:
             report_latency=report_latency,
         )
         self.models = Models(self._t)
-        """``client.models.list()``: every name you can pass as ``model``."""
+        """``client.models.list()``: your projects and custom models, by the names you pass as ``model``."""
         self.projects = Projects(self._t)
         """``client.projects``: continuous learning projects (create, fetch, list, promote versions)."""
         self.datasets = Datasets(self._t)
@@ -214,8 +215,9 @@ class EndorClient:
                 it may hold ``endor.Image`` objects (as the state, a list item or an object value).
             questions: 1 to 64 named questions (``Noul``, ``Choice``, ``Score`` or dicts in the same shape).
             model: ``"<project>"`` (a continuous learning project's production version, its base model until one is
-                promoted), ``"<project>:preview"`` (its newest version, while that isn't in production) or the name
-                of a custom model in production. Defaults to the client's model.
+                promoted), ``"<project>:preview"`` (its newest version, while that isn't in production), the name
+                of a custom model in production, or a base model called directly by its id, ``owner/model``
+                (``"mapika/decider-2b"``). Defaults to the client's model.
             retry, timeout: Overrides for this call.
             extra_headers: Extra request headers.
             extra_body: Extra top-level request fields, merged last.
@@ -231,9 +233,8 @@ class EndorClient:
             EndorError: No ``model`` was given and the client has no default model.
             APIError: ``NotFoundError`` for an unknown model (``NoPreviewError`` for ``"<project>:preview"`` when
                 the project has no preview, ``VersionNotCallableError`` for an older version, ``"<project>:v3"``),
-                ``ModelNotInProductionError`` for an archived custom model, ``ModelRequiresProjectError``
-                for a bare base model id, ``UnprocessableEntityError`` naming a bad question, ``RateLimitError`` and
-                ``OverloadedError`` when told to wait.
+                ``ModelNotInProductionError`` for an archived custom model, ``UnprocessableEntityError`` naming a
+                bad question, ``RateLimitError`` and ``OverloadedError`` when told to wait.
         """
         body = self._decision_body(state, questions, model, extra_body, exclude_from_training)
         raw = self._t.request(
@@ -288,7 +289,8 @@ class EndorClient:
         model = model or self.default_model
         if not model and not (extra_body and extra_body.get("model")):
             raise EndorError(
-                'no model: pass model="<project>", "<project>:preview" or a custom model in production\'s name, '
+                'no model: pass model="<project>", "<project>:preview", a custom model in production\'s name or a '
+                'base model\'s id ("mapika/decider-2b"), '
                 f"or set a default with EndorClient(model=...) or {C.DEFAULT_MODEL_ENV}"
             )
         body: dict[str, Any] = {
@@ -312,7 +314,7 @@ class EndorClient:
         a backfill) instead of a ``system_one`` call per row; billed as decisions, the same per row.
 
         Args:
-            model: A custom model's name (in production or archived) or a base model id.
+            model: A custom model's name (in production or archived) or a base model's id (``"mapika/decider-2b"``).
             rows: Decision rows in any shape ``client.datasets.upload`` takes (``{"state", "questions"}``; labels
                 are ignored), at most 50,000 and 32 MB per call.
             progress: Print a progress line to stderr every 10 s while the evaluation runs
@@ -347,10 +349,11 @@ class EndorClient:
         return await _predict.answers_async(self._t, ev, n)
 
     def base_models(self) -> list[BaseModelInfo]:
-        """The base models a continuous learning project learns on and custom models are trained on
-        (``GET /v1/base_models``): what each is meant for and its ranks on the Jev Decision Index
-        (``decision_index``), its measured speed (``tokens_per_s``), context (``max_question_tokens``), option limits,
-        prices, ``hf_repo`` and ``contract``."""
+        """The base models (``GET /v1/base_models``): each is called directly by its ``id``, ``owner/model``
+        (``"mapika/decider-2b"``), and continuous learning projects learn on them and custom models are trained on
+        them. Each has what it is meant for and its ranks on the Jev Decision Index (``decision_index``), its measured
+        speed (``tokens_per_s``), context (``max_question_tokens``), option limits, prices, ``hf_repo`` and
+        ``contract``."""
         try:
             r = self._t.request("GET", "/v1/base_models", method_name="client.base_models")
             return [parse(BaseModelInfo, b, "GET /v1/base_models") for b in r.get("base_models", [])]
@@ -464,10 +467,11 @@ class Models:
         timeout: float | None = None,
         extra_headers: Mapping[str, str] | None = None,
     ) -> ListModelsResponse:
-        """Every name you can pass as ``model``: for each continuous learning project ``"<project>"`` (its production
+        """Your names to pass as ``model``: for each continuous learning project ``"<project>"`` (its production
         version) and, while it has one, ``"<project>:preview"``, then the name of every custom model in production.
         ``.kind`` is ``project`` or ``custom``, and ``.environment`` ``production`` or ``preview`` for a project's
-        names. The base model catalog is ``client.base_models()``."""
+        names. Base models are called by their ids too (``"mapika/decider-2b"``), which ``client.base_models()``
+        lists."""
         raw = self._t.request(
             "GET",
             "/v1/models",

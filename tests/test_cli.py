@@ -32,17 +32,17 @@ def test_whoami_and_base_models(capsys: pytest.CaptureFixture[str], client: Endo
     assert lines[1] == "limits:" and f"  max_active_runs={me['limits']['max_active_runs']}" in lines[2:]
     assert len(lines) == 2 + len(me["limits"])  # every limit, one per line
     bases = run_json(capsys, client, "base-models")
-    assert isinstance(bases, list) and {b["id"] for b in bases} >= {"jev-9b"}
+    assert isinstance(bases, list) and {b["id"] for b in bases} >= {"autotrust/jev-9b"}
     assert all("decision_index" in b and "tokens_per_s" in b and "trainer_gpu" not in b for b in bases)
     table = run(capsys, client, "base-models").splitlines()
-    assert table[0].split() == ["id", "index", "rank", "tokens/s", "context", "$/1M", "tokens", "meant", "for"]
+    assert table[0].split() == ["id", "rank", "tokens/s", "context", "$/1M", "tokens", "meant", "for"]
     assert [line.split()[0] for line in table[1:]] == [b["id"] for b in bases]  # one line per base, in order
 
 
 def test_projects(capsys: pytest.CaptureFixture[str], client: EndorClient, fake: FakeEndor) -> None:
     name = unique("cli")
-    created = run_json(capsys, client, "projects", "create", name, "--base-model", "jev-9b")
-    assert created["name"] == name and created["base_model"] == "jev-9b"  # type: ignore[index]
+    created = run_json(capsys, client, "projects", "create", name, "--base-model", "autotrust/jev-9b")
+    assert created["name"] == name and created["base_model"] == "autotrust/jev-9b"  # type: ignore[index]
     assert name in [p["name"] for p in run_json(capsys, client, "projects", "list")]  # type: ignore[union-attr]
     fake.add_version(name)
     fake.add_version(name)  # auto-promote is off by default: v2 is the preview, nothing live yet
@@ -64,7 +64,7 @@ def test_custom_models_datasets_runs(capsys: pytest.CaptureFixture[str], client:
     ds = run_json(capsys, client, "datasets", "upload", "train", str(f))
     assert ds["n_rows"] == 4  # type: ignore[index]
     assert [d["name"] for d in run_json(capsys, client, "datasets", "list")] == ["train"]  # type: ignore[union-attr]
-    r = client.custom_models.create("v1", base_model="jev-9b", run_name="cli-run")
+    r = client.custom_models.create("v1", base_model="autotrust/jev-9b", run_name="cli-run")
     r.save_checkpoint().result()
     assert "cli-run" in run(capsys, client, "runs", "list")
     assert run_json(capsys, client, "runs", "show", r.id)["name"] == "cli-run"  # type: ignore[index]
@@ -78,7 +78,7 @@ def test_custom_models_datasets_runs(capsys: pytest.CaptureFixture[str], client:
     assert run_json(capsys, client, "custom-models", "archive", "v1")["production"] is False  # type: ignore[index]
     ev = run_json(capsys, client, "eval", "v1", "train")
     assert ev["status"] == "completed" and ev["model"] == "v1"  # type: ignore[index]
-    assert run_json(capsys, client, "eval", "jev-9b", "train")["model"] == "jev-9b"  # type: ignore[index]
+    assert run_json(capsys, client, "eval", "autotrust/jev-9b", "train")["model"] == "autotrust/jev-9b"  # type: ignore[index]
     assert run_json(capsys, client, "runs", "close", r.id)["status"] in ("closing", "closed")  # type: ignore[index]
     run(capsys, client, "custom-models", "delete", "v1")
     assert run_json(capsys, client, "custom-models", "list") == []
@@ -89,7 +89,7 @@ def test_tables_show_serving_and_accuracy(
     capsys: pytest.CaptureFixture[str], client: EndorClient, fake: FakeEndor
 ) -> None:
     client.datasets.upload("heldout", rows(4))
-    with client.custom_models.create("v1", base_model="jev-9b") as r:
+    with client.custom_models.create("v1", base_model="autotrust/jev-9b") as r:
         r.save_checkpoint().result()
     assert "serving=None" in run(capsys, client, "custom-models", "info", "v1")
     client.custom_models.promote("v1")
@@ -130,7 +130,7 @@ def test_usage(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
 
 
 def test_errors_exit_nonzero(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
-    assert cli.main(["projects", "create", "Bad Name", "--base-model", "jev-9b"], client=client) == 1
+    assert cli.main(["projects", "create", "Bad Name", "--base-model", "autotrust/jev-9b"], client=client) == 1
     assert "error: POST /v1/projects: 422 invalid_input" in capsys.readouterr().err
     assert cli.main(["custom-models", "info", "missing"], client=client) == 1
     assert "404" in capsys.readouterr().err
@@ -145,7 +145,7 @@ def test_version_and_help(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_download(capsys: pytest.CaptureFixture[str], client: EndorClient, fake: FakeEndor, tmp_path: Path) -> None:
-    with client.custom_models.create("v1", base_model="jev-9b") as r:
+    with client.custom_models.create("v1", base_model="autotrust/jev-9b") as r:
         r.save_checkpoint(include_optimizer=True).result()
     target = tmp_path / "m"
     out = run_json(capsys, client, "custom-models", "download", "v1", "-o", str(target))
@@ -164,7 +164,7 @@ COMMANDS = [
     ["whoami"],
     ["base-models"],
     ["projects", "list"],
-    ["projects", "create", "p", "--base-model", "jev-9b"],
+    ["projects", "create", "p", "--base-model", "autotrust/jev-9b"],
     ["projects", "delete", "p"],
     ["projects", "versions", "p"],
     ["projects", "promote", "p", "v1"],

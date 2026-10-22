@@ -15,7 +15,7 @@ def datums(n: int = 2) -> list[endor.Datum]:
 
 def test_long_poll_until_completed(client: endor.EndorClient, fake: FakeEndor) -> None:
     fake.future_polls = 3
-    run = client.runs.create("jev-9b")
+    run = client.runs.create("autotrust/jev-9b")
     fut = run.forward(datums())
     assert not fut.done() and fut.info is None
     out = fut.result()
@@ -29,7 +29,7 @@ def test_long_poll_until_completed(client: endor.EndorClient, fake: FakeEndor) -
 
 def test_timeout_leaves_the_operation_running(client: endor.EndorClient, fake: FakeEndor) -> None:
     fake.future_polls = 10**6
-    run = client.runs.create("jev-9b")
+    run = client.runs.create("autotrust/jev-9b")
     fut = run.forward(datums())
     with pytest.raises(TimeoutError, match=str(fut.id)):
         fut.result(timeout=0.01)
@@ -41,7 +41,7 @@ def test_timeout_leaves_the_operation_running(client: endor.EndorClient, fake: F
 
 def test_cancel(client: endor.EndorClient, fake: FakeEndor) -> None:
     fake.future_polls = 5
-    run = client.runs.create("jev-9b")
+    run = client.runs.create("autotrust/jev-9b")
     fut = run.forward(datums())
     fut.cancel()
     assert fake.requests[-1].path == f"/v1/futures/{fut.id}/cancel"
@@ -58,7 +58,7 @@ def test_cancel(client: endor.EndorClient, fake: FakeEndor) -> None:
 
 def test_gather_uses_one_retrieve_per_round(client: endor.EndorClient, fake: FakeEndor) -> None:
     fake.future_polls = 2
-    run = client.runs.create("jev-9b")
+    run = client.runs.create("autotrust/jev-9b")
     fb = run.forward_backward(datums(3))
     opt = run.optim_step(learning_rate=1e-3)
     out, step = endor.gather(fb, opt)
@@ -72,7 +72,7 @@ def test_gather_uses_one_retrieve_per_round(client: endor.EndorClient, fake: Fak
 
 def test_gather_reports_the_first_failure_after_all_settle(client: endor.EndorClient, fake: FakeEndor) -> None:
     fake.future_polls = 1
-    run = client.runs.create("jev-9b")
+    run = client.runs.create("autotrust/jev-9b")
     a = run.forward_backward(datums())
     b = run.optim_step()
     fake.fail_future(a.id or "", "oom", "out of memory")
@@ -84,7 +84,7 @@ def test_gather_reports_the_first_failure_after_all_settle(client: endor.EndorCl
 
 async def test_await_and_gather_async(client: endor.EndorClient, fake: FakeEndor) -> None:
     fake.future_polls = 2
-    run = client.runs.create("jev-9b")
+    run = client.runs.create("autotrust/jev-9b")
     fb = await run.forward_backward_async(datums())
     opt = await run.optim_step_async()
     out = await fb
@@ -111,7 +111,7 @@ def test_missing_future_is_not_found(client: endor.EndorClient) -> None:
 
 def test_many_leaves_are_chunked(client: endor.EndorClient, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(endor.futures, "MAX_FUTURES_PER_RETRIEVE", 2)
-    run = client.runs.create("jev-9b")
+    run = client.runs.create("autotrust/jev-9b")
     futs = [run.forward(datums(1)) for _ in range(5)]
     outs = endor.gather(*futs)
     assert [o.metrics["n"] for o in outs] == [2] * 5
@@ -134,7 +134,7 @@ def step_calls(fake: FakeEndor) -> list[str]:
 
 
 def test_steps_send_the_next_step_before_reading_the_last(client: endor.EndorClient, fake: FakeEndor) -> None:
-    with client.runs.create("jev-9b") as run:
+    with client.runs.create("autotrust/jev-9b") as run:
         calls = len(step_calls(fake))  # the run's ready future
         steps = endor.Steps()  # 2 in flight
         assert steps.add(*one_step(run)) == [] and len(steps) == 1
@@ -152,7 +152,7 @@ def test_steps_send_the_next_step_before_reading_the_last(client: endor.EndorCli
 
 
 def test_steps_with_one_in_flight_wait_for_each_step(client: endor.EndorClient, fake: FakeEndor) -> None:
-    with client.runs.create("jev-9b") as run:
+    with client.runs.create("autotrust/jev-9b") as run:
         calls = len(step_calls(fake))
         steps = endor.Steps(in_flight=1)
         assert [opt.step for _, opt in steps.add(*one_step(run))] == [1]
@@ -164,7 +164,7 @@ def test_steps_with_one_in_flight_wait_for_each_step(client: endor.EndorClient, 
 
 
 def test_a_failed_step_raises_where_it_is_read(client: endor.EndorClient, fake: FakeEndor) -> None:
-    with client.runs.create("jev-9b") as run:
+    with client.runs.create("autotrust/jev-9b") as run:
         steps = endor.Steps()
         steps.add(*one_step(run))
         fb, opt = one_step(run)
@@ -178,7 +178,7 @@ def test_a_failed_step_raises_where_it_is_read(client: endor.EndorClient, fake: 
 
 async def test_steps_async(client: endor.EndorClient, fake: FakeEndor) -> None:
     fake.future_polls = 1
-    async with client.runs.create("jev-9b") as run:
+    async with client.runs.create("autotrust/jev-9b") as run:
         steps = endor.Steps()
         read = []
         for _ in range(3):

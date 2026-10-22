@@ -92,7 +92,7 @@ def _base_models(bases: list[BaseModelInfo]) -> None:
     if not bases:
         print("No base models")
         return
-    rows = [("id", "index rank", "tokens/s", "context", "$/1M tokens", "meant for"), *map(_base_model_row, bases)]
+    rows = [("id", "rank", "tokens/s", "context", "$/1M tokens", "meant for"), *map(_base_model_row, bases)]
     widths = [max(len(r[i]) for r in rows) for i in range(5)]
     for r in rows:
         cells = [r[0].ljust(widths[0]), *(r[i].rjust(widths[i]) for i in range(1, 5)), r[5]]
@@ -145,7 +145,9 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_parser("list")
     pc = pr.add_parser("create")
     pc.add_argument("name")
-    pc.add_argument("--base-model", required=True, metavar="BASE", help="the base model it learns on, e.g. decider-2b")
+    pc.add_argument(
+        "--base-model", required=True, metavar="BASE", help="the base model it learns on, e.g. mapika/decider-2b"
+    )
     pr.add_parser("delete").add_argument("name")
     pr.add_parser("versions").add_argument("name")
     pp = pr.add_parser("promote")
@@ -185,7 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
     runs.add_parser("show").add_argument("run_id")
     runs.add_parser("close").add_argument("run_id")
     ev = sub.add_parser("eval")
-    ev.add_argument("model", help="a custom model's name or a base model id")
+    ev.add_argument("model", help="a custom model's name or a base model's id (owner/model)")
     ev.add_argument("dataset")
     us = sub.add_parser("usage")
     us.add_argument("--start", required=True, help="ISO date or datetime")

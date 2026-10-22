@@ -56,7 +56,7 @@ class SupervisedConfig:
     model_name: str | None = None
     """The custom model's name: unique in the organization, and free (``ConflictError`` otherwise). Default
     ``"<name or sft>-<timestamp>"``."""
-    base_model: str = "decider-2b"
+    base_model: str = "mapika/decider-2b"
     """The base model the run trains on; ``eval_base`` and replay rows score the untuned base."""
     rank: int = 16
     learning_rate: float = 1e-4

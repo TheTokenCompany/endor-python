@@ -50,7 +50,7 @@ import endor
 from endor import Choice, Noul, Score
 
 client = endor.EndorClient()
-project = client.projects.get_or_create("tickets", base_model="decider-2b")   # the base model is chosen once
+project = client.projects.get_or_create("tickets", base_model="mapika/decider-2b")   # the base model is chosen once
 
 res = client.system_one(
     {"subject": "Charged twice", "body": "I was billed two times for my March invoice."},
@@ -147,10 +147,16 @@ client.corrections.create(res, {
 
 ## Decisions
 
-`model` is `"<project>"`, `"<project>:preview"` (while the project has a preview) or the name of a custom model in production. A bare base model id such as
-`"decider-2b"` raises `ModelRequiresProjectError` (422 `model_requires_project`): create a project on it. There is no
-default model: pass `model=` or set one with `EndorClient(model="tickets")` or `ENDOR_DEFAULT_MODEL`, else
-`system_one` raises `EndorError` before sending anything.
+`model` is `"<project>"`, `"<project>:preview"` (while the project has a preview), the name of a custom model in
+production, or a base model's id. There is no default model: pass `model=` or set one with
+`EndorClient(model="tickets")` or `ENDOR_DEFAULT_MODEL`, else `system_one` raises `EndorError` before sending anything.
+
+**Base models directly.** Call a base model by its id, `owner/model` as on Hugging Face (`client.base_models()` lists
+them), at its listed price, `price_per_mtok_decide`:
+
+```python
+client.system_one(state, questions, model="mapika/decider-2b")
+```
 
 Questions can also be plain dicts in the same shape. Every question is answered independently against the same
 state. Refer to parts of the state with backticked paths, as in ``"Is `body` angry?"``.
@@ -189,10 +195,10 @@ client.system_one(state, {"pay": Noul(instructions="Is the Pay button visible?")
 Images are for decisions only: training data (datasets, datums, evaluation and prediction rows) is text and JSON, and
 the API refuses images there (422).
 
-**The catalog.** `client.models.list()` returns every name you can pass as `model` (`GET /v1/models`): for each
+**The catalog.** `client.models.list()` returns your own names you can pass as `model` (`GET /v1/models`): for each
 project `"<project>"` and, while it has a preview, `"<project>:preview"`, then every custom model in production (`.kind` is
 `project` or `custom`; `.environment` is `production` or `preview` for a project's names). `client.base_models()` returns the base models (`GET /v1/base_models`) with their option limits,
-`modalities`, `hf_repo`, `contract` and prices (`price_per_mtok_decide` for custom models,
+`modalities`, `hf_repo`, `contract` and prices (`price_per_mtok_decide` for the base itself and custom models,
 `price_per_mtok_decide_continuous_learning` for projects, `price_per_gpu_hour` for training).
 
 To choose a base model, compare what each is meant for, its ranks, speed, context and price:
@@ -214,7 +220,7 @@ rank on that use case is in the board's top quarter. `endor base-models` prints 
 
 **Many rows at once.** `client.predict(model, rows)` returns the answers to every question of every row, in the rows'
 order, from one server-side evaluation of them: nothing to upload, nothing scored, billed as the same decisions.
-`model` is a custom model's name (in production or archived) or a base model id. Rows are `{"state", "questions"}` (any shape
+`model` is a custom model's name (in production or archived) or a base model's id. Rows are `{"state", "questions"}` (any shape
 `client.datasets.upload` takes; labels are ignored), at most 50,000 and 32 MB per call. While it runs it prints a
 progress line every 10 seconds (`progress=False` turns it off); `timeout=` bounds the wait. An unknown model raises
 `NotFoundError` (404 `unknown_model`).
@@ -266,7 +272,7 @@ model with its own name, unique in the organization together with your projects.
 **promote** it to **production**:
 
 ```python
-with client.custom_models.create("router-2", base_model="decider-2b") as run:   # a run that saves as "router-2"
+with client.custom_models.create("router-2", base_model="mapika/decider-2b") as run:   # a run that saves as "router-2"
     ...                                          # forward_backward, optim_step (below), or use the recipe
     run.save_checkpoint().result()               # "router-2", in the archive
 client.custom_models.promote("router-2")         # production: model="router-2" answers
@@ -295,7 +301,7 @@ client.custom_models.archive("router-2")         # back to the archive: decision
 ```python
 client.datasets.upload("train", endor.data.load_rows("train.jsonl"))     # rows: see "Data format"
 client.datasets.upload("heldout", endor.data.load_rows("heldout.jsonl"))
-client.evaluations.create("decider-2b", "heldout").result()              # the untuned base, as a baseline
+client.evaluations.create("mapika/decider-2b", "heldout").result()       # the untuned base, as a baseline
 client.evaluations.create("router-2", "heldout").result()                # a custom model, in production or not
 client.evaluations.create("router-2", rows=more_rows).result()          # or rows sent with the call, no dataset
 ```
@@ -317,7 +323,7 @@ during a long run, give each its own name, e.g. `run.save_checkpoint(f"router-ck
 ```python
 from endor.recipes import SupervisedConfig, supervised
 
-cfg = SupervisedConfig(model_name="router-2")   # base_model="decider-2b" by default
+cfg = SupervisedConfig(model_name="router-2")   # base_model="mapika/decider-2b" by default
 result = supervised.train(cfg, endor.data.load_rows("train.jsonl"))
 
 result.base_metrics["accuracy"], result.final_metrics["accuracy"]   # held-out: the untuned base, then yours
@@ -373,7 +379,7 @@ rows = endor.data.load_rows("train.jsonl")
 train, heldout = endor.data.split(rows, holdout=0.1)
 train, heldout = endor.data.rows_to_datums(train), endor.data.rows_to_datums(heldout)
 
-with client.custom_models.create("router-2", base_model="decider-2b", rank=16) as run:
+with client.custom_models.create("router-2", base_model="mapika/decider-2b", rank=16) as run:
     steps = endor.Steps()                           # keeps 2 steps in flight
     for batch in endor.data.batches(train, 16):
         fb = run.forward_backward(batch)            # gradients accumulate on the trainer
@@ -484,8 +490,8 @@ Every API error is an `endor.APIError` subclass named after its status (`NotFoun
 `InsufficientBalanceError` (402, `insufficient_balance`) means your org's balance is used up: add credit in the
 dashboard. A few codes have their own subclass: `LimitReachedError` (409 `limit_reached`) and its
 `ProductionFullError` (409 `production_full`), `ModelNotInProductionError` (409 `model_not_in_production`) and
-`ModelInProductionError` (409 `model_in_production`), all `ConflictError`s; `NoPreviewError` (404 `no_preview`) and `VersionNotCallableError`
-(404 `version_not_callable`), both `NotFoundError`s; and `ModelRequiresProjectError` (422 `model_requires_project`), an `UnprocessableEntityError`. A training operation that fails on the trainer raises `OperationFailedError` from `.result()`, with codes
+`ModelInProductionError` (409 `model_in_production`), all `ConflictError`s; and `NoPreviewError` (404 `no_preview`) and
+`VersionNotCallableError` (404 `version_not_callable`), both `NotFoundError`s. A training operation that fails on the trainer raises `OperationFailedError` from `.result()`, with codes
 such as `oom`, `no_gradients` or `trainer_lost`. Connection problems raise `APIConnectionError` and
 `APITimeoutError`. A successful response whose body doesn't have the expected shape raises `ResponseValidationError`
 (an `APIError`) naming the endpoint and the field, from every method.
@@ -588,9 +594,9 @@ endor user-report "what you did, what happened, what you expected" [--kind bug|c
 ```
 
 Projects are continuous learning projects; custom models are the ones you train with the SDK. `MODEL` in `eval` is a
-custom model's name or a base model id; `eval` prints the accuracy overall and per question. `endor base-models` prints
+custom model's name or a base model's id (`owner/model`); `eval` prints the accuracy overall and per question. `endor base-models` prints
 one line per base model: its Decision Index rank (`=` marks a tie), `tokens/s`, context (`max_question_tokens`), price
-per 1M input tokens of a custom model on it, and what it is meant for. `endor whoami` also
+per 1M input tokens (called directly, or a custom model on it), and what it is meant for. `endor whoami` also
 shows the org's balance (`balance_usd`), whether it has continuous learning (`continuous_learning`) and its limits. Every command takes `-f json` (or `--format json`), before or after the command (`endor -f json whoami` or `endor whoami -f json`), and needs `ENDOR_API_KEY`, `endor user-report` too. Training itself happens in Python. `endor runs close`
 frees a slot when a script left a run open. `usage --csv` columns are `hour, kind, project, base_model, model,
 training_run_id, input_tokens, gpu_seconds, continuous_learning, price_per_mtok, base_cost_usd,
@@ -618,7 +624,7 @@ decisions; a custom model's decisions have no project.
 | `endor.recipes.supervised` | `SupervisedConfig`, `SupervisedResult`, `train(cfg, rows, eval_rows=None, client=None)`, `evaluate_run(run, datums)`, `evaluate_model(client, model, rows)`, `lr_at(cfg, step, total)` |
 | `endor.recipes.distill` | `Teacher` (protocol), `DistillConfig(supervised, teacher, budget, seed)`, `label_with_teacher(rows, cfg)`, `distill(cfg, unlabeled_rows, eval_rows, client=None)` |
 | Types | `Noul`, `Choice`, `Score`, `NoulCriteria`; `NoulAnswer`, `ChoiceAnswer`, `ScoreAnswer`, `SystemOneResponse`, `Usage`, `ModelMetadata`, `ListModelsResponse`, `BaseModelInfo`, `DecisionIndexInfo`; `Datum`, `DecisionRow`, `Target`, `LoraConfig`, `AdamParams`, `ForwardOutput`, `OptimStepOutput`; `CorrectionInfo`, `QuestionCorrectionInfo`, `QuestionCorrection`, `CorrectionAnswer`; `ProjectInfo`, `VersionInfo`, `Learning`, `Training`, `Drift`, `CustomModelInfo`, `RunInfo`, `LoraInfo`, `DatasetInfo`, `Evaluation`, `MetricPoint`, `DownloadedFile`, `UsageRow`, `WhoAmI`; helpers `option_keys`, `answer_probabilities`, `question_dict` |
-| Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError` (`NoPreviewError`, `VersionNotCallableError`), `ConflictError` (`LimitReachedError` > `ProductionFullError`, `ModelNotInProductionError`, `ModelInProductionError`), `PayloadTooLargeError`, `UnprocessableEntityError` (`ModelRequiresProjectError`), `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
+| Errors | `EndorError`; `APIError` with `BadRequestError`, `AuthenticationError`, `InsufficientBalanceError`, `PermissionDeniedError`, `NotFoundError` (`NoPreviewError`, `VersionNotCallableError`), `ConflictError` (`LimitReachedError` > `ProductionFullError`, `ModelNotInProductionError`, `ModelInProductionError`), `PayloadTooLargeError`, `UnprocessableEntityError`, `RateLimitError`, `OverloadedError`, `InternalServerError`, `ResponseValidationError`; `APIConnectionError`, `APITimeoutError`; `OperationFailedError` |
 
 Every public member has a docstring with the details.
 

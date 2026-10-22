@@ -27,7 +27,6 @@ from endor import (
     InternalServerError,
     LimitReachedError,
     ModelNotInProductionError,
-    ModelRequiresProjectError,
     NotFoundError,
     OverloadedError,
     PayloadTooLargeError,
@@ -128,7 +127,7 @@ class TestRetries:
         monkeypatch.setattr("endor._http.time", fake_time)
         monkeypatch.setattr("endor._retry.time", fake_time)
         c = EndorClient(api_key=API_KEY, base_url=BASE_URL, transport=httpx.MockTransport(handler))
-        name = c.projects.create(unique("cold"), base_model="jev-9b").name
+        name = c.projects.create(unique("cold"), base_model="autotrust/jev-9b").name
         fake.fail_next.append(HTTPError(503, "warming_up", "the model is starting", headers={"retry-after": "30"}))
         assert c.system_one("x", {"u": endor.Noul()}, model=name).nouls["u"].noul == 0.5
         assert timeouts == [30.0, 330.0, 330.0] and clock[0] == 630
@@ -142,7 +141,7 @@ class TestRetries:
             client.models.list(retry=RetryPolicy(max_retries=0))
 
     async def test_async_retries(self, client: EndorClient, fake: FakeEndor) -> None:
-        name = client.projects.create(unique("retry"), base_model="jev-9b").name
+        name = client.projects.create(unique("retry"), base_model="autotrust/jev-9b").name
         fake.requests.clear()
         fake.fail_next += [HTTPError(502, "bad_gateway", "x"), httpx.ConnectError("y")]
         res = await client.system_one_async("x", {"u": endor.Noul()}, model=name)
@@ -242,7 +241,6 @@ class TestErrors:
             (409, "model_not_in_production", ModelNotInProductionError, ConflictError),
             (409, "model_in_production", endor.ModelInProductionError, ConflictError),
             (404, "no_preview", endor.NoPreviewError, NotFoundError),
-            (422, "model_requires_project", ModelRequiresProjectError, UnprocessableEntityError),
             (409, "conflict", ConflictError, ConflictError),
         ],
     )
@@ -252,10 +250,10 @@ class TestErrors:
 
     def test_limit_reached_from_the_api(self, client: EndorClient, fake: FakeEndor) -> None:
         for _ in range(int(LIMITS["max_projects_per_org"]) - len(fake.projects)):
-            client.projects.create(unique("lim"), base_model="jev-9b")
+            client.projects.create(unique("lim"), base_model="autotrust/jev-9b")
         n = len(fake.requests)
         with pytest.raises(LimitReachedError) as e:
-            client.projects.create(unique("lim"), base_model="jev-9b")
+            client.projects.create(unique("lim"), base_model="autotrust/jev-9b")
         assert isinstance(e.value, ConflictError) and e.value.status == 409 and "maximum of 5" in str(e.value)
         assert len(fake.requests) == n + 1  # not retried
 
@@ -327,7 +325,7 @@ class TestEncoding:
         self, client: EndorClient, fake: FakeEndor, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(endor._constants, "LIST_PAGE_SIZE", 2)
-        names = {client.projects.create(f"page-{i}", base_model="jev-9b").name for i in range(5)}
+        names = {client.projects.create(f"page-{i}", base_model="autotrust/jev-9b").name for i in range(5)}
         assert {p.name for p in client.projects.list()} == names
         pages = [r.params for r in fake.requests if r.method == "GET" and r.path == "/v1/projects"]
         assert [p["offset"] for p in pages] == ["0", "2", "4"]

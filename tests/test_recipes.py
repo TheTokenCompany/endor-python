@@ -40,12 +40,12 @@ def test_supervised_train(client: EndorClient, fake: FakeEndor) -> None:
     lrs = [r.body["adam_params"]["learning_rate"] for r in fake.requests if r.path.endswith("/optim_step")]
     assert len(lrs) == 9 and lrs[0] < lrs[1] and lrs[-1] < lrs[1]
     assert fake.models[r.model]["step"] == 9 and fake.models[r.model]["live_at"] is None
-    assert fake.runs[r.run_id]["base_model"] == cfg.base_model == "decider-2b"  # the default
+    assert fake.runs[r.run_id]["base_model"] == cfg.base_model == "mapika/decider-2b"  # the default
     assert requests_to(fake, "/v1/runs", "POST")[-1].body["model"] == "final"
     base_calls = [x.body["model"] for x in requests_to(fake, "/v1/evaluations", "POST")]
-    assert base_calls == ["decider-2b"]  # the untuned base, scored server-side in one prediction
+    assert base_calls == ["mapika/decider-2b"]  # the untuned base, scored server-side in one prediction
     assert not requests_to(fake, "/v1/systemone")
-    assert {e.model for e in evals} >= {"decider-2b"}
+    assert {e.model for e in evals} >= {"mapika/decider-2b"}
 
 
 def test_supervised_sends_the_next_step_before_reading_the_last(client: EndorClient, fake: FakeEndor) -> None:
@@ -94,16 +94,16 @@ def test_supervised_raises_a_failed_step_at_that_step(
 
 
 def test_supervised_trains_on_its_base_model(client: EndorClient, fake: FakeEndor) -> None:
-    cfg = SupervisedConfig(model_name="v1", base_model="jev-9b", batch_size=8)
+    cfg = SupervisedConfig(model_name="v1", base_model="autotrust/jev-9b", batch_size=8)
     r = supervised.train(cfg, rows(10), eval_rows=rows(2), client=client)
-    assert r.model == "v1" and fake.runs[r.run_id]["base_model"] == "jev-9b"
-    assert {x.body["model"] for x in requests_to(fake, "/v1/evaluations", "POST")} == {"jev-9b"}
+    assert r.model == "v1" and fake.runs[r.run_id]["base_model"] == "autotrust/jev-9b"
+    assert {x.body["model"] for x in requests_to(fake, "/v1/evaluations", "POST")} == {"autotrust/jev-9b"}
     client.custom_models.promote(r.model)  # live: decisions call it by its name
     assert client.system_one("x", {"d": DEPT}, model=r.model).model == "v1"
 
 
 def test_supervised_refuses_a_taken_name(client: EndorClient) -> None:
-    taken = client.projects.create(unique("sl"), base_model="jev-9b").name
+    taken = client.projects.create(unique("sl"), base_model="autotrust/jev-9b").name
     with pytest.raises(endor.ConflictError):
         supervised.train(SupervisedConfig(model_name=taken, eval_base=False), rows(10), client=client)
 
@@ -188,7 +188,7 @@ def test_lr_schedule() -> None:
 
 
 def test_evaluate_model(client: EndorClient) -> None:
-    m = supervised.evaluate_model(client, "jev-9b", rows(3))  # a base model, or a custom model live or not
+    m = supervised.evaluate_model(client, "autotrust/jev-9b", rows(3))  # a base model, or a custom model live or not
     assert m["n"] == 6 and m["accuracy"] in (0.0, 0.5, 1.0) or 0 <= m["accuracy"] <= 1
 
 

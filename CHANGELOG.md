@@ -16,24 +16,30 @@ and there is no preview. While its base model answers, a project's decisions rep
 
 | 0.8.0 | 0.9.0 |
 |---|---|
-| `client.projects.create(name, kind="managed", base_models=["decider-2b"])` | `client.projects.create(name, base_model="decider-2b")`: every project is a continuous learning project, on one base model chosen once. `kind=` and `base_models=` raise a `TypeError` that says this. |
+| `client.projects.create(name, kind="managed", base_models=["decider-2b"])` | `client.projects.create(name, base_model="mapika/decider-2b")`: every project is a continuous learning project, on one base model chosen once. `kind=` and `base_models=` raise a `TypeError` that says this. |
 | `kind="custom"` projects, `project.datasets`, `project.runs`, `project.models`, `project.evaluate`, `project.evaluations` | `client.datasets`, `client.runs`, `client.custom_models`, `client.evaluations.create` and `client.evaluations.list`, at the organization's level |
 | `model="tickets/v1"` (a saved model), `"tickets/decider-2b"` (a project's base model) | a custom model is called by its name, `model="router-2"`, once promoted to production (`client.custom_models.promote("router-2")`); a project is `model="tickets"` (its production version) or `"tickets:preview"` (a newer version not in production yet, while there is one). The `<project>/<name>` form no longer resolves. |
 | `run.save_checkpoint("v1")` → `"tickets/v1"`, callable at once | `run.save_checkpoint("router-2")` → `"router-2"`, saved to the archive: promote it to production to call it. `client.custom_models.create("router-2", base_model=...)` opens a run whose `save_checkpoint()` (no name) saves under that name. Each save is a new model; names are unique in the organization with the projects. |
-| `project.runs.create()` on the project's first base model | `client.runs.create("decider-2b")` (or `from_model=`): a base model is required |
+| `project.runs.create()` on the project's first base model | `client.runs.create("mapika/decider-2b")` (or `from_model=`): a base model is required |
 | `project.add_base_model`, `project.remove_base_model`, `ProjectInfo.kind`, `.base_models`, `.n_datasets`, `.n_runs`, `.n_models`, `.wandb`, `project.update(wandb=...)`, `WandbSettings` | gone. `ProjectInfo` has `base_model`, `production`, `preview`, `auto_promote`, `promoted_at`, `versions` (and `Project` has `.production` and `.preview`). Runs log to Weights & Biases when the organization has connected it (`runs.create(wandb=False)` turns it off per run). |
 | `ModelInfo` (`id`, `kind`, `project`) | `CustomModelInfo` (`name`, `state` production or archived, `production`, `promoted_at`, ...) and, for a project's versions, `VersionInfo` |
 | `RunInfo.project`, `Run.project`, `DatasetInfo.project`, `Evaluation.project` | gone; `RunInfo.model` / `Run.model` is the custom model name a save uses |
 | `WhoAmI.managed_projects` | gone; `limits` has `max_projects_per_org`, `max_production_models_per_org`, `max_custom_models_per_org` and `max_datasets_per_org` |
 | `ModelMetadata.kind` `project`, `base` or `model` | `project` or `custom`; `ModelMetadata.environment` is `production` or `preview` for a project's names |
+| Base model ids such as `"decider-2b"` | `owner/model`, as on Hugging Face: `"mapika/decider-2b"`, `"perplexity-ai/pplx-decider-v1.1-27b"` (`BaseModelInfo.id`), in `base_model=`, `model=` and every response field that names a base. Until 2026-11-30 the API still takes a bare id as `base_model` (projects, training, evaluations), with `Deprecation` headers; a bare `model="decider-2b"` in a decision is 404 `unknown_model`, whose message names the public id. |
+| `ModelRequiresProjectError` (422 `model_requires_project`, a base model id as a decision's `model`) | gone: a base model is called directly by its id, `model="mapika/decider-2b"` |
 | `NoBaseModelError`, `WrongProjectKindError` | gone (they can't happen any more) |
 | `BaseModelInfo.trainer_gpu` | gone: Endor doesn't say which GPU runs a job, and the API doesn't send it |
-| `client.predict("tickets/v1", rows)` | `client.predict("router-2", rows)`: a custom model (in production or archived) or a base model id |
+| `client.predict("tickets/v1", rows)` | `client.predict("router-2", rows)`: a custom model (in production or archived) or a base model's id |
 | `SupervisedConfig(project="tickets", model_name="v1")` | `SupervisedConfig(model_name="router-2")`: the recipe saves a custom model to the archive; it scores the untuned base with one server-side prediction |
 | CLI `endor models ...`, `datasets list PROJECT`, `runs list PROJECT`, `eval PROJECT MODEL DATASET`, `projects add-base-model` | `endor custom-models ...`, `datasets list`, `runs list`, `eval MODEL DATASET`; `projects versions`, `promote`, `auto-promote` are new |
 
 ### Added
 
+- Base models are called directly by their `owner/model` id, by any organization, at their listed price
+  (`price_per_mtok_decide`): `client.system_one(state, questions, model="mapika/decider-2b")`.
+  `SupervisedConfig.base_model` defaults to `"mapika/decider-2b"`, and `projects.get_or_create` takes an existing
+  project's base by its bare id too while the API accepts one.
 - Continuous learning projects like deployments: `project.ref` (`"tickets"`) and `project.preview_ref`
   (`"tickets:preview"`, None while the project has no preview); `project.versions() -> list[VersionInfo]` (newest
   first, `production`, `preview`, never both, `accuracy`, `loss`); `project.promote(version)` (to production;

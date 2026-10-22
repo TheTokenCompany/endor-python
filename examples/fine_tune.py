@@ -12,7 +12,7 @@ from endor.recipes import SupervisedConfig, supervised
 
 rows = endor.data.load_rows(sys.argv[1] if len(sys.argv) > 1 else "rows.jsonl")
 
-cfg = SupervisedConfig(model_name="router-1", base_model="decider-2b", eval_every=10)
+cfg = SupervisedConfig(model_name="router-1", base_model="mapika/decider-2b", eval_every=10)
 result = supervised.train(cfg, rows)
 
 print("model:", result.model)

@@ -34,13 +34,13 @@ def raises_shape_error(call: Callable[[], Any], endpoint: str, field: str) -> en
 def test_projects(client: endor.EndorClient, fake: FakeEndor) -> None:
     bad(fake, {"name": "tickets"})
     raises_shape_error(lambda: client.projects.get("tickets"), "GET /v1/projects/tickets", "base_model")
-    p = client.projects.create("tickets", base_model="jev-9b")
+    p = client.projects.create("tickets", base_model="autotrust/jev-9b")
     bad(fake, {"status": "learning"})
     raises_shape_error(p.learning, "GET /v1/projects/tickets/learning", "serving")
 
 
 def test_custom_models(client: endor.EndorClient, fake: FakeEndor) -> None:
-    bad(fake, {"items": [{"name": "router-2", "base_model": "jev-9b", "created_at": "never"}], "total": 1})
+    bad(fake, {"items": [{"name": "router-2", "base_model": "autotrust/jev-9b", "created_at": "never"}], "total": 1})
     raises_shape_error(client.custom_models.list, "GET /v1/custom_models", "created_at")
 
 
@@ -50,7 +50,7 @@ def test_datasets(client: endor.EndorClient, fake: FakeEndor) -> None:
 
 
 def test_evaluations(client: endor.EndorClient, fake: FakeEndor) -> None:
-    bad(fake, {"id": "evl_1", "model": "jev-9b"})
+    bad(fake, {"id": "evl_1", "model": "autotrust/jev-9b"})
     raises_shape_error(lambda: client.evaluations.get("evl_1"), "GET /v1/evaluations/evl_1", "source")
 
 
@@ -71,7 +71,7 @@ def test_corrections(client: endor.EndorClient, fake: FakeEndor, decider: str) -
 
 def test_futures(client: endor.EndorClient, fake: FakeEndor) -> None:
     datum = Datum(state="x", question=Noul(instructions="?"), target=Target(label="true"))
-    with client.runs.create("jev-9b") as run:
+    with client.runs.create("autotrust/jev-9b") as run:
         f = run.forward([datum])
         bad(fake, {"id": f.id, "status": "completed", "result": {"outputs": "none"}})  # the future's result
         e = raises_shape_error(f.result, f"GET /v1/futures/{f.id}", "outputs")
