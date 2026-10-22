@@ -62,7 +62,7 @@ GEV: dict[str, Any] = {
         "source_url": "https://huggingface.co/autotrust/GEV-26B-Decide",
         "rank": 14,
         "tied": True,
-        "meant_for": ["Code", "Documents and email", "Finance", "Agents", "Real-time"],
+        "meant_for": ["Code", "Documents and email", "Finance", "Agents"],
         "use_case_ranks": {"Code": 13, "Finance": 17.2, "Documents and email": 16.2, "Agents": 28},
         "task_ranks": {"function-call decisions": 38, "phishing detection": 13, "reading contracts": 5},
         "note": None,
@@ -161,7 +161,7 @@ OLDER: dict[str, Any] = {
 TABLE = """\
 id                     index rank  tokens/s  context  $/1M tokens  meant for
 pplx-decider-v1.1-27b       1/117     5,921   16,384        $0.02  Code, Agents, Documents and email, Finance
-gev-26b                   =14/117    13,791   16,384       $0.042  Code, Documents and email, Finance, Agents, Real-time
+gev-26b                   =14/117    13,791   16,384       $0.042  Code, Documents and email, Finance, Agents
 decider-2b                =81/117    45,417   16,384       $0.007  -
 jev-9b                          -         -   16,384        $0.02  -
 """
@@ -195,7 +195,8 @@ def test_decision_index_and_speed() -> None:
     assert (i.edition, i.updated) == ("Decision Index 0.3.1", "2026-10-10")
     assert i.model_dump() == PPLX["decision_index"]  # every field the API sends
     assert (pplx.tokens_per_s, pplx.tokens_per_s_source) == (5921, "Measured on real traffic")
-    assert gev.decision_index and gev.decision_index.tied and "Real-time" in gev.decision_index.meant_for
+    assert gev.decision_index and gev.decision_index.tied
+    assert gev.decision_index.meant_for == ["Code", "Documents and email", "Finance", "Agents"]
     assert small.decision_index and small.decision_index.meant_for == []
     assert small.decision_index.note == "The index ran it in FP8; Endor serves the bf16 weights."
     assert small.tokens_per_s == 45417

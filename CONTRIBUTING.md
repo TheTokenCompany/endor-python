@@ -15,15 +15,18 @@ pytest
 ```
 
 The test suite runs against an in-memory fake of the API (`tests/fake_api.py`), so it needs no credentials and
-finishes in a couple of seconds. To run the same suite against a real API (tests that need the fake itself are
-skipped):
+finishes in a few seconds. Most tests check what the fake saw or make it fail, so the suite as a whole doesn't run
+against a real API. `tests/test_integration.py` does, and is skipped unless you point it at one:
 
 ```bash
-ENDOR_TEST_BASE_URL=http://localhost:8000 ENDOR_TEST_API_KEY=edk_... pytest
+ENDOR_TEST_BASE_URL=http://localhost:8000 ENDOR_TEST_API_KEY=edk_... pytest tests/test_integration.py
 ```
 
-Every test must close every run it opens (`with client.runs.create(...) as run:`): the API allows 4 open runs per
-org, and the suite fails a test that leaves one open.
+CI runs the checks on Python 3.10 to 3.14.
+
+Every test must close every run it opens (`with client.runs.create(...) as run:`): the suite fails a test that leaves
+one open. Open runs count toward an org's limit, in the fake (4) as in the API (25 by default;
+`client.whoami().limits["max_active_runs"]` has an org's own).
 
 ## Releasing
 

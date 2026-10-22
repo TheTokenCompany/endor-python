@@ -13,7 +13,7 @@
     endor user-report "what you did, what happened, what you expected" [--kind bug|confusing|works] [--request-id REQ]
 
 Projects are continuous learning projects; custom models are the ones you train with the SDK. Every command takes
--f json. Credentials: ENDOR_API_KEY (and ENDOR_BASE_URL).
+-f json (or --format json), before or after the command. Credentials: ENDOR_API_KEY (and ENDOR_BASE_URL).
 """
 
 from __future__ import annotations
@@ -115,9 +115,28 @@ def _base_model_row(b: BaseModelInfo) -> tuple[str, str, str, str, str, str]:
     )
 
 
+FORMATS = ["table", "json"]
+
+
+class _Subcommands(argparse._SubParsersAction):  # type: ignore[type-arg]
+    """Subcommands that take ``-f/--format`` too, so it goes before or after any subcommand (``endor -f json whoami``,
+    ``endor whoami -f json``). Given after, it overrides the one before."""
+
+    def add_parser(self, name: str, **kwargs: Any) -> argparse.ArgumentParser:
+        parser: argparse.ArgumentParser = super().add_parser(name, **kwargs)
+        parser.register("action", "parsers", _Subcommands)
+        _format_option(parser, argparse.SUPPRESS)  # not given here: the value before the subcommand stays
+        return parser
+
+
+def _format_option(parser: argparse.ArgumentParser, default: str) -> None:
+    parser.add_argument("-f", "--format", choices=FORMATS, default=default, help="table (default) or json")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="endor", description="Endor CLI (training happens through the Python SDK)")
-    p.add_argument("-f", "--format", choices=["table", "json"], default="table")
+    p.register("action", "parsers", _Subcommands)
+    _format_option(p, "table")
     p.add_argument("--version", action="version", version=f"endor {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("whoami")

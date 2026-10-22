@@ -84,7 +84,7 @@ every new version goes to production as soon as it is ready instead:
 Promote any version yourself, for example to roll back:
 
 ```python
-project.versions()               # v1, v2, ... newest first: .production, .preview (never both), .accuracy, .loss
+project.versions()               # v1, v2, ... newest first: .production, .preview (never both), .accuracy (%), .loss
 project.promote("v3")            # v3 to production; a version older than the newest turns auto-promote off
 project.set_auto_promote(True)   # the newest goes to production at once, and every new version after it (off by default)
 project.info()                   # .production, .preview, .auto_promote, .promoted_at, .versions, .base_model
@@ -105,8 +105,14 @@ for t in learning.trainings:          # newest first: kept or not, with its accu
 learning.drift                        # per question, whether recent traffic changed
 ```
 
+A version's and a training's `accuracy` is in percent (`87.5`); custom models and evaluations give accuracy from 0 to
+1 (`0.875`).
+
 A project's decisions are billed at the base model's continuous-learning price (`client.base_models()`:
-`price_per_mtok_decide_continuous_learning`). An organization has up to 5 projects (`client.whoami().limits`). Names
+`price_per_mtok_decide_continuous_learning`). Continuous learning is turned on per organization:
+`client.whoami().continuous_learning` says whether yours has it (while it doesn't, projects and their decisions raise
+`PermissionDeniedError`, 403 `continuous_learning_not_enabled`). An organization has up to 5 projects
+(`client.whoami().limits`). Names
 are lowercase letters, digits, `.`, `_` or `-`, up to 63 characters, unique in the organization together with your
 custom models. `client.projects.list()`, `client.projects.get(name)`, `project.update(description=...)` and
 `project.delete()` do what they say.
@@ -134,8 +140,10 @@ client.corrections.create(res, {
   `client.corrections.delete(res)` withdraws it, and `client.corrections.batch([...])` sends up to 1,000 at once,
   all or nothing (`{"request_id", "questions", "comment"?}` each), for example to backfill decisions you checked
   earlier. Each has an `_async` variant. A decision is its `SystemOneResponse` or its id (`res.id`).
-- Corrections are free; only continuous learning projects learn from them. Endor records a decision a moment after it
-  answers, so a correction sent at once may raise `NotFoundError`: retry.
+- Corrections are free; only continuous learning projects learn from them.
+- Endor records a decision just after it answers, so a correction sent at once can find no decision yet. `create` and
+  `batch` then try again for up to 5 seconds before they raise `NotFoundError` (404 `not_found`), as they do for a
+  decision id Endor doesn't know.
 
 ## Decisions
 
@@ -178,13 +186,8 @@ client.system_one(state, {"pay": Noul(instructions="Is the Pay button visible?")
 ```
 
 `Image.from_bytes(data, media_type=None)` and `Image.from_pil(image, format="PNG")` (needs Pillow) build one too.
-
-The same objects go in training data on those base models: rows of `client.datasets.upload`, datums of
-`run.forward_backward`, rows of `run.predict` and `client.predict`. The SDK uploads each image once
-(`client.images.upload` does it by hand) and sends a reference, `{"type": "image", "sha256": ...}`; a call carries at
-most 128 images, so larger batches are split. Fine-tuning with images is in limited access: until your organization is
-approved these calls raise `PermissionDeniedError` (403 `image_training_not_enabled`; `client.whoami().image_training`
-says), and the message says how to ask.
+Images are for decisions only: training data (datasets, datums, evaluation and prediction rows) is text and JSON, and
+the API refuses images there (422).
 
 **The catalog.** `client.models.list()` returns every name you can pass as `model` (`GET /v1/models`): for each
 project `"<project>"` and, while it has a preview, `"<project>:preview"`, then every custom model in production (`.kind` is
@@ -207,14 +210,14 @@ for b in client.base_models():
 each use case's benchmarks), `task_ranks` (its rank on each public benchmark, by what it tests, for example
 `"phishing detection"`), `note` (where the index ran another form of the weights than Endor serves) and `url` (its
 scores on the index). `meant_for` holds `"Code"`, `"Agents"`, `"Documents and email"` and `"Finance"` where its mean
-rank on that use case is in the board's top quarter, and `"Real-time"` where Endor serves it fast and it still ranks
-well. `endor base-models` prints the same as a table.
+rank on that use case is in the board's top quarter. `endor base-models` prints the same as a table.
 
 **Many rows at once.** `client.predict(model, rows)` returns the answers to every question of every row, in the rows'
 order, from one server-side evaluation of them: nothing to upload, nothing scored, billed as the same decisions.
 `model` is a custom model's name (in production or archived) or a base model id. Rows are `{"state", "questions"}` (any shape
 `client.datasets.upload` takes; labels are ignored), at most 50,000 and 32 MB per call. While it runs it prints a
-progress line every 10 seconds (`progress=False` turns it off); `timeout=` bounds the wait.
+progress line every 10 seconds (`progress=False` turns it off); `timeout=` bounds the wait. An unknown model raises
+`NotFoundError` (404 `unknown_model`).
 
 ```python
 answers = client.predict("router-2", [{"state": t, "questions": questions} for t in new_tickets])
@@ -222,7 +225,8 @@ answers[0]["department"].choice           # "billing": each row's answers as sys
 ```
 
 **Async.** `await client.system_one_async(...)`, `await client.predict_async(...)` and
-`await client.models.list_async()`; `async with EndorClient()` closes the connections.
+`await client.models.list_async()`; `async with EndorClient()` closes the connections. One client works across
+several `asyncio.run()` calls: each event loop gets its own connections.
 
 ### Data format
 
@@ -272,7 +276,8 @@ client.custom_models.archive("router-2")         # back to the archive: decision
 
 - `client.custom_models.list()` lists your custom models, the ones in production first (`production=True` or
   `production=False` keeps one of the two); `get(name)` has `state` (`"production"` or `"archived"`), `production`,
-  `promoted_at`, `base_model`, `step`, `loss` and `accuracy` at save time.
+  `promoted_at`, `base_model`, `step`, and `loss` and `accuracy` (0 to 1): the run's training loss and accuracy at the
+  model's step.
 - A model in production has `serving`: `"deploying"` right after `promote` (decisions are accepted; the first ones
   may wait while a decision server loads it), then `"live"`, or `"failed"` with `serving_error` saying why
   (`promote(name)` again retries). It is None while archived. `endor custom-models list` and `info` show it.
@@ -296,8 +301,10 @@ client.evaluations.create("router-2", rows=more_rows).result()          # or row
 ```
 
 An evaluation scores a row's labeled questions; a row without labels is answered on every question and not scored
-(its answers are in the results' `rows_url`, which `client.predict` reads for you). `rows_done` of `rows_total` shows
-how far a running evaluation is.
+(its answers are in the results' `rows_url`, which `client.predict` reads for you). Its accuracies are from 0 to 1.
+`client.evaluations.get(evaluation_id)` fetches one again, with `rows_done` of `rows_total` while it runs, and
+`client.evaluations.list(run_id=None, model=None)` lists them. An unknown model raises `NotFoundError` (404
+`unknown_model`).
 
 **Model names** are lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit, up to 63 characters,
 and can't be a base model id. `save_checkpoint` raises `ValueError` for a bad name before sending it. Each name is
@@ -344,8 +351,8 @@ Add rows for those options, or drop them from the question.
   Endor closes it an hour later; saved models are kept. To continue it, `client.runs.get(run_id)` gives the run again
   (`run.info_.step` is its step), and that handle sends the heartbeat too until the run is closed or the handle is
   dropped. The handles `client.runs.list()` returns are for looking: they send none.
-- **Open runs per org.** Every run that isn't closed counts toward the org's open-run limit (`max_active_runs` in
-  `client.whoami().limits`; `endor whoami` shows it), idle ones included. One more `runs.create` raises
+- **Open runs per org.** Every run that isn't closed counts toward the org's open-run limit, idle ones included: 25
+  by default, and `max_active_runs` in `client.whoami().limits` is your org's own (`endor whoami` shows it). One more `runs.create` raises
   `LimitReachedError` (409, code `limit_reached`), whose message lists the open runs; close one (`run.close()` or
   `endor runs close RUN_ID`). It is not retried.
 - **Other limits.** Projects, custom models (and those in production), datasets and API keys also have limits (`LimitReachedError` once reached).
@@ -413,8 +420,8 @@ model is a 422. A fresh run defaults to rank 16, alpha 32, attention and MLP lay
   1,024 questions are split for you. Text and JSON states only.
 - `run.forward` scores data with the current adapter without saving a model. `client.evaluations.create(model,
   dataset)` scores a saved model server-side (or on `rows=` sent with the call).
-- `run.close()` releases the trainer (a `with` block does it for you). Unsaved progress is lost; the SDK warns when
-  you close with optimizer steps newer than your last save.
+- `run.close()` releases the trainer (a `with` block does it for you). Unsaved progress is lost; the SDK warns once
+  when you close with optimizer steps newer than your last save.
 - Creating a run provisions a trainer: under a minute on a warm GPU, a few minutes to start a cold one.
   `runs.create(wait=True)` (the default) blocks and logs progress at INFO on the `endor` logger. Since Python hides
   INFO logs unless you configure logging, it also prints one line to stderr once the wait passes 10 seconds (`run
@@ -462,7 +469,9 @@ files = project.download("v3", "./tickets-v3")                    # a continuous
 ```
 
 This writes `adapter_model.safetensors`, `adapter_config.json`, `endor_manifest.json` and, if the model has one,
-`readout.safetensors` into the folder. `optimizer.pt` (Adam state) is only needed to resume training. Each file comes
+`readout.safetensors` into the folder. `optimizer.pt` (Adam state) is only needed to resume training, and only a model
+saved with `run.save_checkpoint(include_optimizer=True)` has it (`CustomModelInfo.has_optimizer`): for any other model,
+or a project's version, `include_optimizer=True` raises `DownloadError` before anything is written. Each file comes
 straight from storage over a link that expires after 10 minutes, and is checked against its size and SHA-256 (when
 the API gives one); a file that fails raises `DownloadError` and is not left behind. The links are never returned or
 logged, and your API key is never sent to storage. From the shell: `endor custom-models download router-2 -o ./router-2`.
@@ -478,7 +487,8 @@ dashboard. A few codes have their own subclass: `LimitReachedError` (409 `limit_
 `ModelInProductionError` (409 `model_in_production`), all `ConflictError`s; `NoPreviewError` (404 `no_preview`) and `VersionNotCallableError`
 (404 `version_not_callable`), both `NotFoundError`s; and `ModelRequiresProjectError` (422 `model_requires_project`), an `UnprocessableEntityError`. A training operation that fails on the trainer raises `OperationFailedError` from `.result()`, with codes
 such as `oom`, `no_gradients` or `trainer_lost`. Connection problems raise `APIConnectionError` and
-`APITimeoutError`.
+`APITimeoutError`. A successful response whose body doesn't have the expected shape raises `ResponseValidationError`
+(an `APIError`) naming the endpoint and the field, from every method.
 
 Requests that fail with a connection error, a timeout, a 408, a 429 or a 5xx are retried with exponential backoff
 and `Retry-After`, except `limit_reached`, `production_full` and `insufficient_balance`, which waiting doesn't
@@ -581,7 +591,7 @@ Projects are continuous learning projects; custom models are the ones you train 
 custom model's name or a base model id; `eval` prints the accuracy overall and per question. `endor base-models` prints
 one line per base model: its Decision Index rank (`=` marks a tie), `tokens/s`, context (`max_question_tokens`), price
 per 1M input tokens of a custom model on it, and what it is meant for. `endor whoami` also
-shows the org's balance (`balance_usd`), whether it has continuous learning (`continuous_learning`) and its limits. Every command takes `-f json` and needs `ENDOR_API_KEY`, `endor user-report` too. Training itself happens in Python. `endor runs close`
+shows the org's balance (`balance_usd`), whether it has continuous learning (`continuous_learning`) and its limits. Every command takes `-f json` (or `--format json`), before or after the command (`endor -f json whoami` or `endor whoami -f json`), and needs `ENDOR_API_KEY`, `endor user-report` too. Training itself happens in Python. `endor runs close`
 frees a slot when a script left a run open. `usage --csv` columns are `hour, kind, project, base_model, model,
 training_run_id, input_tokens, gpu_seconds, continuous_learning, price_per_mtok, base_cost_usd,
 continuous_learning_cost_usd, cost_usd`; `continuous_learning` is true for a continuous learning project's

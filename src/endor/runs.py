@@ -32,11 +32,10 @@ from pydantic import TypeAdapter
 from . import _constants as C
 from . import data as D
 from ._http import Transport
-from ._images import Images
 from ._log import logger
+from ._parse import parse
 from .errors import ConflictError, NotFoundError
 from .futures import APIFuture
-from .images import find_images
 from .types import (
     AdamParams,
     Answer,
@@ -51,14 +50,13 @@ from .types import (
     question_dict,
 )
 
-__all__ = ["Run", "MAX_DATUMS_PER_CALL", "MAX_IMAGES_PER_CALL"]
+__all__ = ["Run", "MAX_DATUMS_PER_CALL"]
 
 _FINAL = ("closed", "failed")
 _MODEL_NAME = re.compile(C.SDK_MODEL_NAME)
 _CLOSE_POLL_S = 1.0
 
 MAX_DATUMS_PER_CALL = C.MAX_DATUMS_PER_CALL
-MAX_IMAGES_PER_CALL = C.MAX_IMAGES_PER_CALL
 """Bigger batches are split into several requests; the merged result and the gradients are the same."""
 
 MAX_PREDICT_QUESTIONS = C.MAX_PREDICT_QUESTIONS_PER_CALL
@@ -71,21 +69,20 @@ class Run:
     ``client.runs.get(id)`` or ``client.runs.list()``.
 
     Training is billed for the GPU time its calls use. A run without calls is parked (``idle``) after 2 minutes, and
-    runs that aren't closed (idle ones included) count toward the org's open-run limit (``max_active_runs`` in
-    ``client.whoami().limits``; ``endor whoami`` shows it). While a handle from ``runs.create``, ``runs.get`` or
-    ``custom_models.create``, or any handle in a ``with`` block, holds an open run, a background thread sends a
-    heartbeat every minute, so the run stays open however long you wait between calls; it stops when the run is
-    closed or the handle is garbage collected. A run whose process ended without closing it is closed an hour later.
-    Use it as a context manager so it is closed even on errors::
+    runs that aren't closed (idle ones included) count toward the org's open-run limit (25 by default;
+    ``max_active_runs`` in ``client.whoami().limits``, which ``endor whoami`` shows, is the org's own). While a handle
+    from ``runs.create``, ``runs.get`` or ``custom_models.create``, or any handle in a ``with`` block, holds an open
+    run, a background thread sends a heartbeat every minute, so the run stays open however long you wait between
+    calls; it stops when the run is closed or the handle is garbage collected. A run whose process ended without
+    closing it is closed an hour later. Use it as a context manager so it is closed even on errors::
 
         with client.custom_models.create("router-2", base_model="jev-9b") as run:
             ...
     """
 
-    def __init__(self, transport: Transport, info: dict[str, Any], images: Images | None = None) -> None:
+    def __init__(self, transport: Transport, info: dict[str, Any], *, endpoint: str | None = None) -> None:
         self._t = transport
-        self._images = images or Images(transport)
-        self.info_ = RunInfo.model_validate(info)
+        self.info_ = parse(RunInfo, info, endpoint)
         """The run as last fetched from the server (``run.info()`` refreshes it)."""
         self.id: str = self.info_.id
         self.model: str | None = self.info_.model
@@ -101,6 +98,7 @@ class Run:
         self._alock: asyncio.Lock | None = None
         self._last_optim_seq: int | None = None
         self._last_save_seq: int | None = None
+        self._warned_unsaved = False
         self._heartbeat: threading.Thread | None = None
         self._stop_heartbeat = threading.Event()
 
@@ -165,10 +163,8 @@ class Run:
         """Loss and gradients, accumulated until the next ``optim_step``.
 
         The update ``optim_step`` applies is the weight-averaged gradient over every datum since the previous step,
-        so splitting a batch across calls changes nothing. Batches over ``MAX_DATUMS_PER_CALL`` datums, or over
-        ``MAX_IMAGES_PER_CALL`` images, are split for you. On a base model that reads images, a datum's state may
-        hold ``endor.Image`` objects: each new image is uploaded once first (``client.images``) and the datums carry
-        references (limited access: ``PermissionDeniedError`` until the org is approved).
+        so splitting a batch across calls changes nothing. Batches over ``MAX_DATUMS_PER_CALL`` datums are split for
+        you. States are text or JSON: the API refuses images in training data (422).
         """
         return self._fb("forward_backward", data, loss_fn)
 
@@ -191,9 +187,8 @@ class Run:
         probability). ``rows`` are decision rows in any shape ``endor.data.to_row`` takes; labels, ids and weights
         are ignored. No gradients, and the run's training state doesn't change. It runs in order with the run's
         other calls (after the steps sent before it) and is billed as training GPU time, like ``forward``. Lists
-        over ``MAX_PREDICT_QUESTIONS`` questions, or ``MAX_IMAGES_PER_CALL`` images, are split into several
-        requests; every row is checked before any is sent. States may hold ``endor.Image`` objects on a base model
-        that reads images (uploaded once first, sent as references).
+        over ``MAX_PREDICT_QUESTIONS`` questions are split into several requests; every row is checked before any
+        is sent. Text and JSON states only.
         """
         return self._predict_future(self._send("predict", self._predict_chunks(rows)))
 
@@ -266,13 +261,12 @@ class Run:
         ``failed``), for at most ``timeout`` seconds. Unsaved progress is lost. Idempotent; a ``with`` block calls
         it for you.
 
-        Logs a warning when this handle stepped the optimizer after its last save.
+        Logs a warning, once, when this handle stepped the optimizer after its last save.
         """
         self._stop_heartbeat.set()
         self._warn_unsaved()
-        self.info_ = RunInfo.model_validate(
-            self._t.request("POST", f"/v1/runs/{self.id}/close", method_name="run.close")
-        )
+        path = f"/v1/runs/{self.id}/close"
+        self.info_ = parse(RunInfo, self._t.request("POST", path, method_name="run.close"), f"POST {path}")
         deadline = None if timeout is None else time.monotonic() + timeout
         while wait and self.info_.status not in _FINAL and (deadline is None or time.monotonic() < deadline):
             time.sleep(_CLOSE_POLL_S)
@@ -283,22 +277,21 @@ class Run:
         """``close`` for async code."""
         self._stop_heartbeat.set()
         self._warn_unsaved()
-        self.info_ = RunInfo.model_validate(
-            await self._t.arequest("POST", f"/v1/runs/{self.id}/close", method_name="run.close")
-        )
+        path = f"/v1/runs/{self.id}/close"
+        self.info_ = parse(RunInfo, await self._t.arequest("POST", path, method_name="run.close"), f"POST {path}")
         deadline = None if timeout is None else time.monotonic() + timeout
         while wait and self.info_.status not in _FINAL and (deadline is None or time.monotonic() < deadline):
             await asyncio.sleep(_CLOSE_POLL_S)
-            self.info_ = RunInfo.model_validate(
-                await self._t.arequest("GET", f"/v1/runs/{self.id}", method_name="run.info")
-            )
+            path = f"/v1/runs/{self.id}"
+            self.info_ = parse(RunInfo, await self._t.arequest("GET", path, method_name="run.info"), f"GET {path}")
         return self.info_
 
     def info(self) -> RunInfo:
         """Refresh and return the run's status, ``step`` and ``next_seq_id``, with its progress: ``total_steps``,
         ``seconds_per_step`` (the median over the last 20 steps), ``progress`` (0 to 1) and ``eta_seconds``, and its
         Weights & Biases link (``wandb_url``) once Endor has logged to it."""
-        self.info_ = RunInfo.model_validate(self._t.request("GET", f"/v1/runs/{self.id}", method_name="run.info"))
+        path = f"/v1/runs/{self.id}"
+        self.info_ = parse(RunInfo, self._t.request("GET", path, method_name="run.info"), f"GET {path}")
         return self.info_
 
     def set_total_steps(self, total_steps: int | None) -> RunInfo:
@@ -306,11 +299,9 @@ class Run:
         ETA for this run. ``runs.create(total_steps=...)`` sets it at the start; the recipes set it for you."""
         if total_steps is not None and total_steps < 1:
             raise ValueError("total_steps must be at least 1 (or None)")
-        self.info_ = RunInfo.model_validate(
-            self._t.request(
-                "PATCH", f"/v1/runs/{self.id}", json={"total_steps": total_steps}, method_name="run.set_total_steps"
-            )
-        )
+        path = f"/v1/runs/{self.id}"
+        r = self._t.request("PATCH", path, json={"total_steps": total_steps}, method_name="run.set_total_steps")
+        self.info_ = parse(RunInfo, r, f"PATCH {path}")
         return self.info_
 
     # ------------------------------------------------------------------ dashboard
@@ -325,18 +316,18 @@ class Run:
     def metrics(self, keys: Iterable[str] | None = None, since_step: int | None = None) -> list[MetricPoint]:
         """The run's metric series, automatic and custom, optionally filtered by key."""
         params = {"keys": ",".join(keys) if keys else None, "since_step": since_step}
-        r = self._t.request("GET", f"/v1/runs/{self.id}/metrics", params=params, method_name="run.metrics")
-        return [MetricPoint.model_validate(p) for p in r]
+        path = f"/v1/runs/{self.id}/metrics"
+        r = self._t.request("GET", path, params=params, method_name="run.metrics")
+        return [parse(MetricPoint, p, f"GET {path}") for p in r]
 
     def log_eval(
         self, model: str, results: dict[str, Any], *, step: int | None = None, name: str = "eval"
     ) -> Evaluation:
         """Record evaluation results you computed yourself (``endor.metrics.decision_metrics``) on this run."""
         body = {"model": model, "results": results, "step": step, "name": name}
-        r = self._t.request(
-            "POST", f"/v1/runs/{self.id}/evaluations", json=body, method_name="run.log_eval", idempotent=True
-        )
-        return Evaluation.model_validate(r)
+        path = f"/v1/runs/{self.id}/evaluations"
+        r = self._t.request("POST", path, json=body, method_name="run.log_eval", idempotent=True)
+        return parse(Evaluation, r, f"POST {path}")
 
     # ------------------------------------------------------------------ sequencing
     def _submit(self, op: str, body: dict[str, Any], *, kind: str) -> dict[str, Any]:
@@ -372,9 +363,12 @@ class Run:
             self._last_save_seq = seq
 
     def _warn_unsaved(self) -> None:
+        if self._warned_unsaved:
+            return
         if self._last_optim_seq is not None and (
             self._last_save_seq is None or self._last_save_seq < self._last_optim_seq
         ):
+            self._warned_unsaved = True
             logger.warning(
                 "run %s: closing with optimizer steps newer than the last save_checkpoint; that progress is lost",
                 self.id,
@@ -388,12 +382,11 @@ class Run:
         for i, d in enumerate(datums):  # every chunk is checked before any is sent, so a batch is never half sent
             check_datum(d, f"data[{i}]")
         wire = [d.to_wire() for d in datums]
-        self._images.prepare_states(wire)  # images uploaded once, sent as references
         return [{"data": c, "loss_fn": loss_fn} for c in _split(wire, MAX_DATUMS_PER_CALL, lambda w: 1)]
 
     def _fb_future(self, op: str, refs: list[dict[str, Any]]) -> APIFuture[ForwardOutput]:
-        parse: Callable[[Any], ForwardOutput] = ForwardOutput.model_validate
-        futures = [APIFuture(self._t, r["future_id"], parse, method=f"run.{op}") for r in refs]
+        validate: Callable[[Any], ForwardOutput] = ForwardOutput.model_validate
+        futures = [APIFuture(self._t, r["future_id"], validate, method=f"run.{op}") for r in refs]
         if len(futures) == 1:
             return futures[0]
         return APIFuture(self._t, children=list(futures), combine=merge_outputs, method=f"run.{op}")
@@ -469,9 +462,8 @@ class Run:
         return APIFuture(self._t, children=list(futures), combine=_concat_answers, method="run.predict")
 
     def _predict_chunks(self, rows: Iterable[Any]) -> list[dict[str, Any]]:
-        """Each row's state and questions in wire form, in requests of at most ``MAX_PREDICT_QUESTIONS`` questions
-        (and ``MAX_IMAGES_PER_CALL`` images). Every row is checked before any request is sent, so a bad row never
-        leaves half a call sent."""
+        """Each row's state and questions in wire form, in requests of at most ``MAX_PREDICT_QUESTIONS`` questions.
+        Every row is checked before any request is sent, so a bad row never leaves half a call sent."""
         wire: list[dict[str, Any]] = []
         for i, obj in enumerate(rows):
             try:
@@ -485,7 +477,6 @@ class Run:
             wire.append({"state": row.state, "questions": {n: question_dict(q) for n, q in row.questions.items()}})
         if not wire:
             raise ValueError("no rows: pass at least one decision row")
-        self._images.prepare_states(wire)
         return [{"rows": c} for c in _split(wire, MAX_PREDICT_QUESTIONS, lambda w: len(w["questions"]))]
 
     @staticmethod
@@ -523,17 +514,17 @@ def _beat(t: Transport, run_id: str, stop: threading.Event) -> None:
 
 
 def _split(wire: list[dict[str, Any]], size: int, cost: Callable[[dict[str, Any]], int]) -> list[list[dict[str, Any]]]:
-    """``wire`` (datums or rows, states with their images as references) in order, in chunks of at most ``size`` by
-    ``cost`` (datums, or questions) and ``MAX_IMAGES_PER_CALL`` images each; an item alone always makes a chunk."""
+    """``wire`` (datums or rows) in order, in chunks of at most ``size`` by ``cost`` (datums, or questions); an item
+    alone always makes a chunk."""
     chunks: list[list[dict[str, Any]]] = [[]]
-    used = images = 0
+    used = 0
     for w in wire:
-        n, k = cost(w), len(find_images(w["state"]))
-        if chunks[-1] and (used + n > size or images + k > MAX_IMAGES_PER_CALL):
+        n = cost(w)
+        if chunks[-1] and used + n > size:
             chunks.append([])
-            used = images = 0
+            used = 0
         chunks[-1].append(w)
-        used, images = used + n, images + k
+        used += n
     return chunks
 
 

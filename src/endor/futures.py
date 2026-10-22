@@ -21,6 +21,7 @@ from typing import Any, Generic, TypeVar
 from . import errors as E
 from ._constants import FUTURE_POLL_WAIT_S, MAX_FUTURES_PER_RETRIEVE
 from ._http import Transport
+from ._parse import parse, validated
 from .types import FutureInfo
 
 __all__ = ["APIFuture", "Steps", "gather", "gather_async"]
@@ -88,12 +89,17 @@ class APIFuture(Generic[T]):
             return [leaf for c in self._children for leaf in c.leaves()]
         return [self] if self.id else []
 
-    def _settle(self, f: dict[str, Any]) -> bool:
-        """Record a server state; True once settled."""
-        self._info = FutureInfo.model_validate(f)
+    def _settle(self, f: dict[str, Any], endpoint: str | None = None) -> bool:
+        """Record a server state (from ``endpoint``); True once settled. A result without the expected shape settles
+        it with ``ResponseValidationError``."""
+        endpoint = endpoint or f"GET /v1/futures/{self.id}"
+        self._info = parse(FutureInfo, f, endpoint)
         status = f.get("status")
         if status == "completed":
-            self._value = self._parse(f.get("result") or {})
+            try:
+                self._value = validated(self._parse, f.get("result") or {}, endpoint)
+            except E.ResponseValidationError as e:
+                self._exc = e
             return True
         if status in ("failed", "cancelled"):
             err = f.get("error") or {}
@@ -188,7 +194,7 @@ def _wait_all(t: Transport, leaves: list[APIFuture[Any]], timeout: float | None,
                     timeout=t.timeout + wait,
                 )
                 for f, state in zip(chunk, states, strict=False):
-                    f._settle(state)
+                    f._settle(state, "POST /v1/futures/retrieve")
             pending = [f for f in pending if not f.done()]
         if pending and deadline is not None and time.monotonic() >= deadline:
             raise _timeout_error(pending)
@@ -221,7 +227,7 @@ async def _wait_all_async(t: Transport, leaves: list[APIFuture[Any]], timeout: f
                     timeout=t.timeout + wait,
                 )
                 for f, state in zip(chunk, states, strict=False):
-                    f._settle(state)
+                    f._settle(state, "POST /v1/futures/retrieve")
             pending = [f for f in pending if not f.done()]
         if pending and deadline is not None and time.monotonic() >= deadline:
             raise _timeout_error(pending)

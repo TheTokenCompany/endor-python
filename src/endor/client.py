@@ -25,16 +25,16 @@ from datetime import datetime, timezone
 from typing import Any, TypeVar, overload
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from . import _constants as C
 from . import _predict, _user_report
 from ._corrections import Corrections
 from ._http import Transport
-from ._images import Images
+from ._parse import parse
 from ._retry import RetryPolicy
 from .custom_models import CustomModels
-from .errors import EndorError, NotFoundError, ResponseValidationError
+from .errors import EndorError, NotFoundError
 from .projects import Projects
 from .training import Datasets, Evaluations, Runs
 from .types import (
@@ -146,16 +146,13 @@ class EndorClient:
         )
         self.models = Models(self._t)
         """``client.models.list()``: every name you can pass as ``model``."""
-        self.images = Images(self._t)
-        """``client.images.upload(...)``: images for training data, uploaded once and referenced by hash (the
-        datasets, runs and predictions below do it for the ``endor.Image`` objects in your rows and datums)."""
         self.projects = Projects(self._t)
         """``client.projects``: continuous learning projects (create, fetch, list, promote versions)."""
-        self.datasets = Datasets(self._t, self.images)
+        self.datasets = Datasets(self._t)
         """``client.datasets``: labeled decision rows for training and evaluating custom models."""
-        self.runs = Runs(self._t, capture, self.images)
+        self.runs = Runs(self._t, capture)
         """``client.runs``: training runs; a save makes a custom model."""
-        self.evaluations = Evaluations(self._t, self.images)
+        self.evaluations = Evaluations(self._t)
         """``client.evaluations``: how good a custom model or a base model is on decision rows."""
         self.custom_models = CustomModels(self._t, self.runs)
         """``client.custom_models``: models you train yourself (list, create, promote, archive, download)."""
@@ -336,7 +333,6 @@ class EndorClient:
                 ``context_too_long``).
         """
         body, n = _predict.prediction(model, rows)
-        self.images.prepare_states(body["rows"])  # images uploaded once, sent as references
         r = self._t.request("POST", "/v1/evaluations", json=body, method_name="client.predict", idempotent=True)
         ev = _predict.wait(self._t, r, progress, timeout, "client.predict")
         return _predict.answers(self._t, ev, n)
@@ -346,7 +342,6 @@ class EndorClient:
     ) -> list[dict[str, Answer]]:
         """``predict`` for async code."""
         body, n = _predict.prediction(model, rows)
-        self.images.prepare_states(body["rows"])
         r = await self._t.arequest("POST", "/v1/evaluations", json=body, method_name="client.predict", idempotent=True)
         ev = await _predict.wait_async(self._t, r, progress, timeout, "client.predict")
         return await _predict.answers_async(self._t, ev, n)
@@ -358,7 +353,7 @@ class EndorClient:
         prices, ``hf_repo`` and ``contract``."""
         try:
             r = self._t.request("GET", "/v1/base_models", method_name="client.base_models")
-            return [_parse(BaseModelInfo, b, "GET /v1/base_models") for b in r.get("base_models", [])]
+            return [parse(BaseModelInfo, b, "GET /v1/base_models") for b in r.get("base_models", [])]
         except NotFoundError:  # an API from before /v1/base_models: the catalog was part of /v1/models
             r = self._t.request("GET", "/v1/models", method_name="client.base_models")
         out = []
@@ -366,22 +361,14 @@ class EndorClient:
             meta = m.get("endor") or {}
             if meta.get("kind", "base" if "/" not in m.get("name", "") else "model") != "base":
                 continue
-            out.append(
-                BaseModelInfo.model_validate(
-                    {
-                        "id": m["name"],
-                        "description": m.get("description"),
-                        "release_date": m.get("release_date"),
-                        **meta,
-                    }
-                )
-            )
+            info = {"id": m["name"], "description": m.get("description"), "release_date": m.get("release_date"), **meta}
+            out.append(parse(BaseModelInfo, info, "GET /v1/models"))
         return out
 
     # ------------------------------------------------------------------ account
     def whoami(self) -> WhoAmI:
         """The org and key behind this client's credentials (``user_id`` is None for an org API key)."""
-        return _parse(WhoAmI, self._t.request("GET", "/v1/whoami", method_name="client.whoami"), "GET /v1/whoami")
+        return parse(WhoAmI, self._t.request("GET", "/v1/whoami", method_name="client.whoami"), "GET /v1/whoami")
 
     def balance(self) -> float | None:
         """The org's prepaid balance in USD: credits bought or granted, minus usage so far. At $0 or less, paid calls
@@ -398,7 +385,7 @@ class EndorClient:
             "project": project,
         }
         r = self._t.request("GET", "/v1/usage", params=params, method_name="client.usage")
-        return [_parse(UsageRow, u, "GET /v1/usage") for u in r]
+        return [parse(UsageRow, u, "GET /v1/usage") for u in r]
 
     # ------------------------------------------------------------------ reports
     def user_report(
@@ -489,7 +476,7 @@ class Models:
             timeout=timeout,
             extra_headers=extra_headers,
         )
-        return _parse(ListModelsResponse, raw, "GET /v1/models")
+        return parse(ListModelsResponse, raw, "GET /v1/models")
 
     async def list_async(
         self,
@@ -507,7 +494,7 @@ class Models:
             timeout=timeout,
             extra_headers=extra_headers,
         )
-        return _parse(ListModelsResponse, raw, "GET /v1/models")
+        return parse(ListModelsResponse, raw, "GET /v1/models")
 
 
 def _parse_decision(response_model: type[ResponseT] | None, raw: Any) -> SystemOneResponse | ResponseT:
@@ -515,22 +502,13 @@ def _parse_decision(response_model: type[ResponseT] | None, raw: Any) -> SystemO
     ``answers`` (``class Routed(SystemOneResponse): dept: ChoiceAnswer``)."""
     endpoint = "POST /v1/systemone"
     if response_model is None:
-        return _parse(SystemOneResponse, raw, endpoint)
+        return parse(SystemOneResponse, raw, endpoint)
     if isinstance(raw, dict) and isinstance(raw.get("answers"), dict) and issubclass(response_model, SystemOneResponse):
         own = set(response_model.model_fields) - set(SystemOneResponse.model_fields)
         lifted = {name: raw["answers"][name] for name in own if name in raw["answers"] and name not in raw}
         if lifted:
             raw = {**raw, **lifted}
-    return _parse(response_model, raw, endpoint)
-
-
-def _parse(model: type[ResponseT], raw: Any, endpoint: str) -> ResponseT:
-    try:
-        return model.model_validate(raw)
-    except ValidationError as e:
-        first = e.errors(include_url=False)[0]
-        path = ".".join(str(p) for p in first.get("loc", ())) or "<body>"
-        raise ResponseValidationError(200, raw, None, f"{path}: {first.get('msg')}", endpoint) from e
+    return parse(response_model, raw, endpoint)
 
 
 def _utc(t: datetime) -> datetime:

@@ -24,9 +24,10 @@ import httpx
 from . import _constants as C
 from ._headers import _interface
 from ._http import LAST, LastCall, Transport
+from ._parse import parse
 from ._retry import RetryPolicy
 from ._version import __version__
-from .errors import EndorError, ResponseValidationError
+from .errors import EndorError
 from .types import UserReportKind, UserReportReceipt
 
 __all__ = ["user_report", "user_report_async", "KINDS"]
@@ -88,10 +89,7 @@ def _last(t: Transport) -> LastCall:
 
 
 def _receipt(raw: Any) -> UserReportReceipt:
-    try:
-        return UserReportReceipt.model_validate(raw)
-    except ValueError as e:
-        raise ResponseValidationError(201, raw, None, str(e).splitlines()[0], f"POST {ENDPOINT}") from e
+    return parse(UserReportReceipt, raw, f"POST {ENDPOINT}", status=201)
 
 
 def send(

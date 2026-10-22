@@ -25,9 +25,9 @@ from . import _constants as C
 from . import _predict
 from . import data as D
 from ._http import Transport
-from ._images import Images
 from ._log import logger
 from ._pages import list_all
+from ._parse import parse
 from .futures import APIFuture
 from .runs import Run, check_model_name
 from .types import DatasetInfo, DecisionRow, Evaluation, LoraConfig
@@ -43,48 +43,41 @@ WAIT_NOTICE_S = 10.0
 class Datasets:
     """``client.datasets``: labeled decision rows, for training and evaluating custom models."""
 
-    def __init__(self, transport: Transport, images: Images | None = None) -> None:
+    def __init__(self, transport: Transport) -> None:
         self._t, self._base = transport, "/v1/datasets"
-        self._images = images or Images(transport)
 
     def upload(self, name: str, rows: Iterable[Any]) -> DatasetInfo:
         """Upload decision rows (README, "Data format"). Rows may be dicts or ``DecisionRow`` objects; the other
         supported row formats are converted. At most 50,000 rows per dataset. Datasets are immutable: to change one,
         upload under a new name. A name the organization already has raises ``ConflictError``; to run a pipeline
-        again, use the dataset that is there (``get(name)``) or catch the error. On a base model that reads images
-        the states may hold ``endor.Image`` objects: each new image is uploaded once first (``client.images``) and the
-        rows carry references (limited access: ``PermissionDeniedError`` until the org is approved)."""
+        again, use the dataset that is there (``get(name)``) or catch the error. States are text or JSON: the API
+        refuses images in training data (422)."""
         wire = [D.to_row(r).to_wire() for r in rows]
         if not wire:
             raise ValueError("no rows to upload")
         if len(wire) > MAX_UPLOAD_ROWS:
             raise ValueError(f"at most {MAX_UPLOAD_ROWS} rows per dataset (got {len(wire)}); split the data")
-        self._images.prepare_states(wire)
         r = self._t.request(
             "POST", self._base, json={"name": name, "rows": wire}, method_name="datasets.upload", idempotent=True
         )
-        return DatasetInfo.model_validate(r)
+        return parse(DatasetInfo, r, f"POST {self._base}")
 
     def list(self) -> builtins.list[DatasetInfo]:
         """Every dataset, newest first."""
-        return [DatasetInfo.model_validate(d) for d in list_all(self._t, self._base, {}, "datasets.list")]
+        return [parse(DatasetInfo, d, f"GET {self._base}") for d in list_all(self._t, self._base, {}, "datasets.list")]
 
     def get(self, name: str) -> DatasetInfo:
         """One dataset's counts; ``NotFoundError`` if missing."""
-        return DatasetInfo.model_validate(self._t.request("GET", f"{self._base}/{name}", method_name="datasets.get"))
+        path = f"{self._base}/{name}"
+        return parse(DatasetInfo, self._t.request("GET", path, method_name="datasets.get"), f"GET {path}")
 
     def rows(self, name: str, page: int = 500) -> Iterator[DecisionRow]:
         """Iterate over a dataset's rows, fetching ``page`` rows per request."""
-        offset = 0
+        offset, path = 0, f"{self._base}/{name}/rows"
         while True:
-            r = self._t.request(
-                "GET",
-                f"{self._base}/{name}/rows",
-                params={"limit": page, "offset": offset},
-                method_name="datasets.rows",
-            )
+            r = self._t.request("GET", path, params={"limit": page, "offset": offset}, method_name="datasets.rows")
             items = r["items"]
-            yield from (D.to_row(x) for x in items)
+            yield from (parse(DecisionRow, x, f"GET {path}") for x in items)
             offset += len(items)
             if not items or offset >= r.get("total", offset):
                 return
@@ -97,9 +90,8 @@ class Datasets:
 class Runs:
     """``client.runs``: training runs for custom models."""
 
-    def __init__(self, transport: Transport, capture: bool, images: Images | None = None) -> None:
+    def __init__(self, transport: Transport, capture: bool) -> None:
         self._t, self._capture = transport, capture
-        self._images = images or Images(transport)
 
     def create(
         self,
@@ -124,8 +116,9 @@ class Runs:
         progress: bool = True,
     ) -> Run:
         """Start a run: a fresh adapter on ``base_model`` (an id from ``client.base_models()``), or one warm-started
-        from ``from_model`` (a custom model's name, which sets the base model: another ``base_model`` is a 422; with
-        ``include_optimizer=True`` training resumes exactly).
+        from ``from_model`` (a custom model's name, which sets the base model: another ``base_model`` is a 422, an
+        unknown name ``NotFoundError``, 404 ``unknown_model``; with ``include_optimizer=True`` training resumes
+        exactly).
 
         ``model``: the custom model name ``run.save_checkpoint()`` saves under when it is given none. It must be free
         (``ConflictError`` here if a custom model or project has it). ``name`` is the run's own label.
@@ -142,8 +135,9 @@ class Runs:
         returns at once and ``run.ready`` is the future.
 
         Close every run you create (``with client.runs.create(...) as run:``): runs that aren't closed, idle ones
-        included, count toward the org's open-run limit (``max_active_runs`` in ``client.whoami().limits``, which
-        ``endor whoami`` shows), and one more raises ``LimitReachedError``. A run without calls is parked (``idle``)
+        included, count toward the org's open-run limit (25 by default; ``max_active_runs`` in
+        ``client.whoami().limits``, which ``endor whoami`` shows, is the org's own), and one more raises
+        ``LimitReachedError``. A run without calls is parked (``idle``)
         after 2 minutes. Until you close it, the run sends a heartbeat every minute from a background thread, so it
         stays open however long you wait; if your process ends without closing it, Endor closes it an hour later.
         ``config`` is free-form and shown on the dashboard; when the client was created with ``capture=True`` the SDK
@@ -196,7 +190,7 @@ class Runs:
             }
             body["code_hash"] = git_identity()
         r = self._t.request("POST", "/v1/runs", json=body, method_name="runs.create", idempotent=True)
-        run = Run(self._t, r, self._images)
+        run = Run(self._t, r, endpoint="POST /v1/runs")
         run._start_heartbeat()
         if wait:
             try:
@@ -214,7 +208,8 @@ class Runs:
         Like a run from ``create``, the handle keeps an open run open: it sends a heartbeat every minute from a
         background thread until the run is closed (``run.close()``, a ``with`` block, or elsewhere) or the handle is
         garbage collected."""
-        run = Run(self._t, self._t.request("GET", f"/v1/runs/{run_id}", method_name="runs.get"), self._images)
+        path = f"/v1/runs/{run_id}"
+        run = Run(self._t, self._t.request("GET", path, method_name="runs.get"), endpoint=f"GET {path}")
         run._start_heartbeat()
         return run
 
@@ -223,16 +218,15 @@ class Runs:
         are for looking: they send no heartbeat unless used in a ``with`` block (``runs.get(id)`` re-attaches to one
         to continue it)."""
         items = list_all(self._t, "/v1/runs", {"tag": tag}, "runs.list", limit, offset)
-        return [Run(self._t, x, self._images) for x in items]
+        return [Run(self._t, x, endpoint="GET /v1/runs") for x in items]
 
 
 class Evaluations:
     """``client.evaluations``: how good a custom model (in production or archived) or a base model is on decision
     rows."""
 
-    def __init__(self, transport: Transport, images: Images | None = None) -> None:
+    def __init__(self, transport: Transport) -> None:
         self._t = transport
-        self._images = images or Images(transport)
 
     def create(
         self,
@@ -253,11 +247,14 @@ class Evaluations:
         confidence and ``selective`` (``{"0.5": {"accuracy", "coverage"}, ...}`` for the thresholds 0.5, 0.7, 0.9 and
         0.95), and ``rows_url``, a link to every answer (one JSON line per question asked) that expires after 1 hour.
         While it runs, ``rows_done`` of ``rows_total`` shows how far it is. With ``run_id``, the evaluation appears on
-        that run's page.
+        that run's page. Accuracies are fractions from 0 to 1.
+
+        Raises:
+            ValueError: Neither a dataset nor rows, or both.
+            NotFoundError: An unknown model (404 ``unknown_model``) or dataset.
+            UnprocessableEntityError: A bad row (``param``: ``rows.<i>...``) or a question the model can't read.
         """
         body = _predict.evaluation_body(model, dataset, rows, run_id)
-        if "rows" in body:
-            self._images.prepare_states(body["rows"])
         r = self._t.request("POST", "/v1/evaluations", json=body, method_name="evaluations.create", idempotent=True)
 
         def fetch(x: dict[str, Any]) -> Evaluation:
@@ -267,14 +264,13 @@ class Evaluations:
 
     def get(self, evaluation_id: str) -> Evaluation:
         """One evaluation, with ``rows_done`` of ``rows_total`` while it runs."""
-        return Evaluation.model_validate(
-            self._t.request("GET", f"/v1/evaluations/{evaluation_id}", method_name="evaluations.get")
-        )
+        path = f"/v1/evaluations/{evaluation_id}"
+        return parse(Evaluation, self._t.request("GET", path, method_name="evaluations.get"), f"GET {path}")
 
     def list(self, run_id: str | None = None, model: str | None = None) -> builtins.list[Evaluation]:
         """Server-side and client-recorded evaluations, newest first (all pages), optionally of one run or model."""
         items = list_all(self._t, "/v1/evaluations", {"run_id": run_id, "model": model}, "evaluations.list")
-        return [Evaluation.model_validate(e) for e in items]
+        return [parse(Evaluation, e, "GET /v1/evaluations") for e in items]
 
 
 def _wait_ready(run: Run, log_every: float = 30.0, progress: bool = True) -> None:

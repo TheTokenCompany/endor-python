@@ -338,8 +338,8 @@ class DecisionIndexInfo(BaseModel):
     """Within the board's tie band of another entry, so it shares its rank (``=`` in ``endor base-models``)."""
     meant_for: list[str] = Field(default_factory=list)
     """The use cases it is among the best at, best first: ``"Code"``, ``"Agents"``, ``"Documents and email"`` and
-    ``"Finance"`` when its mean rank on the index's benchmarks for one is in the top quarter of the board, and
-    ``"Real-time"`` when Endor serves it fast and it still ranks well. Empty when none."""
+    ``"Finance"`` when its mean rank on the index's benchmarks for one is in the top quarter of the board. Empty when
+    none."""
     use_case_ranks: dict[str, float] = Field(default_factory=dict)
     """Its mean rank among the board's entrants on each use case's benchmarks (lower is better): how it compares with
     the other bases on the use case closest to yours."""
@@ -386,8 +386,8 @@ class BaseModelInfo(BaseModel):
     """Its entry on the Jev Decision Index: its rank, what it is meant for and its ranks per use case and per task.
     None when it isn't on the index."""
     tokens_per_s: int | None = None
-    """Decision input tokens per second Endor served on it, where measured: a higher number answers sooner and suits
-    real-time traffic. None where it wasn't measured."""
+    """Decision input tokens per second Endor served on it, where measured: a higher number answers sooner. None where
+    it wasn't measured."""
     tokens_per_s_source: str | None = None
     """Where and how ``tokens_per_s`` was measured."""
     max_options: int | None = None
@@ -645,7 +645,8 @@ class VersionInfo(_View):
     preview: bool = False
     """It is the newest version and isn't in production, so ``"<project>:preview"`` answers with it. Never both."""
     accuracy: float | None = None
-    """Its accuracy in percent when it was trained (None: nothing to check on)."""
+    """Its accuracy when it was trained, in percent (0 to 100, unlike custom models and evaluations, which give 0 to
+    1). None: nothing to check on."""
     loss: float | None = None
     """Its mean cross-entropy on the same check (lower is better)."""
     size_bytes: int | None = None
@@ -663,7 +664,8 @@ class Training(_View):
     decisions: int | None = None
     """The project's decision count when the run started (None from a server that doesn't send it)."""
     accuracy: float | None = None
-    """Its accuracy in percent, with the 95% interval ``low`` to ``high``. None: nothing to check on."""
+    """Its accuracy in percent (0 to 100, as ``VersionInfo.accuracy``), with the 95% interval ``low`` to ``high``.
+    None: nothing to check on."""
     low: float | None = None
     high: float | None = None
     loss: float | None = None
@@ -774,7 +776,8 @@ class CustomModelInfo(_View):
     production: bool = False
     """It is in production: decisions may call it."""
     state: str = "archived"
-    """``"production"`` or ``"archived"`` (every save starts archived). Treat unknown values as archived."""
+    """``"production"`` or ``"archived"`` (every save starts archived); ``custom_models.get`` says ``"saving"`` while
+    the model's save runs. Treat unknown values as archived."""
     promoted_at: datetime | None = None
     """When it last went to production (None while archived)."""
     serving: str | None = None
@@ -795,10 +798,10 @@ class CustomModelInfo(_View):
     """Archived models only: when it is deleted (a TTL). Models in production never expire."""
     user_metadata: dict[str, Any] = Field(default_factory=dict)
     loss: float | None = None
-    """The training loss when the model was saved: its run's ``train/loss`` at ``step``, or the last one before it.
-    None when unknown."""
+    """The run's training loss at the model's step: its ``train/loss`` at ``step``, or the last one before it. None
+    when unknown."""
     accuracy: float | None = None
-    """The training accuracy when the model was saved (``train/accuracy``, the same way as ``loss``)."""
+    """The run's training accuracy at the model's step (``train/accuracy``, the same way as ``loss``), from 0 to 1."""
     created_at: datetime
 
 
@@ -809,9 +812,6 @@ class DatasetInfo(_View):
     n_rows: int
     n_labelled_questions: int = 0
     question_types: dict[str, int] = Field(default_factory=dict)
-    n_images: int = 0
-    """Images across the rows (``endor.Image``, uploaded once and referenced). An evaluation of the dataset needs a
-    base model that reads images."""
     created_at: datetime
 
 
@@ -826,6 +826,8 @@ class Evaluation(_View):
     """``server`` or ``client``."""
     status: str
     results: dict[str, Any] | None = None
+    """``n``, ``overall``, ``by_type`` and ``by_question`` (each with ``accuracy`` from 0 to 1, NLL, Brier, ECE, mean
+    confidence and ``selective``) and ``rows_url``, once it is done (``client.evaluations.create``)."""
     rows_total: int | None = None
     """Server evaluations: its rows (the dataset's, or those sent inline)."""
     rows_done: int | None = None
@@ -892,16 +894,13 @@ class WhoAmI(_View):
     limits: dict[str, int | float] = Field(default_factory=dict)
     """The org's limits by name, for example ``max_projects_per_org``, ``max_production_models_per_org`` (custom
     models in production), ``max_custom_models_per_org``, ``max_datasets_per_org`` or ``max_active_runs`` (runs that
-    aren't closed, idle ones included). A count limit raises ``LimitReachedError`` once reached
+    aren't closed, idle ones included; 25 by default). A count limit raises ``LimitReachedError`` once reached
     (``ProductionFullError`` for the production slots); a rate raises ``RateLimitError``: ``decisions_per_minute``
-    (60 by default, for the whole org) and the other ``..._per_minute``. ``endor whoami`` lists them."""
+    (1,200 by default, for the whole org) and the other ``..._per_minute``. ``endor whoami`` lists them."""
     continuous_learning: bool = False
     """Whether the org has continuous learning projects (a per-organization switch, off until we turn it on). While
     off, ``client.projects`` and decisions on a project raise ``PermissionDeniedError`` (403
     ``continuous_learning_not_enabled``); custom models work for every organization."""
-    image_training: bool = False
-    """Whether the org may fine-tune with images (``endor.Image`` in rows and datums, ``client.images``). Limited
-    access: without it those calls raise ``PermissionDeniedError`` (403 ``image_training_not_enabled``); ask us."""
 
 
 UserReportKind = Literal["bug", "confusing", "works"]

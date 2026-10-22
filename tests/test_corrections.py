@@ -6,13 +6,20 @@ from __future__ import annotations
 import pytest
 
 import endor
-from endor import Choice, CorrectionInfo, SystemOneResponse
+from endor import Choice, CorrectionInfo, SystemOneResponse, _corrections
 
 from .conftest import ANGER, DEPT, URGENT, requests_to
-from .fake_api import FakeEndor
+from .fake_api import FakeEndor, HTTPError
 
 ROUTE = Choice(instructions="Route the ticket", criteria={"billing": "money", "tech": None, "sales": None})
 QUESTIONS = {"dept": ROUTE, "pair": DEPT, "urgent": URGENT, "anger": ANGER}
+WAITS = _corrections.DECISION_RETRY_DELAYS
+
+
+@pytest.fixture(autouse=True)
+def _no_waits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unknown decision is tried again as one not recorded yet: without the waits here."""
+    monkeypatch.setattr(_corrections, "DECISION_RETRY_DELAYS", (0.0,) * len(WAITS))
 
 
 def decide(client: endor.EndorClient, decider: str) -> SystemOneResponse:
@@ -144,3 +151,58 @@ async def test_async(client: endor.EndorClient, fake: FakeEndor, decider: str) -
     await client.corrections.delete_async(res)
     with pytest.raises(endor.NotFoundError):
         await client.corrections.get_async(res)
+
+
+def test_a_correction_right_after_its_decision_waits_for_it(
+    client: endor.EndorClient, fake: FakeEndor, decider: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Endor records a decision just after it answers, so a correction sent at once can find none yet (404
+    not_found naming it): the SDK tries again for up to 5 s, then raises as for any unknown decision."""
+    waited: list[float] = []
+    monkeypatch.setattr(_corrections, "DECISION_RETRY_DELAYS", WAITS)
+    monkeypatch.setattr(_corrections.time, "sleep", waited.append)
+    assert sum(WAITS) == 5.0
+    fake.decision_record_lag = 2  # the next decisions are recorded after two tries
+    res = decide(client, decider)
+    assert client.corrections.create(res, {"urgent": {"correct": True}}).request_id == res.id
+    assert waited == list(WAITS[:2]) and len(requests_to(fake, "/v1/corrections", "POST")) == 3
+    other = decide(client, decider)
+    waited.clear()
+    got = client.corrections.batch(
+        [
+            {"request_id": res, "questions": {"dept": {"correct": True}}},
+            {"request_id": other, "questions": {"dept": {"correct": True}}},
+        ]
+    )
+    assert [c.request_id for c in got] == [res.id, other.id] and waited == list(WAITS[:2])
+
+    fake.decision_record_lag = len(WAITS) + 1  # never in time: the last try's 404 is raised
+    late = decide(client, decider)
+    waited.clear()
+    with pytest.raises(endor.NotFoundError) as e:
+        client.corrections.create(late, {"urgent": {"correct": True}})
+    assert e.value.code == "not_found" and late.id and late.id in e.value.message and waited == list(WAITS)
+
+    fake.decision_record_lag = 0
+    now = decide(client, decider)
+    waited.clear()
+    sent = len(requests_to(fake, "/v1/corrections", "POST"))
+    with pytest.raises(endor.UnprocessableEntityError):  # anything else is raised at once
+        client.corrections.create(now, {"tone": {"correct": True}})
+    fake.fail_next.append(HTTPError(404, "not_found", "Not Found"))  # a 404 that doesn't name the decision
+    with pytest.raises(endor.NotFoundError):
+        client.corrections.create(now, {"urgent": {"correct": True}})
+    assert waited == [] and len(requests_to(fake, "/v1/corrections", "POST")) == sent + 2
+
+
+async def test_async_corrections_wait_for_the_decision_too(
+    client: endor.EndorClient, fake: FakeEndor, decider: str
+) -> None:
+    fake.decision_record_lag = 1
+    res = await client.system_one_async({"body": "charged twice"}, QUESTIONS, model=decider)
+    assert (await client.corrections.create_async(res, {"urgent": {"correct": True}})).request_id == res.id
+    other = await client.system_one_async({"body": "charged twice"}, QUESTIONS, model=decider)
+    many = await client.corrections.batch_async([{"request_id": other, "questions": {"anger": {"correct": True}}}])
+    assert [c.request_id for c in many] == [other.id]
+    assert len(requests_to(fake, "/v1/corrections", "POST")) == 2
+    assert len(requests_to(fake, "/v1/corrections/batch", "POST")) == 2
