@@ -210,8 +210,7 @@ for b in client.base_models():
 each use case's benchmarks), `task_ranks` (its rank on each public benchmark, by what it tests, for example
 `"phishing detection"`), `note` (where the index ran another form of the weights than Endor serves) and `url` (its
 scores on the index). `meant_for` holds `"Code"`, `"Agents"`, `"Documents and email"` and `"Finance"` where its mean
-rank on that use case is in the board's top quarter, and `"Real-time"` where Endor serves it fast and it still ranks
-well. `endor base-models` prints the same as a table.
+rank on that use case is in the board's top quarter. `endor base-models` prints the same as a table.
 
 **Many rows at once.** `client.predict(model, rows)` returns the answers to every question of every row, in the rows'
 order, from one server-side evaluation of them: nothing to upload, nothing scored, billed as the same decisions.

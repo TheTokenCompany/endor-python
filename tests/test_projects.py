@@ -459,7 +459,7 @@ class TestRunsResource:
         with pytest.raises(ConflictError) as e:
             client.runs.create(from_model=v2, include_optimizer=True)
         assert e.value.code == "invalid_state"
-        with pytest.raises(UnprocessableEntityError) as e2:
+        with pytest.raises(NotFoundError) as e2:  # 404 as for a decision's unknown model (it was 422)
             client.runs.create(from_model="missing")
         assert e2.value.code == "unknown_model"
 

@@ -116,8 +116,9 @@ class Runs:
         progress: bool = True,
     ) -> Run:
         """Start a run: a fresh adapter on ``base_model`` (an id from ``client.base_models()``), or one warm-started
-        from ``from_model`` (a custom model's name, which sets the base model: another ``base_model`` is a 422; with
-        ``include_optimizer=True`` training resumes exactly).
+        from ``from_model`` (a custom model's name, which sets the base model: another ``base_model`` is a 422, an
+        unknown name ``NotFoundError``, 404 ``unknown_model``; with ``include_optimizer=True`` training resumes
+        exactly).
 
         ``model``: the custom model name ``run.save_checkpoint()`` saves under when it is given none. It must be free
         (``ConflictError`` here if a custom model or project has it). ``name`` is the run's own label.

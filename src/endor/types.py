@@ -338,8 +338,8 @@ class DecisionIndexInfo(BaseModel):
     """Within the board's tie band of another entry, so it shares its rank (``=`` in ``endor base-models``)."""
     meant_for: list[str] = Field(default_factory=list)
     """The use cases it is among the best at, best first: ``"Code"``, ``"Agents"``, ``"Documents and email"`` and
-    ``"Finance"`` when its mean rank on the index's benchmarks for one is in the top quarter of the board, and
-    ``"Real-time"`` when Endor serves it fast and it still ranks well. Empty when none."""
+    ``"Finance"`` when its mean rank on the index's benchmarks for one is in the top quarter of the board. Empty when
+    none."""
     use_case_ranks: dict[str, float] = Field(default_factory=dict)
     """Its mean rank among the board's entrants on each use case's benchmarks (lower is better): how it compares with
     the other bases on the use case closest to yours."""
@@ -386,8 +386,8 @@ class BaseModelInfo(BaseModel):
     """Its entry on the Jev Decision Index: its rank, what it is meant for and its ranks per use case and per task.
     None when it isn't on the index."""
     tokens_per_s: int | None = None
-    """Decision input tokens per second Endor served on it, where measured: a higher number answers sooner and suits
-    real-time traffic. None where it wasn't measured."""
+    """Decision input tokens per second Endor served on it, where measured: a higher number answers sooner. None where
+    it wasn't measured."""
     tokens_per_s_source: str | None = None
     """Where and how ``tokens_per_s`` was measured."""
     max_options: int | None = None
@@ -776,7 +776,8 @@ class CustomModelInfo(_View):
     production: bool = False
     """It is in production: decisions may call it."""
     state: str = "archived"
-    """``"production"`` or ``"archived"`` (every save starts archived). Treat unknown values as archived."""
+    """``"production"`` or ``"archived"`` (every save starts archived); ``custom_models.get`` says ``"saving"`` while
+    the model's save runs. Treat unknown values as archived."""
     promoted_at: datetime | None = None
     """When it last went to production (None while archived)."""
     serving: str | None = None

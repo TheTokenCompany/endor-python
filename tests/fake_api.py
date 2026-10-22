@@ -1101,7 +1101,7 @@ class FakeEndor:
         if body.get("from_model"):
             pm = self.models.get(body["from_model"])
             if pm is None or not pm["_ready"]:
-                raise HTTPError(422, "unknown_model", f"No custom model {body['from_model']!r}.", "from_model")
+                raise HTTPError(404, "unknown_model", f"No custom model {body['from_model']!r}.", "from_model")
             if body.get("include_optimizer") and not pm["has_optimizer"]:
                 raise HTTPError(409, "invalid_state", f"{pm['name']} was saved without optimizer state")
             if base_model is not None and base_model != pm["base_model"]:

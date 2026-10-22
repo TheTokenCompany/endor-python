@@ -61,7 +61,7 @@ and there is no preview. While its base model answers, a project's decisions rep
   `continuous_learning_not_enabled`).
 - What the model garden shows, for choosing a base model: `BaseModelInfo.decision_index` (new type
   `DecisionIndexInfo`, None for a base not on the Jev Decision Index) has its `rank` out of `entrants`, `tied`,
-  `meant_for` (the use cases it is among the best at, such as `"Code"` or `"Real-time"`), `use_case_ranks`,
+  `meant_for` (the use cases it is among the best at, such as `"Code"` or `"Finance"`), `use_case_ranks`,
   `task_ranks`, `note` and a `url` to its scores; `BaseModelInfo.tokens_per_s` is the decision throughput Endor
   measured on it (`tokens_per_s_source` says how). `endor base-models` prints one line per base model with its index
   rank, `tokens/s`, context, price and what it is meant for, instead of every field as `key=value` (`-f json` still
@@ -95,8 +95,9 @@ and there is no preview. While its base model answers, a project's decisions rep
 - `run.close()` called again doesn't repeat the warning about optimizer steps newer than the last save.
 - Docstrings and the README: a version's and a training's `accuracy` is in percent, a custom model's and an
   evaluation's from 0 to 1; `CustomModelInfo.loss` is the run's training loss at the model's step; an unknown model
-  in `client.evaluations.create` and `client.predict` raises `NotFoundError` (404 `unknown_model`); the default
-  `decisions_per_minute` is 1,200 (not 60).
+  in `client.evaluations.create`, `client.predict` and `runs.create(from_model=...)` raises `NotFoundError` (404
+  `unknown_model`); the default `decisions_per_minute` is 1,200 (not 60); `CustomModelInfo.state` is `"saving"`
+  from `custom_models.get` while the model's save runs.
 
 ### Also in this release
 
