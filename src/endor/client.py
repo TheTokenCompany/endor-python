@@ -5,7 +5,7 @@
     res = client.system_one(state, questions, model="tickets")  # the project's production version
     client.corrections.create(res, {"urgent": {"correct": False}})   # a decision was wrong: the project learns
     client.models.list()                                       # every name you can pass as model
-    client.base_models()                                       # the base models, with limits and prices
+    client.base_models()                                       # the base models: what each is meant for, speed, price
     client.custom_models.list()                                # advanced: models you train with the SDK
     client.user_report("what you did, what happened, what you expected", kind="bug")      # tell the Endor team
 
@@ -352,8 +352,10 @@ class EndorClient:
         return await _predict.answers_async(self._t, ev, n)
 
     def base_models(self) -> list[BaseModelInfo]:
-        """The base models a continuous learning project learns on and custom models are trained on: option limits,
-        ``hf_repo``, ``contract`` and prices (``GET /v1/base_models``)."""
+        """The base models a continuous learning project learns on and custom models are trained on
+        (``GET /v1/base_models``): what each is meant for and its ranks on the Jev Decision Index
+        (``decision_index``), its measured speed (``tokens_per_s``), context (``max_question_tokens``), option limits,
+        prices, ``hf_repo`` and ``contract``."""
         try:
             r = self._t.request("GET", "/v1/base_models", method_name="client.base_models")
             return [_parse(BaseModelInfo, b, "GET /v1/base_models") for b in r.get("base_models", [])]

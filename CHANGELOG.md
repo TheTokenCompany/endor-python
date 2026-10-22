@@ -27,6 +27,7 @@ and there is no preview. While its base model answers, a project's decisions rep
 | `WhoAmI.managed_projects` | gone; `limits` has `max_projects_per_org`, `max_production_models_per_org`, `max_custom_models_per_org` and `max_datasets_per_org` |
 | `ModelMetadata.kind` `project`, `base` or `model` | `project` or `custom`; `ModelMetadata.environment` is `production` or `preview` for a project's names |
 | `NoBaseModelError`, `WrongProjectKindError` | gone (they can't happen any more) |
+| `BaseModelInfo.trainer_gpu` | gone: Endor doesn't say which GPU runs a job, and the API doesn't send it |
 | `client.predict("tickets/v1", rows)` | `client.predict("router-2", rows)`: a custom model (in production or archived) or a base model id |
 | `SupervisedConfig(project="tickets", model_name="v1")` | `SupervisedConfig(model_name="router-2")`: the recipe saves a custom model to the archive; it scores the untuned base with one server-side prediction |
 | CLI `endor models ...`, `datasets list PROJECT`, `runs list PROJECT`, `eval PROJECT MODEL DATASET`, `projects add-base-model` | `endor custom-models ...`, `datasets list`, `runs list`, `eval MODEL DATASET`; `projects versions`, `promote`, `auto-promote` are new |
@@ -58,6 +59,13 @@ and there is no preview. While its base model answers, a project's decisions rep
 - `WhoAmI.continuous_learning`: whether the organization has continuous learning projects (off until we turn it on;
   while off, projects and decisions on a project raise `PermissionDeniedError`, 403
   `continuous_learning_not_enabled`).
+- What the model garden shows, for choosing a base model: `BaseModelInfo.decision_index` (new type
+  `DecisionIndexInfo`, None for a base not on the Jev Decision Index) has its `rank` out of `entrants`, `tied`,
+  `meant_for` (the use cases it is among the best at, such as `"Code"` or `"Real-time"`), `use_case_ranks`,
+  `task_ranks`, `note` and a `url` to its scores; `BaseModelInfo.tokens_per_s` is the decision throughput Endor
+  measured on it (`tokens_per_s_source` says how). `endor base-models` prints one line per base model with its index
+  rank, `tokens/s`, context, price and what it is meant for, instead of every field as `key=value` (`-f json` still
+  has every field).
 - `runs.create(progress=True)` (also through `custom_models.create` and `SupervisedConfig.progress`): a wait for a GPU
   over 10 seconds prints one line to stderr, `run run_...: waiting for a GPU (starting a cold one can take a few
   minutes)…`, since a cold start takes minutes and Python hides the INFO logs that were the only output.

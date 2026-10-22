@@ -1087,7 +1087,6 @@ class FakeEndor:
                     "contract": "c",
                     "contract_version": 1,
                     "max_rank": 64,
-                    "trainer_gpu": "H100",
                     "modalities": ["text"],
                     **v,
                     "price_per_mtok_decide": 0.5,

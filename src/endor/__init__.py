@@ -72,6 +72,7 @@ from .types import (
     CustomModelInfo,
     DatasetInfo,
     Datum,
+    DecisionIndexInfo,
     DecisionRow,
     DownloadedFile,
     Drift,
@@ -144,6 +145,7 @@ __all__ = [
     "ModelMetadata",
     "ListModelsResponse",
     "BaseModelInfo",
+    "DecisionIndexInfo",
     # training
     "Datum",
     "DecisionRow",

@@ -3,7 +3,7 @@
 Decisions
     Noul, Choice, Score          the three question types (plain dicts in the same shape are accepted too)
     NoulAnswer, ChoiceAnswer, ScoreAnswer, SystemOneResponse, Usage
-    ModelMetadata, ListModelsResponse, BaseModelInfo
+    ModelMetadata, ListModelsResponse, BaseModelInfo, DecisionIndexInfo
     CorrectionInfo, QuestionCorrectionInfo, CorrectionAnswer   a decision's correction (``client.corrections``)
 
 Training
@@ -60,6 +60,7 @@ __all__ = [
     "ModelMetadata",
     "ListModelsResponse",
     "BaseModelInfo",
+    "DecisionIndexInfo",
     "Target",
     "Datum",
     "DecisionRow",
@@ -323,9 +324,52 @@ def answer_probabilities(answer: Answer) -> dict[str, float]:
     return {str(k): float(v) for k, v in answer.probabilities.items()}
 
 
+class DecisionIndexInfo(BaseModel):
+    """A base model's entry on the Jev Decision Index (``BaseModelInfo.decision_index``), the public board that runs
+    every open Jev reproduction through the same public and private tests. The scores themselves are on ``url``."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    rank: int | None = None
+    """Its rank on the board, out of ``entrants`` (1 is best)."""
+    entrants: int | None = None
+    """How many entries the board ranks, Jev included."""
+    tied: bool = False
+    """Within the board's tie band of another entry, so it shares its rank (``=`` in ``endor base-models``)."""
+    meant_for: list[str] = Field(default_factory=list)
+    """The use cases it is among the best at, best first: ``"Code"``, ``"Agents"``, ``"Documents and email"`` and
+    ``"Finance"`` when its mean rank on the index's benchmarks for one is in the top quarter of the board, and
+    ``"Real-time"`` when Endor serves it fast and it still ranks well. Empty when none."""
+    use_case_ranks: dict[str, float] = Field(default_factory=dict)
+    """Its mean rank among the board's entrants on each use case's benchmarks (lower is better): how it compares with
+    the other bases on the use case closest to yours."""
+    task_ranks: dict[str, int] = Field(default_factory=dict)
+    """Its rank among the board's entrants on each public benchmark, by what the benchmark tests, for example
+    ``"phishing detection"`` (lower is better): the benchmarks most like your task say the most. A benchmark that
+    needs more options than the base takes on Endor is left out."""
+    note: str | None = None
+    """Set where the index ran another form of the weights than Endor serves (for example a quantized one), so its
+    scores can differ a little from Endor's answers."""
+    name: str | None = None
+    """Its name on the index."""
+    engine: str | None = None
+    """Its id on the index."""
+    url: str | None = None
+    """Its page on the index, with its scores on every benchmark."""
+    source_url: str | None = None
+    """Its weights or code, as the index links them."""
+    edition: str | None = None
+    """The index's edition, for example ``"Decision Index 0.3.1"``."""
+    updated: str | None = None
+    """The index's date (``YYYY-MM-DD``)."""
+
+
 class BaseModelInfo(BaseModel):
     """A base decision model: a continuous learning project learns on one (``client.projects.create(name,
-    base_model=id)``), and custom models are trained on one (``client.custom_models.create(name, base_model=id)``)."""
+    base_model=id)``), and custom models are trained on one (``client.custom_models.create(name, base_model=id)``).
+
+    To choose one, compare what it is meant for and its ranks (``decision_index``), its speed (``tokens_per_s``), its
+    context (``max_question_tokens``), its options (``max_options``) and its price."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -337,7 +381,15 @@ class BaseModelInfo(BaseModel):
     provider: str | None = None
     """Who published it."""
     leaderboard_rank: int | None = None
-    """Its rank on the Jev Decision Index, when listed."""
+    """Its rank on the Jev Decision Index, when listed (``decision_index.rank``)."""
+    decision_index: DecisionIndexInfo | None = None
+    """Its entry on the Jev Decision Index: its rank, what it is meant for and its ranks per use case and per task.
+    None when it isn't on the index."""
+    tokens_per_s: int | None = None
+    """Decision input tokens per second Endor served on it, where measured: a higher number answers sooner and suits
+    real-time traffic. None where it wasn't measured."""
+    tokens_per_s_source: str | None = None
+    """Where and how ``tokens_per_s`` was measured."""
     max_options: int | None = None
     """The most options a Choice (or levels a Score) may have on this base."""
     max_question_tokens: int | None = None
@@ -355,7 +407,6 @@ class BaseModelInfo(BaseModel):
     """The Hugging Face repository of the weights; a downloaded adapter is a PEFT LoRA for it."""
     hf_revision: str | None = None
     """The pinned commit of ``hf_repo`` that Endor loads."""
-    trainer_gpu: str | None = None
     price_per_mtok_decide: float | None = None
     """USD per 1M decision input tokens of a custom model on this base (None while unpriced)."""
     price_per_mtok_decide_continuous_learning: float | None = None
