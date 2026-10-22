@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 from pathlib import Path
 
-import httpx
 import pytest
 
 import endor
-from endor import Datum, EndorClient, Image, Target, UnprocessableEntityError, images
+from endor import EndorClient, Image, UnprocessableEntityError
 
 from .conftest import URGENT, unique
 from .fake_api import FakeEndor
@@ -71,136 +69,10 @@ def test_base_models_say_which_read_images(client: EndorClient) -> None:
     assert endor.Image is Image
 
 
-# ---------------------------------------------------------------- images in training data
-
-
-def png(n: int) -> bytes:
-    """A distinct PNG-looking file (the fake checks the first bytes, as the API does)."""
-    return b"\x89PNG\r\n\x1a\n" + n.to_bytes(4, "big") * 16
-
-
-def test_a_reference_names_an_uploaded_image_by_hash() -> None:
-    im = Image.from_bytes(png(1))
-    assert not im.is_ref and im.sha256 == hashlib.sha256(png(1)).hexdigest() and im.content == png(1)
-    ref = Image.ref(im.sha256, "image/png")
-    assert ref == {"type": "image", "sha256": im.sha256, "media_type": "image/png"} and ref.is_ref
-    assert ref.sha256 == im.sha256 and ref.size == 0 and repr(ref).startswith("Image(ref ")
-    assert Image.ref(im.sha256) == {"type": "image", "sha256": im.sha256}
-    with pytest.raises(ValueError, match="no bytes"):
-        _ = ref.content
-    with pytest.raises(ValueError, match="hex"):
-        Image.ref("not-a-hash")
-    assert Image.wrap(dict(ref)).is_ref and Image.wrap(dict(im)) == im
-    assert images.find_images({"a": im, "b": [1, ref], "c": {"type": "image", "alt": "x"}}) == [
-        ("state.a", im),
-        ("state.b.1", ref),
-    ]
-
-
-def test_images_are_declared_uploaded_once_and_confirmed(client: EndorClient, fake: FakeEndor, tmp_path: Path) -> None:
-    """client.images.upload: one declaration, a PUT per missing image straight to the link with exactly the headers
-    the API gave (and no Endor header), a second declaration to confirm; references back in order; an image this
-    client uploaded is never declared again."""
-    (tmp_path / "c.png").write_bytes(png(3))
-    refs = client.images.upload([Image.from_bytes(png(1)), png(2), tmp_path / "c.png", Image.from_bytes(png(1))])
-    shas = [hashlib.sha256(png(i)).hexdigest() for i in (1, 2, 3)]
-    assert [r.sha256 for r in refs] == [shas[0], shas[1], shas[2], shas[0]] and all(r.is_ref for r in refs)
-    assert refs[0].media_type == "image/png"
-    declared = [r for r in fake.requests if r.path == "/v1/images"]
-    assert len(declared) == 2 and [x["sha256"] for x in declared[0].body["images"]] == shas  # once per image
-    assert declared[0].body["images"][0] == {"sha256": shas[0], "media_type": "image/png", "bytes": len(png(1))}
-    puts = fake.upload_requests
-    assert sorted(r.path.strip("/") for r in puts) == sorted(shas) and all(r.method == "PUT" for r in puts)
-    assert all("authorization" not in r.headers and "x-endor-method" not in r.headers for r in puts)
-    assert {sha: row["status"] for sha, row in fake.images.items()} == dict.fromkeys(shas, "ready")
-    assert fake.uploads[shas[1]] == png(2)
-    before = len(fake.requests)
-    again = client.images.upload([png(2), Image.ref(shas[0])])  # known: nothing declared, nothing uploaded
-    assert [r.sha256 for r in again] == [shas[1], shas[0]] and len(fake.requests) == before
-    # another client knows nothing yet: it declares, finds them ready, uploads nothing
-    other = endor.EndorClient(api_key="edk_test", base_url=client.base_url, transport=httpx.MockTransport(fake.handler))
-    with other:
-        other.images.upload([png(1)])
-    assert len(fake.upload_requests) == 3 and fake.requests[-1].path == "/v1/images"
-    listed = client._t.request("GET", "/v1/images")
-    assert listed["total"] == 3
-
-
-def test_rows_and_datums_carry_images_as_references(client: EndorClient, fake: FakeEndor) -> None:
-    rows = [
-        {
-            "id": f"r{i}",
-            "state": {"photo": Image.from_bytes(png(i % 3)), "shelf": f"s{i}"},
-            "questions": {"u": URGENT},
-            "labels": {"u": i % 2 == 0},
-        }
-        for i in range(6)
-    ]
-    info = client.datasets.upload("imgs", rows)
-    assert info.n_images == 6 and info.n_rows == 6
-    sent = [r for r in fake.requests if r.path.endswith("/datasets")][-1].body["rows"]
-    assert all("data" not in r["state"]["photo"] and r["state"]["photo"]["sha256"] for r in sent)
-    assert len({r["state"]["photo"]["sha256"] for r in sent}) == 3 and len(fake.uploads) == 3
-    assert sent[0]["state"]["shelf"] == "s0" and sent[0]["labels"] == {"u": True}
-    # training: datums with images, uploaded once, sent as references, split by images as well as by datums
-    with client.custom_models.create("v1", base_model="gev-26b") as run:
-        datums = [
-            Datum(state={"photo": Image.from_bytes(png(i)), "t": "x"}, question=URGENT, target=Target(label="true"))
-            for i in range(300)
-        ]
-        out = run.forward_backward(datums).result()
-        assert len(out.probabilities) == 300
-        calls = [r for r in fake.requests if r.path.endswith("/forward_backward")]
-        assert [len(c.body["data"]) for c in calls] == [128, 128, 44]  # 128 images a call
-        assert all("data" not in d["state"]["photo"] for c in calls for d in c.body["data"])
-        assert len(fake.uploads) == 300  # 0..2 were there already
-        answers = run.predict([{"state": [Image.from_bytes(png(1)), "left"], "questions": {"u": URGENT}}]).result()
-        assert answers[0]["u"].noul == 0.5
-        sent_rows = [r for r in fake.requests if r.path.endswith("/predict")][-1].body["rows"]
-        assert sent_rows[0]["state"][0] == {
-            "type": "image",
-            "sha256": hashlib.sha256(png(1)).hexdigest(),
-            "media_type": "image/png",
-        }
-        run.optim_step(learning_rate=1e-4).result()
-        run.save_checkpoint().result()
-    answers = client.predict("v1", [{"state": {"photo": Image.from_bytes(png(7))}, "questions": {"u": URGENT}}])
-    assert len(answers) == 1
-    ev = [r for r in fake.requests if r.path.endswith("/evaluations")][-1].body
-    assert "data" not in ev["rows"][0]["state"]["photo"] and hashlib.sha256(png(7)).hexdigest() in fake.uploads
-
-
-def test_without_access_the_error_says_how_to_ask(client: EndorClient, fake: FakeEndor) -> None:
-    fake.image_training = False
-    assert client.whoami().image_training is False
-    with pytest.raises(endor.PermissionDeniedError) as e:
-        client.images.upload([png(1)])
-    assert e.value.code == "image_training_not_enabled" and "request access" in e.value.message
-    with pytest.raises(endor.PermissionDeniedError):
-        client.datasets.upload("imgs", [{"state": [Image.from_bytes(png(1))], "questions": {"u": URGENT}}])
-    assert not fake.uploads and not fake.images  # nothing was uploaded
-    fake.image_training = True
-    assert client.whoami().image_training is True
-    # a base that reads text only refuses image datums, after the upload (the API's order)
-    with client.runs.create("jev-9b") as run:
-        with pytest.raises(UnprocessableEntityError) as err:
-            run.forward_backward(
-                [Datum(state=[Image.from_bytes(png(2))], question=URGENT, target=Target(label="true"))]
-            )
-        assert err.value.code == "unsupported_modality"
-
-
-def test_an_upload_that_storage_keeps_refusing_raises(client: EndorClient, fake: FakeEndor, monkeypatch) -> None:
-    from endor import _images
-
-    monkeypatch.setattr(_images.time, "sleep", lambda s: None)
-    fake.fail_uploads = 2  # two 500s, then it goes through
-    assert client.images.upload([png(1)])[0].is_ref and len(fake.upload_requests) == 3
-    fake.fail_uploads = 5
-    with pytest.raises(endor.EndorError, match="failed 3 times"):
-        client.images.upload([png(2)])
-    # a file the API rejects after the upload (here: a declared PNG whose bytes aren't one)
-    fake.fail_uploads = 0
-    jpeg_as_png = Image(b"\xff\xd8\xff\xe0" + b"\x01" * 32, "image/png")
-    with pytest.raises(endor.EndorError, match="not accepted"):
-        client.images.upload([jpeg_as_png])
+def test_training_data_is_text_and_json(client: EndorClient, fake: FakeEndor) -> None:
+    """Images are for decisions only: the SDK sends a training row's image as it is, and the API refuses it."""
+    with pytest.raises(UnprocessableEntityError) as e:
+        client.datasets.upload("imgs", [{"state": {"photo": Image.from_bytes(PNG)}, "questions": {"u": URGENT}}])
+    assert e.value.param == "rows.0.state" and "decisions only" in e.value.message
+    assert [r.path for r in fake.requests] == ["/v1/datasets"]  # nothing uploaded first
+    assert not hasattr(client, "images") and not hasattr(endor.Image, "ref")

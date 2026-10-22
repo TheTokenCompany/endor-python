@@ -23,6 +23,7 @@ import re
 import threading
 import time
 import uuid
+import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -112,6 +113,7 @@ class Transport:
         self._atransport = async_transport
         self._owns_client = http_client is None
         self._owns_aclient = async_http_client is None
+        self._aloop: weakref.ref[asyncio.AbstractEventLoop] | None = None  # the event loop self._aclient is used on
         self.last = LastCall()
         """This transport's latest request and failure."""
         self.report_latency = _latency_env_on() if report_latency is None else report_latency
@@ -127,8 +129,16 @@ class Transport:
 
     @property
     def aclient(self) -> httpx.AsyncClient:
+        """The async HTTP client, for the running event loop. Its connections belong to the loop that opened them, so
+        once the client is used from another loop (a second ``asyncio.run()``) the SDK starts a new one; the old
+        loop's connections can't be used or closed any more. A client passed in (``async_http_client``) is used as
+        is."""
+        loop = asyncio.get_running_loop()
+        if self._aclient is not None and self._owns_aclient and self._aloop is not None and self._aloop() is not loop:
+            self._aclient = None
         if self._aclient is None:
             self._aclient = httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout, transport=self._atransport)
+        self._aloop = weakref.ref(loop)
         return self._aclient
 
     def close(self) -> None:
@@ -136,8 +146,12 @@ class Transport:
             self._client.close()
 
     async def aclose(self) -> None:
-        if self._aclient is not None and self._owns_aclient:
-            await self._aclient.aclose()
+        if self._aclient is None or not self._owns_aclient:
+            return
+        if self._aloop is not None and self._aloop() is not asyncio.get_running_loop():
+            self._aclient = None  # opened on another event loop, now closed: nothing it holds can be closed from here
+            return
+        await self._aclient.aclose()
 
     # ------------------------------------------------------------------ request building
     def _headers(

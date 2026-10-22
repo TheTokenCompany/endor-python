@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -156,3 +157,66 @@ def test_download(capsys: pytest.CaptureFixture[str], client: EndorClient, fake:
     assert all(Path(f["path"]).parent == target and "url" not in f for f in out)
     run(capsys, client, "custom-models", "download", "v1", "-o", str(target), "--include-optimizer")
     assert (target / "optimizer.pt").is_file()
+
+
+# Every command once, with the arguments it needs.
+COMMANDS = [
+    ["whoami"],
+    ["base-models"],
+    ["projects", "list"],
+    ["projects", "create", "p", "--base-model", "jev-9b"],
+    ["projects", "delete", "p"],
+    ["projects", "versions", "p"],
+    ["projects", "promote", "p", "v1"],
+    ["projects", "auto-promote", "p", "on"],
+    ["custom-models", "list", "--production"],
+    ["custom-models", "info", "m"],
+    ["custom-models", "promote", "m", "--replace", "n"],
+    ["custom-models", "archive", "m"],
+    ["custom-models", "download", "m", "-o", "out", "--include-optimizer"],
+    ["custom-models", "set-ttl", "m", "none"],
+    ["custom-models", "delete", "m"],
+    ["datasets", "list"],
+    ["datasets", "upload", "d", "rows.jsonl"],
+    ["datasets", "delete", "d"],
+    ["runs", "list"],
+    ["runs", "show", "run_1"],
+    ["runs", "close", "run_1"],
+    ["eval", "m", "d"],
+    ["usage", "--start", "2026-10-01", "--end", "2026-10-02", "--csv"],
+    ["user-report", "it works", "--kind", "works"],
+]
+
+
+def _commands(parser: argparse.ArgumentParser, prefix: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
+    """Every command the parser has, as its words (``("projects", "list")``)."""
+    subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+    if not subs:
+        return {prefix}
+    return {c for name, sub in subs[0].choices.items() for c in _commands(sub, (*prefix, name))}
+
+
+def test_the_list_has_every_command() -> None:
+    p = cli.build_parser()
+    listed = {tuple(w for w in (a.cmd, getattr(a, "action", None)) if w) for a in map(p.parse_args, COMMANDS)}
+    assert listed == _commands(p)
+
+
+@pytest.mark.parametrize("argv", COMMANDS, ids=" ".join)
+def test_every_command_takes_the_format_before_or_after_it(argv: list[str]) -> None:
+    p = cli.build_parser()
+    assert p.parse_args(argv).format == "table"
+    assert p.parse_args(["-f", "json", *argv]).format == "json"
+    assert p.parse_args([*argv, "-f", "json"]).format == "json"
+    assert p.parse_args([*argv, "--format", "json"]).format == "json"
+    assert p.parse_args(["-f", "json", *argv, "-f", "table"]).format == "table"  # the one after wins
+    with pytest.raises(SystemExit):
+        p.parse_args([*argv, "-f", "yaml"])
+
+
+def test_format_after_the_command(capsys: pytest.CaptureFixture[str], client: EndorClient) -> None:
+    after = json.loads(run(capsys, client, "whoami", "-f", "json"))
+    assert after == json.loads(run(capsys, client, "-f", "json", "whoami")) and "limits" in after
+    assert json.loads(run(capsys, client, "custom-models", "list", "--production", "--format", "json")) == []
+    assert json.loads(run(capsys, client, "projects", "-f", "json", "list")) == []
+    assert run(capsys, client, "-f", "json", "projects", "list", "-f", "table") == "No projects\n"

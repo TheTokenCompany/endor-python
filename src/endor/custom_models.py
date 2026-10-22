@@ -23,6 +23,7 @@ from typing import Any
 
 from ._http import Transport
 from ._pages import list_all
+from ._parse import parse
 from .runs import Run
 from .training import Runs
 from .types import CustomModelInfo, DownloadedFile
@@ -43,13 +44,12 @@ class CustomModels:
         newest first. ``production=True`` or ``production=False`` keeps only one of the two."""
         params = {"production": None if production is None else ("true" if production else "false")}
         items = list_all(self._t, self._base, params, "custom_models.list", limit, offset)
-        return [CustomModelInfo.model_validate(m) for m in items]
+        return [parse(CustomModelInfo, m, f"GET {self._base}") for m in items]
 
     def get(self, name: str) -> CustomModelInfo:
         """One custom model; ``NotFoundError`` if missing."""
-        return CustomModelInfo.model_validate(
-            self._t.request("GET", f"{self._base}/{name}", method_name="custom_models.get")
-        )
+        path = f"{self._base}/{name}"
+        return parse(CustomModelInfo, self._t.request("GET", path, method_name="custom_models.get"), f"GET {path}")
 
     def create(
         self, name: str, base_model: str | None = None, *, run_name: str | None = None, **run_options: Any
@@ -71,26 +71,24 @@ class CustomModels:
         names the models in production, unless ``replace`` names one: it moves to the archive in the same step.
         ``NotFoundError`` for an unknown model, or a ``replace`` that isn't in production."""
         body = {"replace": replace} if replace is not None else {}
-        return CustomModelInfo.model_validate(
-            self._t.request("POST", f"{self._base}/{name}/promote", json=body, method_name="custom_models.promote")
-        )
+        path = f"{self._base}/{name}/promote"
+        r = self._t.request("POST", path, json=body, method_name="custom_models.promote")
+        return parse(CustomModelInfo, r, f"POST {path}")
 
     def archive(self, name: str) -> CustomModelInfo:
         """Move the model to the archive: decisions refuse it (``ModelNotInProductionError``) and its production slot
         is free. It can still be downloaded, evaluated, trained from and promoted again. An archived model stays
         archived (nothing changes)."""
-        return CustomModelInfo.model_validate(
-            self._t.request("POST", f"{self._base}/{name}/demote", method_name="custom_models.archive")
-        )
+        path = f"{self._base}/{name}/demote"
+        r = self._t.request("POST", path, method_name="custom_models.archive")
+        return parse(CustomModelInfo, r, f"POST {path}")
 
     def set_ttl(self, name: str, ttl_seconds: int | None) -> CustomModelInfo:
         """Delete an archived model after ``ttl_seconds`` from now (1 hour to 10 years), or keep it with None. Models
         in production never expire (``ModelInProductionError``)."""
-        return CustomModelInfo.model_validate(
-            self._t.request(
-                "PATCH", f"{self._base}/{name}", json={"ttl_seconds": ttl_seconds}, method_name="custom_models.set_ttl"
-            )
-        )
+        path = f"{self._base}/{name}"
+        r = self._t.request("PATCH", path, json={"ttl_seconds": ttl_seconds}, method_name="custom_models.set_ttl")
+        return parse(CustomModelInfo, r, f"PATCH {path}")
 
     def download(
         self, name: str, path: str | os.PathLike[str], include_optimizer: bool = False
@@ -98,9 +96,11 @@ class CustomModels:
         """Write the model's files into the folder ``path`` (created if needed; ``NotFoundError`` for a model without
         stored weights), in production or archived, to run the LoRA adapter (PEFT) yourself on the same base model:
         ``adapter_model.safetensors``, ``adapter_config.json``, ``endor_manifest.json``, ``readout.safetensors`` if the
-        model has one, and ``optimizer.pt`` (Adam state, only to resume training) with ``include_optimizer=True``.
-        Each file is fetched straight from storage over a short-lived link and checked against its size and SHA-256;
-        a file that fails raises ``DownloadError`` and is not left behind. The links are never returned or logged."""
+        model has one, and ``optimizer.pt`` (Adam state, only to resume training) with ``include_optimizer=True``; a
+        model saved without optimizer state (``has_optimizer`` is False) then raises ``DownloadError`` before anything
+        is written. Each file is fetched straight from storage over a short-lived link and checked against its size
+        and SHA-256; a file that fails raises ``DownloadError`` and is not left behind. The links are never returned or
+        logged."""
         from ._download import fetch_all
 
         r = self._t.request(
@@ -109,7 +109,14 @@ class CustomModels:
             params={"include_optimizer": "true" if include_optimizer else "false"},
             method_name="custom_models.download",
         )
-        return fetch_all(r["files"], path, transport=self._t._transport, timeout=max(self._t.timeout, 60.0))
+        return fetch_all(
+            r["files"],
+            path,
+            what=name,
+            include_optimizer=include_optimizer,
+            transport=self._t._transport,
+            timeout=max(self._t.timeout, 60.0),
+        )
 
     def delete(self, name: str) -> None:
         """Delete an archived model's files and record; its name is free at once. Permanent. A model in production

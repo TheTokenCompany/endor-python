@@ -197,7 +197,10 @@ class TestLifecycle:
         run.optim_step().result()
         with caplog.at_level(logging.WARNING, logger="endor"):
             run.close()
-        assert any("newer than the last save" in r.getMessage() for r in caplog.records)
+            run.close()  # again: idempotent, and the warning isn't repeated
+        assert [r.getMessage() for r in caplog.records if "newer than the last save" in r.getMessage()] == [
+            f"run {run.id}: closing with optimizer steps newer than the last save_checkpoint; that progress is lost"
+        ]
         wait_closed(run)
 
     def test_close_is_quiet_after_a_save(self, client: endor.EndorClient, caplog: pytest.LogCaptureFixture) -> None:

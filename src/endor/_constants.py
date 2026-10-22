@@ -38,7 +38,6 @@ HEADER_RETRY_AFTER_MS = "retry-after-ms"
 MAX_DATUMS_PER_CALL = 1024
 MAX_PREDICT_QUESTIONS_PER_CALL = 1024  # run.predict: questions per request, across its rows
 MAX_UPLOAD_ROWS = 50_000
-MAX_IMAGES_PER_CALL = 128  # forward, forward_backward, predict: images across a call's datums or rows
 MAX_QUESTIONS_PER_REQUEST = 64
 MAX_FUTURES_PER_RETRIEVE = 256
 FUTURE_POLL_WAIT_S = 25.0  # server-side long poll per request (server clamps at 30)

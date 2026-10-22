@@ -1,17 +1,17 @@
-"""Test setup. By default every test runs against the in-memory fake (tests/fake_api.py).
+"""Test setup. Every test runs against the in-memory fake (tests/fake_api.py): many check what the fake saw or make
+it fail, and they create fixed names, so the suite isn't meant for a real API. tests/test_integration.py is: it runs
+against a real API when ENDOR_TEST_BASE_URL and ENDOR_TEST_API_KEY are set, and is skipped otherwise.
 
-Set ENDOR_TEST_BASE_URL and ENDOR_TEST_API_KEY to run the same suite against a real API instead: the ``client`` and
-``project`` fixtures then talk to that server, and tests that need the fake itself (they inspect its requests or
-inject faults) are skipped. Either way, every test must close every run it opens: the API allows 4 open runs per org.
+Every test must close every run it opens: the fake, like the API, refuses runs over the open-run limit (the fake's
+is 4; the API's is 25 by default, and ``client.whoami().limits["max_active_runs"]`` has an org's own), and the suite
+fails a test that leaves one open.
 """
 
 from __future__ import annotations
 
-import os
 import time
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -23,9 +23,6 @@ from .fake_api import FakeEndor
 
 API_KEY = "edk_test"
 BASE_URL = "https://endor.test"
-LIVE_URL = os.environ.get("ENDOR_TEST_BASE_URL")
-LIVE_KEY = os.environ.get("ENDOR_TEST_API_KEY")
-LIVE = bool(LIVE_URL and LIVE_KEY)
 
 DEPT = Choice(instructions="Route the ticket", criteria={"billing": "money", "tech": None})
 URGENT = Noul(instructions="Is it urgent?")
@@ -64,7 +61,9 @@ def wait_closed(run: endor.Run, timeout: float = 10.0) -> str:
 
 
 @pytest.fixture
-def _fake() -> Iterator[FakeEndor]:
+def fake() -> Iterator[FakeEndor]:
+    """The fake API itself, for tests that inspect requests or inject faults. It fails a test that leaves a run
+    open."""
     f = FakeEndor()
     yield f
     still_open = [r["id"] for r in f.runs.values() if r["status"] not in DONE]
@@ -72,44 +71,16 @@ def _fake() -> Iterator[FakeEndor]:
 
 
 @pytest.fixture
-def fake(_fake: FakeEndor) -> FakeEndor:
-    """The fake API itself, for tests that inspect requests or inject faults (skipped against a real API)."""
-    if LIVE:
-        pytest.skip("needs the in-memory fake")
-    return _fake
-
-
-@pytest.fixture
-def client(_fake: FakeEndor) -> Iterator[endor.EndorClient]:
-    retry = endor.RetryPolicy(backoff_initial=0.0, backoff_max=0.0)
-    if LIVE:
-        assert LIVE_URL and LIVE_KEY
-        c = endor.EndorClient(api_key=LIVE_KEY, base_url=LIVE_URL, retry=retry)
-    else:
-        c = endor.EndorClient(
-            api_key=API_KEY,
-            base_url=BASE_URL,
-            transport=httpx.MockTransport(_fake.handler),
-            async_transport=httpx.MockTransport(_fake.handler),
-            retry=retry,
-        )
-    started = datetime.now(timezone.utc) - timedelta(seconds=5)
+def client(fake: FakeEndor) -> Iterator[endor.EndorClient]:
+    c = endor.EndorClient(
+        api_key=API_KEY,
+        base_url=BASE_URL,
+        transport=httpx.MockTransport(fake.handler),
+        async_transport=httpx.MockTransport(fake.handler),
+        retry=endor.RetryPolicy(backoff_initial=0.0, backoff_max=0.0),
+    )
     with c:
         yield c
-        if LIVE:
-            _assert_no_open_runs(c, started)
-
-
-def _assert_no_open_runs(c: endor.EndorClient, since: datetime) -> None:
-    """Runs this test created and left open (the runs list is newest first)."""
-    deadline = time.monotonic() + 10
-    while True:
-        mine = [r for r in c.runs.list(limit=50) if r.info_.created_at >= since]
-        still_open = [r.id for r in mine if r.info_.status not in DONE]
-        if not still_open or time.monotonic() > deadline:
-            break
-        time.sleep(0.2)
-    assert not still_open, f"the test left runs open: {still_open}"
 
 
 BASE = "jev-9b"

@@ -23,6 +23,7 @@ from . import _constants as C
 from . import data as D
 from ._download import fetch_bytes, fetch_bytes_async
 from ._http import Transport
+from ._parse import parse
 from .errors import EndorError
 from .futures import APIFuture
 from .types import Answer, Evaluation
@@ -83,8 +84,8 @@ def wait(t: Transport, created: dict[str, Any], progress: bool, timeout: float |
             if last:
                 raise
         if progress:
-            _show(Evaluation.model_validate(t.request("GET", path, method_name=method)))
-    return Evaluation.model_validate(t.request("GET", path, method_name=method))
+            _show(parse(Evaluation, t.request("GET", path, method_name=method), f"GET {path}"))
+    return parse(Evaluation, t.request("GET", path, method_name=method), f"GET {path}")
 
 
 async def wait_async(
@@ -102,19 +103,19 @@ async def wait_async(
             if last:
                 raise
         if progress:
-            _show(Evaluation.model_validate(await t.arequest("GET", path, method_name=method)))
-    return Evaluation.model_validate(await t.arequest("GET", path, method_name=method))
+            _show(parse(Evaluation, await t.arequest("GET", path, method_name=method), f"GET {path}"))
+    return parse(Evaluation, await t.arequest("GET", path, method_name=method), f"GET {path}")
 
 
 def answers(t: Transport, ev: Evaluation, n: int) -> list[Answers]:
     """Every row's answers from a completed evaluation's results file, in the rows' order."""
-    return _parse(fetch_bytes(_rows_url(ev), "the evaluation's results", transport=t._transport), n)
+    return _read_answers(fetch_bytes(_rows_url(ev), "the evaluation's results", transport=t._transport), n, ev.id)
 
 
 async def answers_async(t: Transport, ev: Evaluation, n: int) -> list[Answers]:
     """``answers`` for async code."""
     blob = await fetch_bytes_async(_rows_url(ev), "the evaluation's results", transport=t._atransport)
-    return _parse(blob, n)
+    return _read_answers(blob, n, ev.id)
 
 
 def progress_line(ev: Evaluation) -> str | None:
@@ -154,12 +155,12 @@ def _rows_url(ev: Evaluation) -> str:
     return url
 
 
-def _parse(blob: bytes, n: int) -> list[Answers]:
+def _read_answers(blob: bytes, n: int, evaluation_id: str) -> list[Answers]:
     out: list[Answers] = [{} for _ in range(n)]
     for line in blob.splitlines():
         if line.strip():
             x = json.loads(line)
-            out[x["index"]][x["question"]] = _ANSWER.validate_python(x["answer"])
+            out[x["index"]][x["question"]] = parse(_ANSWER, x["answer"], f"evaluation {evaluation_id}'s results")
     return out
 
 

@@ -26,7 +26,8 @@ print(res.choices["department"].choice, res.choices["department"].probabilities)
 print(res.nouls["urgent"].noul)
 print(res.scores["frustration"].score, res.scores["frustration"].probabilities)
 
-# It was wrong about one question: tell the project, and it learns from it.
+# It was wrong about one question: tell the project, and it learns from it. Right after the decision is fine: Endor
+# records a decision just after it answers, and the SDK waits up to 5 s for that.
 client.corrections.create(res, {"urgent": {"correct": False}})
 
 

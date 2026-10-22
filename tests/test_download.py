@@ -114,3 +114,21 @@ def test_size_mismatch(tmp_path: Path) -> None:
     with pytest.raises(DownloadError, match="got 2 bytes, expected 3"):
         fetch_all([{"name": "adapter_config.json", "size_bytes": 3, "url": "https://s/x"}], tmp_path, transport=ok)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_include_optimizer_without_optimizer_state_says_so(
+    client: endor.EndorClient, fake: FakeEndor, tmp_path: Path
+) -> None:
+    """The API lists no optimizer.pt for a model saved without optimizer state: asked for, that is an error before
+    anything is written, not a download without it."""
+    with client.custom_models.create("v2", base_model="jev-9b") as run:
+        run.save_checkpoint().result()  # no optimizer state
+    assert client.custom_models.get("v2").has_optimizer is False
+    with pytest.raises(DownloadError, match=r"v2 was saved without optimizer state, so it has no optimizer\.pt"):
+        client.custom_models.download("v2", tmp_path / "v2", include_optimizer=True)
+    assert not (tmp_path / "v2").exists() and not fake.file_requests
+    assert [f.name for f in client.custom_models.download("v2", tmp_path / "v2")] == BASE  # without it: fine
+    p = client.projects.create("tickets", base_model="jev-9b")
+    fake.add_version(p.name)
+    with pytest.raises(DownloadError, match="tickets v1 was saved without optimizer state"):
+        p.download("v1", tmp_path / "t", include_optimizer=True)

@@ -13,21 +13,32 @@ and, if not, the right answer. Continuous learning projects learn from them.
 
 A decision has one correction: creating it again replaces it whole, and the same questions and comment again change
 nothing. Corrections are free.
+
+Endor records a decision just after it answers, so a correction sent at once can find no decision yet (404
+``not_found`` naming it). ``create`` and ``batch`` try again after each of ``DECISION_RETRY_DELAYS`` (5 s in all), then
+raise ``NotFoundError`` as for any unknown decision.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from ._http import Transport
-from .errors import EndorError
+from ._log import logger
+from ._parse import parse
+from .errors import EndorError, NotFoundError
 from .types import CorrectionInfo, QuestionCorrection, SystemOneResponse
 
-__all__ = ["Corrections", "MAX_ITEMS"]
+__all__ = ["Corrections", "MAX_ITEMS", "DECISION_RETRY_DELAYS"]
 
 MAX_ITEMS = 1000
 """Items per ``batch`` call; the API keeps all of them or none."""
+
+DECISION_RETRY_DELAYS = (0.25, 0.5, 1.0, 1.25, 2.0)
+"""Seconds to wait before each new try of a correction whose decision Endor hasn't recorded yet (5 s in all)."""
 
 
 class Corrections:
@@ -62,20 +73,15 @@ class Corrections:
             right answer, ``None`` when only known to be wrong).
 
         Raises:
-            NotFoundError: Not an answered decision of your organization. Endor records a decision a moment after it
-                answers, so a correction sent at once may need a retry.
+            NotFoundError: Not an answered decision of your organization. Endor records a decision just after it
+                answers, so a correction sent at once can find none yet: the SDK tries again for up to 5 s
+                (``DECISION_RETRY_DELAYS``) before it raises.
             UnprocessableEntityError: A question the decision didn't ask (``param``: ``questions.<name>``), or an
                 answer that isn't exactly one of its options or contradicts ``correct`` (``questions.<name>.answer``;
                 the message lists the options).
         """
-        r = self._t.request(
-            "POST",
-            "/v1/corrections",
-            json=_item(request_id, questions, comment),
-            method_name="client.corrections.create",
-            idempotent=True,
-        )
-        return CorrectionInfo.model_validate(r)
+        r = self._post("/v1/corrections", _item(request_id, questions, comment), "client.corrections.create")
+        return parse(CorrectionInfo, r, "POST /v1/corrections")
 
     async def create_async(
         self,
@@ -85,14 +91,9 @@ class Corrections:
         comment: str | None = None,
     ) -> CorrectionInfo:
         """``create`` for async code."""
-        r = await self._t.arequest(
-            "POST",
-            "/v1/corrections",
-            json=_item(request_id, questions, comment),
-            method_name="client.corrections.create",
-            idempotent=True,
-        )
-        return CorrectionInfo.model_validate(r)
+        body = _item(request_id, questions, comment)
+        r = await self._post_async("/v1/corrections", body, "client.corrections.create")
+        return parse(CorrectionInfo, r, "POST /v1/corrections")
 
     def batch(self, items: Iterable[Mapping[str, Any]]) -> list[CorrectionInfo]:
         """Correct many decisions in one call (``POST /v1/corrections/batch``), all or nothing: if one item fails,
@@ -107,38 +108,28 @@ class Corrections:
 
         Raises:
             ValueError: No items, or more than 1,000.
-            NotFoundError: An item's decision isn't one (``param``: ``items[i].request_id``).
+            NotFoundError: An item's decision isn't one (``param``: ``items[i].request_id``), after trying again for
+                up to 5 s as ``create`` does.
             UnprocessableEntityError: An item's question doesn't fit (``param``: ``items[i].questions.<name>``...).
         """
-        r = self._t.request(
-            "POST",
-            "/v1/corrections/batch",
-            json=_items(items),
-            method_name="client.corrections.batch",
-            idempotent=True,
-        )
-        return [CorrectionInfo.model_validate(x) for x in r.get("items", [])]
+        r = self._post("/v1/corrections/batch", _items(items), "client.corrections.batch")
+        return [parse(CorrectionInfo, x, "POST /v1/corrections/batch") for x in r.get("items", [])]
 
     async def batch_async(self, items: Iterable[Mapping[str, Any]]) -> list[CorrectionInfo]:
         """``batch`` for async code."""
-        r = await self._t.arequest(
-            "POST",
-            "/v1/corrections/batch",
-            json=_items(items),
-            method_name="client.corrections.batch",
-            idempotent=True,
-        )
-        return [CorrectionInfo.model_validate(x) for x in r.get("items", [])]
+        r = await self._post_async("/v1/corrections/batch", _items(items), "client.corrections.batch")
+        return [parse(CorrectionInfo, x, "POST /v1/corrections/batch") for x in r.get("items", [])]
 
     def get(self, request_id: str | SystemOneResponse) -> CorrectionInfo:
         """The decision's correction. ``NotFoundError`` as for ``create``, and when the decision has none."""
-        r = self._t.request("GET", _path(request_id), method_name="client.corrections.get")
-        return CorrectionInfo.model_validate(r)
+        path = _path(request_id)
+        return parse(CorrectionInfo, self._t.request("GET", path, method_name="client.corrections.get"), f"GET {path}")
 
     async def get_async(self, request_id: str | SystemOneResponse) -> CorrectionInfo:
         """``get`` for async code."""
-        r = await self._t.arequest("GET", _path(request_id), method_name="client.corrections.get")
-        return CorrectionInfo.model_validate(r)
+        path = _path(request_id)
+        r = await self._t.arequest("GET", path, method_name="client.corrections.get")
+        return parse(CorrectionInfo, r, f"GET {path}")
 
     def delete(self, request_id: str | SystemOneResponse) -> None:
         """Withdraw the decision's correction: learning stops using it. ``NotFoundError`` as for ``get``."""
@@ -147,6 +138,39 @@ class Corrections:
     async def delete_async(self, request_id: str | SystemOneResponse) -> None:
         """``delete`` for async code."""
         await self._t.arequest("DELETE", _path(request_id), method_name="client.corrections.delete")
+
+    def _post(self, path: str, body: dict[str, Any], method_name: str) -> Any:
+        """POST a correction (or a batch), trying again while Endor hasn't recorded its decision yet."""
+        for delay in DECISION_RETRY_DELAYS:
+            try:
+                return self._t.request("POST", path, json=body, method_name=method_name, idempotent=True)
+            except NotFoundError as e:
+                if not _decision_not_recorded(e, body):
+                    raise
+            time.sleep(delay)
+        return self._t.request("POST", path, json=body, method_name=method_name, idempotent=True)
+
+    async def _post_async(self, path: str, body: dict[str, Any], method_name: str) -> Any:
+        """``_post`` for async code."""
+        for delay in DECISION_RETRY_DELAYS:
+            try:
+                return await self._t.arequest("POST", path, json=body, method_name=method_name, idempotent=True)
+            except NotFoundError as e:
+                if not _decision_not_recorded(e, body):
+                    raise
+            await asyncio.sleep(delay)
+        return await self._t.arequest("POST", path, json=body, method_name=method_name, idempotent=True)
+
+
+def _decision_not_recorded(e: NotFoundError, body: dict[str, Any]) -> bool:
+    """Whether ``e`` is the API's 404 ``not_found`` for a decision of this correction or batch (``No decision
+    'req_...'.``): possibly one Endor hasn't recorded yet. Logs that the SDK tries again."""
+    ids = [it["request_id"] for it in body.get("items", [body])]
+    rid = next((i for i in ids if i and i in e.message), None)
+    if e.code != "not_found" or "decision" not in e.message.lower() or rid is None:
+        return False
+    logger.info("decision %s isn't recorded yet (request %s); trying the correction again", rid, e.request_id)
+    return True
 
 
 def _request_id(decision: str | SystemOneResponse) -> str:

@@ -23,8 +23,9 @@ from .errors import DownloadError
 from .types import DownloadedFile
 
 # The only names the SDK writes, whatever the server says: no paths, no hidden files.
+OPTIMIZER = "optimizer.pt"
 ALLOWED = frozenset(
-    {"adapter_model.safetensors", "adapter_config.json", "endor_manifest.json", "readout.safetensors", "optimizer.pt"}
+    {"adapter_model.safetensors", "adapter_config.json", "endor_manifest.json", "readout.safetensors", OPTIMIZER}
 )
 _SIGNED = re.compile(r"(https?://[^/\s\"']+)[^\s\"']*(?:X-Amz-|Signature=)[^\s\"']*")
 CHUNK = 1 << 20
@@ -54,10 +55,19 @@ def fetch_all(
     files: list[dict[str, Any]],
     folder: str | os.PathLike[str],
     *,
+    what: str = "the model",
+    include_optimizer: bool = False,
     transport: httpx.BaseTransport | None = None,
     timeout: float = 60.0,
 ) -> list[DownloadedFile]:
-    """Write each file to ``folder`` (created if needed) and verify it; a file is only in place once whole."""
+    """Write each file to ``folder`` (created if needed) and verify it; a file is only in place once whole.
+    ``include_optimizer``: optimizer.pt was asked for, so a model saved without optimizer state (the API then lists no
+    optimizer.pt) raises ``DownloadError`` naming ``what`` before anything is written."""
+    if include_optimizer and not any(f.get("name") == OPTIMIZER for f in files):
+        raise DownloadError(
+            f"{what} was saved without optimizer state, so it has no {OPTIMIZER}: download it without "
+            "include_optimizer. Only run.save_checkpoint(include_optimizer=True) stores optimizer state."
+        )
     out = Path(folder)
     out.mkdir(parents=True, exist_ok=True)
     done: list[DownloadedFile] = []

@@ -82,7 +82,21 @@ and there is no preview. While its base model answers, a project's decisions rep
 - `endor custom-models list`, `datasets list`, `runs list` and `projects list` print `No custom models` (and so on)
   when there is nothing, instead of nothing at all.
 - Docstrings and the README: a run left open is closed an hour after its process ended (not "a few minutes"); the
-  open-run limit is the organization's `max_active_runs` (`client.whoami().limits`, `endor whoami`), not a fixed 25.
+  open-run limit is 25 by default, and `max_active_runs` in `client.whoami().limits` (`endor whoami`) is the
+  organization's own.
+- `-f/--format` goes before or after any CLI command: `endor whoami -f json` failed with "unrecognized arguments".
+- A successful response without the expected shape raises `ResponseValidationError` (an `EndorError`, naming the
+  endpoint and the field) from projects, custom models, datasets, evaluations, runs, corrections and futures, as it
+  did from the `client` methods, instead of pydantic's `ValidationError`.
+- One client used in two `asyncio.run()` calls: the second failed with `RuntimeError: Event loop is closed`. Each event
+  loop now gets its own async connections.
+- `download(..., include_optimizer=True)` on a custom model or a project's version saved without optimizer state
+  raises `DownloadError` before writing anything, instead of leaving out `optimizer.pt` without a word.
+- `run.close()` called again doesn't repeat the warning about optimizer steps newer than the last save.
+- Docstrings and the README: a version's and a training's `accuracy` is in percent, a custom model's and an
+  evaluation's from 0 to 1; `CustomModelInfo.loss` is the run's training loss at the model's step; an unknown model
+  in `client.evaluations.create` and `client.predict` raises `NotFoundError` (404 `unknown_model`); the default
+  `decisions_per_minute` is 1,200 (not 60).
 
 ### Also in this release
 
@@ -92,7 +106,9 @@ and there is no preview. While its base model answers, a project's decisions rep
   `get(request_id)` and `delete(request_id)`, each with an `_async` variant. `request_id` is a `SystemOneResponse` or
   its id. Each question is `{"correct": True}`, `{"correct": False, "answer": ...}` or `{"correct": False}`; an answer
   must be exactly one of the question's options. New types `CorrectionInfo`, `QuestionCorrectionInfo`,
-  `QuestionCorrection` and `CorrectionAnswer`.
+  `QuestionCorrection` and `CorrectionAnswer`. Endor records a decision just after it answers, so `create` and `batch`
+  try a correction again for up to 5 s while its decision isn't recorded yet (a 404 `not_found` naming it), then
+  raise `NotFoundError`.
 - `SystemOneResponse.id`: the decision's id (`req_...`, also its `X-Request-Id`). It is None from a server that doesn't
   send one.
 - `Learning.drift` (new type `Drift`): per question, whether recent traffic moved away from what the served version
@@ -115,19 +131,6 @@ and there is no preview. While its base model answers, a project's decisions rep
   New types `Learning` and `Training`.
 - `project.update(paused=...)` and `ProjectInfo.paused` are gone: learning can't be paused (the API refuses `paused`
   with 422).
-
-Fine-tuning with images, in limited access.
-
-- `endor.Image` objects go in training data too, on base models that read images: rows of `client.datasets.upload`
-  and `client.predict`, datums of `run.forward` / `run.forward_backward`, rows of `run.predict`. The SDK uploads each
-  image once (`client.images.upload(images) -> list[Image]` does it by hand: declares them with `POST /v1/images`,
-  PUTs the files straight to storage, confirms them) and sends references, `{"type": "image", "sha256": ...}`
-  (`Image.ref(sha256, media_type=None)`, `image.is_ref`, `image.sha256`, `image.content`, `Image.wrap(dict)`). A
-  call carries at most `MAX_IMAGES_PER_CALL` (128) images, so larger batches are split as they are over 1,024 datums.
-- Until the organization is approved these calls raise `PermissionDeniedError` (403 `image_training_not_enabled`),
-  whose message says how to ask; `client.whoami().image_training` says whether it is. Decisions with images need no
-  access.
-- `DatasetInfo.n_images`: the images across a dataset's rows.
 
 ## [0.8.0] - 2026-10-15
 

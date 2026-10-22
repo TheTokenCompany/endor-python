@@ -24,6 +24,7 @@ from typing import Any
 from . import _constants as C
 from ._http import Transport
 from ._pages import list_all
+from ._parse import parse
 from .errors import NotFoundError
 from .types import DownloadedFile, Learning, ProjectInfo, VersionInfo
 
@@ -49,11 +50,12 @@ class Projects:
         base_model = _base(base_model, removed, "projects.create")
         body: dict[str, Any] = {"name": name, "description": description, "base_model": base_model}
         r = self._t.request("POST", "/v1/projects", json=body, method_name="projects.create", idempotent=True)
-        return Project(self._t, r)
+        return Project(self._t, r, endpoint="POST /v1/projects")
 
     def get(self, name: str) -> Project:
         """Your project called ``name``; ``NotFoundError`` if there is none."""
-        return Project(self._t, self._t.request("GET", f"/v1/projects/{name}", method_name="projects.get"))
+        path = f"/v1/projects/{name}"
+        return Project(self._t, self._t.request("GET", path, method_name="projects.get"), endpoint=f"GET {path}")
 
     def get_or_create(
         self, name: str, base_model: str | None = None, description: str | None = None, **removed: Any
@@ -76,15 +78,15 @@ class Projects:
     def list(self, limit: int | None = None, offset: int = 0) -> list[Project]:
         """Your projects, newest first: all of them, or at most ``limit`` starting at ``offset``."""
         items = list_all(self._t, "/v1/projects", {}, "projects.list", limit, offset)
-        return [Project(self._t, p) for p in items]
+        return [Project(self._t, p, endpoint="GET /v1/projects") for p in items]
 
 
 class Project:
     """One continuous learning project. ``ref`` and ``preview_ref`` are what you pass as ``model``."""
 
-    def __init__(self, transport: Transport, info: dict[str, Any]) -> None:
+    def __init__(self, transport: Transport, info: dict[str, Any], *, endpoint: str | None = None) -> None:
         self._t = transport
-        self.info_ = ProjectInfo.model_validate(info)
+        self.info_ = parse(ProjectInfo, info, endpoint)
         """The project as last fetched (``project.info()`` refreshes it)."""
         self.name: str = self.info_.name
 
@@ -123,49 +125,39 @@ class Project:
 
     def info(self) -> ProjectInfo:
         """Fetch the project again: its production and preview versions, auto-promote and description."""
-        self.info_ = ProjectInfo.model_validate(
-            self._t.request("GET", f"/v1/projects/{self.name}", method_name="project.info")
-        )
+        path = f"/v1/projects/{self.name}"
+        self.info_ = parse(ProjectInfo, self._t.request("GET", path, method_name="project.info"), f"GET {path}")
         return self.info_
 
     def learning(self) -> Learning:
         """The project's learning, which is always on: its status, the way to the next version (``progress``, 0 to
         1), what ``"<project>"`` answers with now, the latest training runs (each kept or not, with its accuracy and
         loss) and whether recent traffic changed (``drift``)."""
-        return Learning.model_validate(
-            self._t.request("GET", f"/v1/projects/{self.name}/learning", method_name="project.learning")
-        )
+        path = f"/v1/projects/{self.name}/learning"
+        return parse(Learning, self._t.request("GET", path, method_name="project.learning"), f"GET {path}")
 
     def versions(self) -> builtins.list[VersionInfo]:
         """Every version, newest first, with which one is in production, which one is the preview (the newest, while
         it isn't in production) and how each did when it was trained."""
-        items = list_all(self._t, f"/v1/projects/{self.name}/versions", {}, "project.versions")
-        return [VersionInfo.model_validate(v) for v in items]
+        path = f"/v1/projects/{self.name}/versions"
+        return [parse(VersionInfo, v, f"GET {path}") for v in list_all(self._t, path, {}, "project.versions")]
 
     def promote(self, version: str) -> ProjectInfo:
         """Put ``version`` (``"v3"``) in production: ``"<project>"`` answers with it from now on. Promoting a version
         older than the newest is a rollback: it turns auto-promote off, so the newest becomes the preview and new
         versions only reach ``"<project>:preview"`` until you promote again or call ``set_auto_promote(True)``.
         Promoting the production version changes nothing. ``NotFoundError`` for a version the project doesn't have."""
-        self.info_ = ProjectInfo.model_validate(
-            self._t.request(
-                "POST", f"/v1/projects/{self.name}/versions/{version}/promote", method_name="project.promote"
-            )
-        )
+        path = f"/v1/projects/{self.name}/versions/{version}/promote"
+        self.info_ = parse(ProjectInfo, self._t.request("POST", path, method_name="project.promote"), f"POST {path}")
         return self.info_
 
     def set_auto_promote(self, on: bool) -> ProjectInfo:
         """Turn auto-promote on (the newest version goes to production at once, and every new version after it, so
         there is no preview) or off, the default (the production version stays until you promote one; newer versions
         are the preview)."""
-        self.info_ = ProjectInfo.model_validate(
-            self._t.request(
-                "PATCH",
-                f"/v1/projects/{self.name}",
-                json={"auto_promote": bool(on)},
-                method_name="project.set_auto_promote",
-            )
-        )
+        path = f"/v1/projects/{self.name}"
+        r = self._t.request("PATCH", path, json={"auto_promote": bool(on)}, method_name="project.set_auto_promote")
+        self.info_ = parse(ProjectInfo, r, f"PATCH {path}")
         return self.info_
 
     def update(self, *, description: str | None = None) -> ProjectInfo:
@@ -173,11 +165,9 @@ class Project:
         ``set_auto_promote``."""
         if description is None:
             raise ValueError("nothing to update: pass description")
-        self.info_ = ProjectInfo.model_validate(
-            self._t.request(
-                "PATCH", f"/v1/projects/{self.name}", json={"description": description}, method_name="project.update"
-            )
-        )
+        path = f"/v1/projects/{self.name}"
+        r = self._t.request("PATCH", path, json={"description": description}, method_name="project.update")
+        self.info_ = parse(ProjectInfo, r, f"PATCH {path}")
         return self.info_
 
     def download(
@@ -186,9 +176,10 @@ class Project:
         """Write a version's files into the folder ``path`` (created if needed; ``NotFoundError`` for a version without
         stored weights), to run the LoRA adapter (PEFT)
         yourself on the project's base model: ``adapter_model.safetensors``, ``adapter_config.json``,
-        ``endor_manifest.json``, ``readout.safetensors`` if it has one, and ``optimizer.pt`` with
-        ``include_optimizer=True``. Each file is fetched straight from storage over a short-lived link and checked
-        against its size and SHA-256 (``DownloadError`` otherwise; nothing is left behind)."""
+        ``endor_manifest.json`` and ``readout.safetensors`` if it has one. Each file is fetched straight from storage
+        over a short-lived link and checked against its size and SHA-256 (``DownloadError`` otherwise; nothing is left
+        behind). ``include_optimizer=True`` adds ``optimizer.pt``; a version saved without optimizer state (Endor's
+        training doesn't store it) raises ``DownloadError`` before anything is written."""
         from ._download import fetch_all
 
         r = self._t.request(
@@ -197,7 +188,14 @@ class Project:
             params={"include_optimizer": "true" if include_optimizer else "false"},
             method_name="project.download",
         )
-        return fetch_all(r["files"], path, transport=self._t._transport, timeout=max(self._t.timeout, 60.0))
+        return fetch_all(
+            r["files"],
+            path,
+            what=f"{self.name} {version}",
+            include_optimizer=include_optimizer,
+            transport=self._t._transport,
+            timeout=max(self._t.timeout, 60.0),
+        )
 
     def delete(self) -> None:
         """Delete the project and its versions. Permanent: ``"<project>"`` stops answering, and its name is free at

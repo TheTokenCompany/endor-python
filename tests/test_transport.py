@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import json
+import threading
 import time
 import types
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 import pytest
@@ -328,3 +332,46 @@ class TestEncoding:
         pages = [r.params for r in fake.requests if r.method == "GET" and r.path == "/v1/projects"]
         assert [p["offset"] for p in pages] == ["0", "2", "4"]
         assert len(client.projects.list(limit=3)) == 3
+
+
+class _Models(BaseHTTPRequestHandler):
+    """GET anything: an empty model list. HTTP/1.1, so the connection stays open in the client's pool."""
+
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self) -> None:  # noqa: N802 (http.server's name)
+        body = b'{"models": []}'
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def local_api() -> Iterator[str]:
+    """A real HTTP server on localhost (a mock transport has no connections to keep)."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Models)
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+    server.server_close()
+
+
+def test_one_client_in_two_event_loops(local_api: str) -> None:
+    """Each asyncio.run() has its own event loop, and a connection belongs to the loop that opened it: the second
+    run gets a new async HTTP client, instead of reusing the first loop's connection ("Event loop is closed")."""
+    c = EndorClient(api_key=API_KEY, base_url=local_api, retry=RetryPolicy(max_retries=0), report_latency=False)
+    for _ in range(3):
+        assert asyncio.run(c.models.list_async()).models == []
+
+    async def twice_then_close() -> None:
+        first = (await c.models.list_async(), c._t._aclient)
+        assert (await c.models.list_async(), c._t._aclient) == first  # one loop: one client, its pool reused
+        await c.aclose()
+
+    asyncio.run(twice_then_close())
+    asyncio.run(c.aclose())  # a client opened on a loop that is gone has nothing left to close
