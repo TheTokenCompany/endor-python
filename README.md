@@ -42,8 +42,8 @@ API keys belong to an organization (`edk_...`, created in the dashboard); everyt
 ## Continuous learning projects
 
 Create a project on a base model, then send it decisions. It answers at once with the base model and learns from its
-own decisions and your corrections, making new versions that you promote to production (or that go there by
-themselves with auto-promote on):
+own decisions and your corrections, making new versions that go to production by themselves (auto-promote, on for a
+new project) or wait in the preview for you to promote them:
 
 ```python
 import endor
@@ -71,14 +71,15 @@ res.model, res.usage.input_tokens         # what answered: "tickets:v4", or "tic
 res.id                                    # the decision's id ("req_..."), to correct it later
 ```
 
-**Production and preview, like deployments.** A project has one **production** version. A new version lands in the
-**preview** and waits there until you promote it to production. Turn **auto-promote** on (it is off by default) and
-every new version goes to production as soon as it is ready instead:
+**Production and preview, like deployments.** A project has one **production** version. With **auto-promote** on, as
+a new project starts, every new version goes to production as soon as it is ready. Endor still holds back a first
+version that isn't clearly better than the base model, and a version whose agreement with the frontier model fell;
+those stay the **preview**. Turn auto-promote off and every new version waits in the preview until you promote it:
 
 | `model` | Answers with |
 |---|---|
-| `"tickets"` (`project.ref`) | the production version (`project.production`); the base model until you promote one |
-| `"tickets:preview"` (`project.preview_ref`) | the preview (`project.preview`), the newest version while it isn't in production. Without one (always while auto-promote is on) it raises `NoPreviewError`, and `project.preview_ref` is None |
+| `"tickets"` (`project.ref`) | the production version (`project.production`); the base model until a version goes to production |
+| `"tickets:preview"` (`project.preview_ref`) | the preview (`project.preview`), the newest version while it isn't in production. Without one (as while auto-promote is on, unless Endor held a version back) it raises `NoPreviewError`, and `project.preview_ref` is None |
 | `"router-2"` | a custom model in production (see "Advanced: custom models") |
 
 Promote any version yourself, for example to roll back:
@@ -86,7 +87,7 @@ Promote any version yourself, for example to roll back:
 ```python
 project.versions()               # v1, v2, ... newest first: .production, .preview (never both), .accuracy (%), .loss
 project.promote("v3")            # v3 to production; a version older than the newest turns auto-promote off
-project.set_auto_promote(True)   # the newest goes to production at once, and every new version after it (off by default)
+project.set_auto_promote(False)  # new versions wait in the preview until you promote one (on for a new project)
 project.info()                   # .production, .preview, .auto_promote, .promoted_at, .versions, .base_model
 project.production, project.preview, project.auto_promote   # the same, as last fetched
 project.download("v3", "./tickets-v3")   # a version's LoRA adapter (PEFT), to run it yourself

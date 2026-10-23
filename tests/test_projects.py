@@ -41,7 +41,7 @@ class TestProjects:
         assert "idempotency-key" in fake.requests[-1].headers
         assert p.name == name and repr(p) == f"Project({name!r})"
         info = p.info_
-        assert info.base_model == BASE and info.description == "tickets" and not info.auto_promote  # off by default
+        assert info.base_model == BASE and info.description == "tickets" and info.auto_promote is True  # on at first
         assert info.production is None and info.preview is None and info.versions == 0
         assert client.projects.get(name).info_.base_model == BASE
         assert name in [x.name for x in client.projects.list()]
@@ -107,7 +107,10 @@ class TestProjects:
 
     def test_versions_live_preview_promote_and_auto_promote(self, client: EndorClient, fake: FakeEndor) -> None:
         p = client.projects.create(unique("ver"), base_model=BASE)
-        fake.add_version(p.name, accuracy=81.0, loss=0.5)  # auto-promote is off by default: v1 is the preview
+        assert p.auto_promote is True  # a new project starts with auto-promote on
+        info = p.set_auto_promote(False)  # new versions wait in the preview
+        assert fake.requests[-1].body == {"auto_promote": False} and info.auto_promote is False
+        fake.add_version(p.name, accuracy=81.0, loss=0.5)  # v1 is the preview
         info = p.info()
         assert (info.production, info.preview, info.versions, info.auto_promote) == (None, "v1", 1, False)
         assert p.preview_ref == f"{p.name}:preview"
