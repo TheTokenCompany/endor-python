@@ -5,6 +5,13 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `project.learning()` keeps every field the API sends: `Training.labels` (the labels a run learned from),
+  `Training.checked` (how many held-back answers its `accuracy` was measured on), `Training.held` (why a kept version
+  stayed the preview with auto-promote on) and `Learning.training_since` (when the run on now started). 0.9.0 dropped
+  them.
+
 ## [0.9.0] - 2026-10-22
 
 0.9.0: projects are continuous learning projects, with a production version and a preview like deployments, and custom

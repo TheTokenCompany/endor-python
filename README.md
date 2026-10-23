@@ -101,7 +101,7 @@ learning = project.learning()
 learning.status, learning.progress    # "learning", 0.4 of the way to the next version
 learning.serving                      # "tickets:v2", or "tickets" while its base model answers
 for t in learning.trainings:          # newest first: kept or not, with its accuracy and loss
-    print(t.version, t.kept, t.decisions, t.accuracy, t.against_accuracy)
+    print(t.version, t.kept, t.decisions, t.labels, t.accuracy, t.checked, t.against_accuracy, t.held)
 learning.drift                        # per question, whether recent traffic changed
 ```
 

@@ -176,13 +176,16 @@ class TestProjects:
         got = p.learning()
         assert got.status == "waiting" and got.serving == p.name and got.trainings == []
         fake.learning[p.name] = {
-            "status": "learning",
+            "status": "training",
+            "training_since": "2026-10-20T12:30:00Z",
             "trainings": [
                 {
                     "at": "2026-10-20T12:00:00Z",
                     "kept": True,
                     "version": "v1",
                     "decisions": 400,
+                    "labels": 380,
+                    "checked": 123,
                     "accuracy": 91.5,
                     "low": 88.0,
                     "high": 94.0,
@@ -191,12 +194,16 @@ class TestProjects:
                     "against_accuracy": 84.0,
                     "against_loss": 0.52,
                     "worse": [],
+                    "held": "agreement with the frontier model fell against the production version's",
                 }
             ],
             "drift": [{"question": "dept", "changed": True, "answer_shift": 0.14, "confidence_change": -0.06}],
         }
         got = p.learning()
         assert got.trainings[0].decisions == 400 and got.trainings[0].version == "v1"
+        t = got.trainings[0]  # every field the API sends
+        assert (t.labels, t.checked) == (380, 123) and t.held is not None and t.held.startswith("agreement")
+        assert got.training_since is not None and got.training_since.hour == 12
         assert got.drift[0].question == "dept" and got.drift[0].changed and got.drift[0].answer_shift == 0.14
 
     def test_project_limit(self, client: EndorClient) -> None:
