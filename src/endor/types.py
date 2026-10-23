@@ -665,11 +665,16 @@ class Training(_View):
     version: str | None = None
     decisions: int | None = None
     """The project's decision count when the run started (None from a server that doesn't send it)."""
+    labels: int | None = None
+    """How many labels it had learned from when the run started (None as for ``decisions``)."""
     accuracy: float | None = None
-    """Its accuracy in percent (0 to 100, as ``VersionInfo.accuracy``), with the 95% interval ``low`` to ``high``.
-    None: nothing to check on."""
+    """Its accuracy in percent (0 to 100, as ``VersionInfo.accuracy``), with the 95% interval ``low`` to ``high``:
+    agreement with a frontier model's answers, or with your held-back corrections once there are enough. None: nothing
+    to check on."""
     low: float | None = None
     high: float | None = None
+    checked: int | None = None
+    """How many held-back answers ``accuracy`` was measured on (one per question a decision asked)."""
     loss: float | None = None
     """Its mean cross-entropy on the same decisions (lower is better)."""
     against: str | None = None
@@ -678,6 +683,9 @@ class Training(_View):
     against_loss: float | None = None
     worse: list[str] = Field(default_factory=list)
     """The questions it was worse on."""
+    held: str | None = None
+    """Why a kept version stayed the preview instead of going to production with auto-promote on (its agreement with
+    the frontier model fell against the production version's). None: it wasn't held."""
 
 
 class Drift(_View):
@@ -706,6 +714,8 @@ class Learning(_View):
     """What ``"<project>"`` answers with now: ``"<project>:<version>"``, or ``"<project>"`` while its base model
     answers."""
     trained_at: datetime | None = None
+    training_since: datetime | None = None
+    """When the training run on now started (None unless ``status`` is ``training``)."""
     trainings: list[Training] = Field(default_factory=list)
     """The latest 50 training runs, newest first."""
     drift: list[Drift] = Field(default_factory=list)
