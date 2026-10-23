@@ -5,6 +5,13 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- A new project starts with auto-promote on, as in the API: each new version goes to production at once. Endor still
+  holds back a first version that isn't clearly better than the base model, and a version whose agreement with the
+  frontier model fell; those stay the preview. `project.set_auto_promote(False)` keeps new versions in the preview
+  until you promote one. Existing projects keep their setting. `ProjectInfo.auto_promote` defaults to True.
+
 ### Fixed
 
 - `project.learning()` keeps every field the API sends: `Training.labels` (the labels a run learned from),

@@ -175,8 +175,7 @@ class NotFoundError(APIError):
 
 class NoPreviewError(NotFoundError):
     """404 ``no_preview``: ``"<project>:preview"`` was called, but the project has no preview. A project has one only
-    while its newest version isn't in production, so never while auto-promote is on (each new version goes to
-    production at once): call
+    while its newest version isn't in production; with auto-promote on, only when Endor held that version back. Call
     ``"<project>"``."""
 
 

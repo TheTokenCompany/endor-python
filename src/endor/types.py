@@ -621,14 +621,17 @@ class ProjectInfo(_View):
     base_model: str
     """The base model the project learns on (``"mapika/decider-2b"``), chosen when it was created. It never changes."""
     production: str | None = None
-    """The version in production, which ``"<project>"`` answers with (``"v4"``); None until you promote one, while the
-    base model answers."""
+    """The version in production, which ``"<project>"`` answers with (``"v4"``); None until a version goes to
+    production, while the base model answers."""
     preview: str | None = None
     """The newest version while it isn't in production, which ``"<project>:preview"`` answers with. None when the
-    newest version is in production (always, while auto-promote is on) and before the first version."""
-    auto_promote: bool = False
-    """Off by default: new versions land in the preview until you promote one. On (``project.set_auto_promote(True)``):
-    each new version goes to production as soon as it is ready. Promoting an older version turns it off (a rollback)."""
+    newest version is in production (as it is while auto-promote is on, unless Endor held it back) and before the
+    first version."""
+    auto_promote: bool = True
+    """On for a new project: each new version goes to production as soon as it is ready. Endor still holds back a first
+    version that isn't clearly better than the base model, and a version whose agreement with the frontier model fell;
+    those stay the preview. Off (``project.set_auto_promote(False)``): new versions land in the preview until you
+    promote one. Promoting an older version turns it off (a rollback)."""
     promoted_at: datetime | None = None
     """When the production version last changed."""
     versions: int = 0
@@ -660,8 +663,8 @@ class Training(_View):
 
     at: datetime
     kept: bool
-    """Saved as ``version`` (in production at once while auto-promote is on, else the project's preview), or discarded
-    (not better than the version it was compared with)."""
+    """Saved as ``version`` (in production at once while auto-promote is on, unless ``held``; else the project's
+    preview), or discarded (not better than the version it was compared with)."""
     version: str | None = None
     decisions: int | None = None
     """The project's decision count when the run started (None from a server that doesn't send it)."""
@@ -684,8 +687,9 @@ class Training(_View):
     worse: list[str] = Field(default_factory=list)
     """The questions it was worse on."""
     held: str | None = None
-    """Why a kept version stayed the preview instead of going to production with auto-promote on (its agreement with
-    the frontier model fell against the production version's). None: it wasn't held."""
+    """Why a kept version stayed the preview instead of going to production with auto-promote on: a first version that
+    wasn't clearly better than the base model, or one whose agreement with the frontier model fell against the
+    production version's. None: it wasn't held."""
 
 
 class Drift(_View):

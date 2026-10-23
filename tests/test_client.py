@@ -162,7 +162,8 @@ class TestDecisions:
         assert client.system_one("x", {"d": DEPT}, model=model).model == "router"
 
     def test_a_projects_live_version_and_preview(self, client: EndorClient, fake: FakeEndor, decider: str) -> None:
-        fake.add_version(decider)  # auto-promote is off by default: v1 waits in the preview
+        client.projects.get(decider).set_auto_promote(False)
+        fake.add_version(decider)  # auto-promote is off: v1 waits in the preview
         assert client.system_one("x", {"d": DEPT}, model=decider).model == decider
         assert client.system_one("x", {"d": DEPT}, model=f"{decider}:preview").model == f"{decider}:v1"
         client.projects.get(decider).promote("v1")

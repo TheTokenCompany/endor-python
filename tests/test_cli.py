@@ -43,9 +43,11 @@ def test_projects(capsys: pytest.CaptureFixture[str], client: EndorClient, fake:
     name = unique("cli")
     created = run_json(capsys, client, "projects", "create", name, "--base-model", "autotrust/jev-9b")
     assert created["name"] == name and created["base_model"] == "autotrust/jev-9b"  # type: ignore[index]
+    assert created["auto_promote"] is True  # type: ignore[index]
     assert name in [p["name"] for p in run_json(capsys, client, "projects", "list")]  # type: ignore[union-attr]
+    assert run_json(capsys, client, "projects", "auto-promote", name, "off")["auto_promote"] is False  # type: ignore[index]
     fake.add_version(name)
-    fake.add_version(name)  # auto-promote is off by default: v2 is the preview, nothing live yet
+    fake.add_version(name)  # auto-promote is off: v2 is the preview, nothing live yet
     versions = run_json(capsys, client, "projects", "versions", name)
     assert [(v["name"], v["production"], v["preview"]) for v in versions] == [  # type: ignore[index,union-attr]
         ("v2", False, True),

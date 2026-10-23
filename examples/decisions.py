@@ -1,6 +1,7 @@
 """Ask a continuous learning project named questions about a state. "tickets" answers with the project's production
-version (its base model until you promote one). The project learns from its decisions and from your corrections: new
-versions wait in "tickets:preview" until you promote one, or go to production by themselves with auto-promote on.
+version (its base model until a version goes to production). The project learns from its decisions and from your
+corrections: new versions go to production by themselves (auto-promote is on for a new project), or wait in
+"tickets:preview" until you promote one once you turn it off.
 
 ENDOR_API_KEY=edk_... python examples/decisions.py
 """
@@ -40,7 +41,8 @@ class Triage(SystemOneResponse):
 triage = client.system_one(state, questions, response_model=Triage)
 print(triage.department.choice, triage.urgent.noul)
 
-# A new version waits as the preview: try it, then promote it (or project.set_auto_promote(True) for every new one).
+# A version Endor held back, or any new one after project.set_auto_promote(False), waits as the preview: try it, then
+# promote it.
 info = project.info()
 if info.preview:
     print(client.system_one(state, questions, model=project.preview_ref).model)  # "tickets:preview" answers

@@ -6,13 +6,14 @@ corrections, starting from the base model you choose when you create it.
     client.system_one(state, questions, model=project.preview_ref)    # "tickets:preview": a new version
     project.versions()               # v1, v2, ... newest first: which one is in production, which is the preview
     project.promote("v3")            # put v3 in production (an older one: a rollback)
-    project.set_auto_promote(True)   # every new version goes to production as soon as it is ready (off by default)
+    project.set_auto_promote(False)  # new versions wait in the preview until you promote one (on for a new project)
 
-A project has one production version, which ``"<project>"`` answers with (its base model until you promote one). New
-versions land in the preview, the newest version while it isn't in production, which ``"<project>:preview"`` answers
-with, until you promote one; without a preview, that name raises ``NoPreviewError``. With auto-promote on, each new
-version goes to production at once, so there is no preview. Custom models you train yourself are
-``client.custom_models``.
+A project has one production version, which ``"<project>"`` answers with (its base model until a version goes to
+production). Its preview is the newest version while it isn't in production, which ``"<project>:preview"`` answers
+with; without a preview, that name raises ``NoPreviewError``. Auto-promote is on for a new project: each new version
+goes to production at once. Endor still holds back a first version that isn't clearly better than the base model, and
+a version whose agreement with the frontier model fell; those stay the preview. With auto-promote off, new versions
+wait in the preview until you promote one. Custom models you train yourself are ``client.custom_models``.
 """
 
 from __future__ import annotations
@@ -41,8 +42,9 @@ class Projects:
         self, name: str, base_model: str | None = None, description: str | None = None, **removed: Any
     ) -> Project:
         """A new continuous learning project on ``base_model`` (an id from ``client.base_models()``, for example
-        ``"mapika/decider-2b"``), chosen here for good. ``"<project>"`` answers with the base model until you promote a
-        version. Auto-promote starts off: new versions wait in the preview (``set_auto_promote(True)`` changes that).
+        ``"mapika/decider-2b"``), chosen here for good. ``"<project>"`` answers with the base model until a version
+        goes to production. Auto-promote starts on: each new version goes to production at once, unless Endor holds it
+        back as the preview (``set_auto_promote(False)`` keeps every new version in the preview).
 
         Names are lowercase, ``[a-z0-9._-]``, up to 63 characters, and unique in the organization together with your
         custom models. Raises ``ConflictError`` if a project or custom model already has the name, and
@@ -96,8 +98,8 @@ class Project:
 
     @property
     def ref(self) -> str:
-        """``"<project>"``: the ``model`` that answers with the production version (the base model until you promote
-        one)."""
+        """``"<project>"``: the ``model`` that answers with the production version (the base model until a version
+        goes to production)."""
         return self.name
 
     @property
@@ -120,8 +122,8 @@ class Project:
 
     @property
     def auto_promote(self) -> bool:
-        """Whether each new version goes to production as soon as it is ready (off by default). As last fetched;
-        ``set_auto_promote`` changes it."""
+        """Whether each new version goes to production as soon as it is ready (on for a new project). As last
+        fetched; ``set_auto_promote`` changes it."""
         return self.info_.auto_promote
 
     def info(self) -> ProjectInfo:
@@ -153,9 +155,9 @@ class Project:
         return self.info_
 
     def set_auto_promote(self, on: bool) -> ProjectInfo:
-        """Turn auto-promote on (the newest version goes to production at once, and every new version after it, so
-        there is no preview) or off, the default (the production version stays until you promote one; newer versions
-        are the preview)."""
+        """Turn auto-promote on, as a new project starts (the newest version goes to production at once, and every new
+        version after it, unless Endor holds one back as the preview), or off (the production version stays until you
+        promote one; newer versions are the preview)."""
         path = f"/v1/projects/{self.name}"
         r = self._t.request("PATCH", path, json={"auto_promote": bool(on)}, method_name="project.set_auto_promote")
         self.info_ = parse(ProjectInfo, r, f"PATCH {path}")
