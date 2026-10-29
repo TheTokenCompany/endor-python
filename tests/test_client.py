@@ -18,7 +18,7 @@ from endor import (
     UnprocessableEntityError,
 )
 
-from .conftest import ANGER, API_KEY, BASE_URL, DECIDE_BASE, DEPT, URGENT, unique
+from .conftest import ANGER, API_KEY, BASE_URL, DECIDE_BASE, DEPT, URGENT, rows, unique
 from .fake_api import FakeEndor, HTTPError
 
 
@@ -291,6 +291,19 @@ class TestCatalogAndAccount:
         fake.continuous_learning = False
         assert client.whoami().continuous_learning is False
         assert endor.WhoAmI.model_validate({"org_id": "org_1"}).continuous_learning is False  # an older server
+
+    def test_whoami_zero_data_retention(self, client: EndorClient, fake: FakeEndor) -> None:
+        assert client.whoami().zero_data_retention is False
+        fake.zero_data_retention = True
+        assert client.whoami().zero_data_retention is True
+        assert endor.WhoAmI.model_validate({"org_id": "org_1"}).zero_data_retention is False  # an older server
+
+    def test_delete_training_data(self, client: EndorClient) -> None:
+        client.datasets.upload("a", rows(3))
+        client.datasets.upload("b", rows(3))
+        got = client.delete_training_data()
+        assert isinstance(got, endor.TrainingDataDeleted) and (got.datasets, got.evaluations) == (2, 0)
+        assert client.datasets.list() == [] and client.delete_training_data().datasets == 0
 
     def test_balance(self, client: EndorClient) -> None:
         b = client.balance()

@@ -235,6 +235,8 @@ class FakeEndor:
     """What GET /v1/balance answers (None: a server without billing)."""
     continuous_learning: bool = True
     """What GET /v1/whoami says about the org's continuous learning switch."""
+    zero_data_retention: bool = False
+    """What GET /v1/whoami says about the org's zero data retention."""
 
     projects: dict[str, dict] = field(default_factory=dict)  # continuous learning projects, by name
     versions: dict[str, list[dict]] = field(default_factory=dict)  # project -> its versions, oldest first
@@ -575,7 +577,12 @@ class FakeEndor:
                 "key_id": "key_test",
                 "limits": dict(LIMITS),
                 "continuous_learning": self.continuous_learning,
+                "zero_data_retention": self.zero_data_retention,
             }
+        if p == ["training_data"] and m == "DELETE":
+            n = len(self.datasets)
+            self.datasets.clear()
+            return 200, {"datasets": n, "evaluations": 0}
         if p == ["balance"] and m == "GET":
             return 200, {"balance_usd": self.balance_usd}
         if p == ["usage"] and m == "GET":

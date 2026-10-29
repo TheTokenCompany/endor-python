@@ -372,6 +372,10 @@ Add rows for those options, or drop them from the question.
   and server-side evaluations raise `InsufficientBalanceError` (402, code `insufficient_balance`) until you add
   credit in the dashboard under Billing. A call the server already accepted still finishes. `client.balance()` (or
   `endor whoami`) shows what is left, in USD.
+- **Deleting training data.** `client.delete_training_data()` deletes every dataset of your org and the stored rows of
+  every evaluation now (trained models stay); it can't be undone. With zero data retention
+  (`client.whoami().zero_data_retention`), Endor stores no request bodies and deletes training data 30 days after it
+  was sent.
 
 ### Or drive the loop yourself
 
