@@ -918,6 +918,19 @@ class WhoAmI(_View):
     """Whether the org has continuous learning projects (a per-organization switch, off until we turn it on). While
     off, ``client.projects`` and decisions on a project raise ``PermissionDeniedError`` (403
     ``continuous_learning_not_enabled``); custom models work for every organization."""
+    zero_data_retention: bool = False
+    """Whether the org has zero data retention (turned on by Endor when asked): request and response bodies and
+    images aren't stored, training data is deleted 30 days after it was sent, and continuous learning and corrections
+    aren't available (``PermissionDeniedError``)."""
+
+
+class TrainingDataDeleted(_View):
+    """What ``client.delete_training_data()`` deleted."""
+
+    datasets: int = 0
+    """Datasets deleted."""
+    evaluations: int = 0
+    """Server-side evaluations whose stored rows were deleted (each keeps its results, without ``rows_url``)."""
 
 
 UserReportKind = Literal["bug", "confusing", "works"]

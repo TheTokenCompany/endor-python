@@ -45,6 +45,7 @@ from .types import (
     ListModelsResponse,
     Question,
     SystemOneResponse,
+    TrainingDataDeleted,
     UsageRow,
     UserReportKind,
     UserReportReceipt,
@@ -389,6 +390,14 @@ class EndorClient:
         }
         r = self._t.request("GET", "/v1/usage", params=params, method_name="client.usage")
         return [parse(UsageRow, u, "GET /v1/usage") for u in r]
+
+    def delete_training_data(self) -> TrainingDataDeleted:
+        """Delete all of the org's training data now: every dataset, and the stored rows of every server-side
+        evaluation (each keeps its results, without ``rows_url``; one still running fails with
+        ``training_data_deleted``). Trained models are kept. It can't be undone. Calling it again deletes nothing
+        more."""
+        r = self._t.request("DELETE", "/v1/training_data", method_name="client.delete_training_data")
+        return parse(TrainingDataDeleted, r, "DELETE /v1/training_data")
 
     # ------------------------------------------------------------------ reports
     def user_report(

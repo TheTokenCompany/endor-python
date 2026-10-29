@@ -5,6 +5,14 @@ the version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `client.delete_training_data()` deletes all of the org's training data now: every dataset, and the stored rows of
+  every server-side evaluation (each keeps its results). Trained models stay. Returns `TrainingDataDeleted`
+  (`datasets`, `evaluations`: how many).
+- `WhoAmI.zero_data_retention`: whether the org has zero data retention (request bodies aren't stored, training data
+  is deleted 30 days after it was sent, no continuous learning or corrections). False from older servers.
+
 ### Changed
 
 - A new project starts with auto-promote on, as in the API: each new version goes to production at once. Endor still
